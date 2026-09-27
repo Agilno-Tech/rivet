@@ -64,7 +64,7 @@ for (const [create,syntax] of [[createClaudeClient,CLAUDE_ADAPTER_SYNTAX],[creat
   const stat=await lstat(worktree,{bigint:true}),contract=launch([f.ref],{path:worktree,dev:String(stat.dev),ino:String(stat.ino),reservationId:'lease-one'});
   const interpreter=await realpath('/bin/sh'),capture=join(f.root,'captured'),executable=join(f.root,'fake-'+syntax.provider);
   const result={version:1,status:'success',output:{summary:'done',evidence:['tests']},usage:{tokens:1,costUsd:0}};
-  const response=JSON.stringify(syntax.provider==='claude'?{type:'result',subtype:'success',structured_output:result}:result);
+  const response=JSON.stringify(syntax.provider==='claude'?{type:'result',subtype:'success',is_error:false,total_cost_usd:0,modelUsage:{'fixture-model':{inputTokens:1,outputTokens:0,cacheCreationInputTokens:0,cacheReadInputTokens:0}},structured_output:result}:result);
   const version=syntax.provider==='claude'?'99.0.0 (Claude Code)':'codex-cli 99.0.0';
   const script=drift=>`#!${interpreter}\nif [ "$1" = "--version" ]; then printf '%s\\n' ${quote(version)}; exit 0; fi\nif [ "$1" = "--help" ] || [ "$2" = "--help" ]; then ${drift?`printf changed > ${quote(f.file)}; `:''}printf '%s\\n' ${quote(syntax.requiredOptions.join('\n'))}; exit 0; fi\ncat > ${quote(capture)}\nprintf '%s\\n' ${quote(response)}\n`;
   await writeFile(executable,script(false),{mode:0o700});

@@ -7,7 +7,7 @@ import { AgentContractError, containsSecretMaterial, failAgent, immutableJson } 
 import { validateLaunchPayload } from '../prompts/launch-contract.js';
 import { parsePlanningResult, validatePlanningPayload } from '../prompts/planning-contract.js';
 
-const CONFIG_KEYS = new Set(['executable', 'interpreter', 'worktree', 'worktreeIdentity', 'environment', 'signal', 'launchTimeoutMs', 'timeoutMs', 'termGraceMs', 'killGraceMs', 'maxOutputBytes', 'maxInputBytes', 'allowOptionArgs']);
+const CONFIG_KEYS = new Set(['executable', 'interpreter', 'worktree', 'worktreeIdentity', 'environment', 'signal', 'launchTimeoutMs', 'timeoutMs', 'termGraceMs', 'killGraceMs', 'maxOutputBytes', 'maxInputBytes', 'allowOptionArgs', 'resultFormat']);
 const REQUEST_KEYS = new Set(['args', 'cwd', 'payload', 'signal', 'protocolContext']);
 // Keep the provider environment narrow, but preserve the non-secret account
 // context required by native macOS clients to resolve their local login
@@ -285,7 +285,31 @@ function strictDecode(buffer) {
   try { return new TextDecoder('utf-8', { fatal: true }).decode(buffer); } catch { failAgent('output-invalid'); }
 }
 
-function parseEnvelope(buffer, contract) {
+function claudeMeasuredUsage(envelope) {
+  const budgetStop = envelope?.subtype === 'error_max_budget_usd';
+  if (envelope?.type !== 'result' || (budgetStop ? envelope.is_error !== true : envelope.subtype !== 'success' || envelope.is_error !== false)
+    || !envelope.modelUsage || typeof envelope.modelUsage !== 'object' || Array.isArray(envelope.modelUsage)
+    || typeof envelope.total_cost_usd !== 'number' || !Number.isFinite(envelope.total_cost_usd)
+    || envelope.total_cost_usd < 0 || envelope.total_cost_usd > 100_000) failAgent('output-invalid');
+  const models = Object.values(envelope.modelUsage);
+  if (models.length === 0 || models.length > 64) failAgent('output-invalid');
+  let tokens = 0;
+  // modelUsage includes nested agents. The aggregate usage object covers only
+  // the main loop; adding both would count that loop twice. Cost is the native
+  // CLI's estimate, not a billing receipt or a model-written claim.
+  for (const model of models) {
+    if (!model || typeof model !== 'object' || Array.isArray(model)) failAgent('output-invalid');
+    for (const key of ['inputTokens', 'outputTokens', 'cacheCreationInputTokens', 'cacheReadInputTokens']) {
+      const count = model[key];
+      if (!Number.isSafeInteger(count) || count < 0) failAgent('output-invalid');
+      tokens += count;
+      if (!Number.isSafeInteger(tokens) || tokens > 10_000_000) failAgent('output-invalid');
+    }
+  }
+  return {tokens, costUsd: envelope.total_cost_usd};
+}
+
+function parseEnvelope(buffer, contract, resultFormat, requireBudgetStop = false) {
   const source = strictDecode(buffer);
   const document = source.trim();
   if (!document || source.length - document.length > 16 || /[^\t\n\r ]/.test(source.slice(0, source.indexOf(document)))
@@ -293,7 +317,13 @@ function parseEnvelope(buffer, contract) {
   let parsed;
   try { parsed = JSON.parse(document); } catch { failAgent('output-invalid'); }
   const captured = immutableJson(parsed);
-  const value = captured && typeof captured === 'object' && !Array.isArray(captured)
+  if (resultFormat === 'claude-json' && captured?.type === 'result' && captured.subtype === 'error_max_budget_usd') {
+    return immutableJson({version: 1, status: 'budget-exhausted',
+      output: {summary: 'Claude stopped at its configured cost limit.', evidence: []},
+      usage: claudeMeasuredUsage(captured)});
+  }
+  if (requireBudgetStop) failAgent('provider-unavailable');
+  let value = captured && typeof captured === 'object' && !Array.isArray(captured)
     && Object.hasOwn(captured, 'structured_output')
     ? (captured.type === 'result' && captured.subtype === 'success' && captured.structured_output
       && typeof captured.structured_output === 'object' && !Array.isArray(captured.structured_output)
@@ -316,6 +346,11 @@ function parseEnvelope(buffer, contract) {
     || !Number.isSafeInteger(value.usage.tokens) || value.usage.tokens < 0 || value.usage.tokens > 10_000_000
     || typeof value.usage.costUsd !== 'number' || !Number.isFinite(value.usage.costUsd) || value.usage.costUsd < 0 || value.usage.costUsd > 100_000) {
     failAgent('output-invalid');
+  }
+  if (resultFormat === 'claude-json') {
+    const usage = claudeMeasuredUsage(captured);
+    const exhausted = usage.tokens > contract.budget.maxTokens || usage.costUsd > contract.budget.maxCostUsd;
+    value = immutableJson({...value, usage, status: exhausted ? 'budget-exhausted' : value.status});
   }
   if (value.status !== 'budget-exhausted'
     && (value.usage.tokens > contract.budget.maxTokens || value.usage.costUsd > contract.budget.maxCostUsd)) failAgent('output-invalid');
@@ -353,6 +388,7 @@ export async function createProcessRunner(input) {
   const maxOutputBytes = boundedInteger(config.maxOutputBytes, 256 * 1024, 10 * 1024 * 1024);
   const maxInputBytes = boundedInteger(config.maxInputBytes, 128 * 1024, 1024 * 1024);
   if (config.allowOptionArgs !== undefined && typeof config.allowOptionArgs !== 'boolean') failAgent('invalid-contract');
+  if (config.resultFormat !== undefined && config.resultFormat !== 'claude-json') failAgent('invalid-contract');
   const executable = config.executable;
   const interpreter = config.interpreter;
   const worktree = config.worktree;
@@ -580,10 +616,15 @@ export async function createProcessRunner(input) {
           // non-zero exit is a provider execution failure, not a spawn failure;
           // classify it as unavailable so the runtime can apply its bounded
           // transient-provider retry policy.
-          if (code !== 0) { finish(new AgentContractError('provider-unavailable')); return; }
+          if (code !== 0 && !(protocol === 'launch' && config.resultFormat === 'claude-json')) {
+            finish(new AgentContractError('provider-unavailable')); return;
+          }
           try {
             const bytes = Buffer.concat(stdout);
-            finish(null, protocol === 'launch' ? parseEnvelope(bytes, contract) : parsePlanningResult(bytes));
+            // A native cost-cap result can accompany a nonzero process exit.
+            // Only that validated terminal envelope preserves its accounting;
+            // any other nonzero exit remains a failed provider execution.
+            finish(null, protocol === 'launch' ? parseEnvelope(bytes, contract, config.resultFormat, code !== 0) : parsePlanningResult(bytes));
           } catch (error) {
             finish(error instanceof AgentContractError ? error : new AgentContractError('output-invalid'));
           }

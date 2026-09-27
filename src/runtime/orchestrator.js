@@ -467,6 +467,9 @@ function validateDurableIntentRelations(state, retryDelaysMs) {
       validateRetryDeadline(state, nodeId, state.retryAtMs[nodeId], retryDelaysMs);
     }
   }
+  // Observed exhaustion may exceed the approved allocation. Retain those
+  // measurements in the ledgers; a terminal blocked graph grants no new work.
+  if (state.terminal === 'budget-exhausted' && state.graph.status === 'blocked') return;
   validateNonnegativeBudget(availableBudget(state));
   const parentAvailability = new Map(state.graph.nodes.map(parent => [parent.id, remainingParentBudget(state, parent)]));
   for (const { node, intent } of active) for (const parent of ancestorNodes(state, node)) reserveBudget(parentAvailability.get(parent.id), intent.allocation);
@@ -494,6 +497,13 @@ function captureResult(input) {
     if (error instanceof RuntimeError) throw error;
     fail('client-output');
   }
+}
+
+function resultWithinAllocation(result, allocation, elapsed = 0) {
+  return result.usage.tokens <= allocation.tokenLimit
+    && decimalCompare(result.usage.costUsd, allocation.costUsd) <= 0
+    && (result.usage.timeMinutes ?? elapsed) <= allocation.timeMinutes
+    && (result.usage.tasks ?? 1) <= allocation.taskLimit;
 }
 
 function classify(error) {
@@ -688,8 +698,7 @@ export function createOrchestrator(input) {
             const allocation = state.launchIntents[intent.nodeId]?.allocation ?? node.budget;
             const elapsed = Math.ceil(Math.max(0, config.now() - (state.launchIntents[intent.nodeId]?.startedAtMs ?? config.now())) / 60_000);
             const attemptUsage = { tokens: result.usage.tokens, costUsd: result.usage.costUsd, timeMinutes: result.usage.timeMinutes ?? elapsed, tasks: result.usage.tasks ?? 1 };
-            if (attemptUsage.tokens > allocation.tokenLimit || decimalCompare(attemptUsage.costUsd, allocation.costUsd) > 0
-              || attemptUsage.timeMinutes > allocation.timeMinutes || attemptUsage.tasks > allocation.taskLimit) { result = undefined; classification = 'malformed-output'; }
+            if (result.status !== 'budget-exhausted' && !resultWithinAllocation(result, allocation, elapsed)) { result = undefined; classification = 'malformed-output'; }
             else {
               state.usage.tokens += attemptUsage.tokens;
               state.usage.costUsd = decimalMath(state.usage.costUsd ?? 0, attemptUsage.costUsd);
@@ -703,7 +712,8 @@ export function createOrchestrator(input) {
               }
             }
           }
-          if (classification === 'cancelled') { transition(state, node, 'cancelled', config.now()); }
+          if (state.terminal === 'budget-exhausted') { transition(state, node, 'blocked', config.now()); }
+          else if (classification === 'cancelled') { transition(state, node, 'cancelled', config.now()); }
           else if (result?.status === 'success') {
             const exact = [...result.output.evidence].sort();
             const expected = [...node.evidenceRefs].sort();
@@ -717,6 +727,8 @@ export function createOrchestrator(input) {
               event(state, config.now(), { actor: node.owner, event: { type: 'evidence-recorded', nodeId: node.id, evidenceRefs: exact } });
               transition(state, node, 'completed', config.now());
             }
+          } else if (result?.status === 'budget-exhausted') {
+            transition(state, node, 'blocked', config.now());
           } else {
             const currentAttempt = state.attempts[node.id] ?? 1;
             const decision = retryDecision(retryPolicy, { attempt: currentAttempt, classification: classification === 'retry' ? 'provider-transient' : classification });
@@ -807,6 +819,7 @@ export function createOrchestrator(input) {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const lock = await instance.acquire(); let inspected;
       try { inspected = canonicalRuntimeState(await instance.read(), instance.id); } finally { await lock.release(); }
+      if (inspected.terminal === 'budget-exhausted') return null;
       const observed = inspected.launchIntents[intent.nodeId];
       if (!observed || observed.id !== intent.id || ['started', 'complete'].includes(observed.status)) return null;
       if (!['committed', 'prepared'].includes(observed.status)) return null;
@@ -825,6 +838,26 @@ export function createOrchestrator(input) {
       }
     }
     return null;
+  }
+
+  async function reconcileResult(instance, node, intent, result) {
+    if (!config.reconcile || result.status !== 'success'
+      || !resultWithinAllocation(result, intent.allocation ?? node.budget,
+        Math.ceil(Math.max(0, config.now() - (intent.startedAtMs ?? config.now())) / 60_000))) {
+      return { performed: false };
+    }
+    const lock = await instance.acquire();
+    let pending;
+    try {
+      if ((await instance.read()).terminal === 'budget-exhausted') return { performed: false };
+      // Invoke while the terminal check is protected, but await external work
+      // after releasing the state lock. Handle rejection immediately.
+      pending = Promise.resolve(config.reconcile(clone(node), clone(intent), result))
+        .then(report => ({ report }), error => ({ error, failed: true }));
+    } finally { await lock.release(); }
+    const settled = await pending;
+    if (settled.failed) throw settled.error;
+    return { performed: true, report: clone(settled.report) };
   }
 
   async function launch(instance, intent, node, signal) {
@@ -854,9 +887,10 @@ export function createOrchestrator(input) {
         if (startedIntent === null) return Object.freeze({ coordinated: true });
         phase = 'client';
         const result = captureResult(await config.client.launch(config.launchFor(clone(node), clone(startedIntent)), { signal: controller.signal }));
-        if (config.reconcile) {
-          phase = 'reconcile';
-          const report = clone(await config.reconcile(clone(node), clone(startedIntent), result));
+        phase = 'reconcile';
+        const reconciliation = await reconcileResult(instance, node, startedIntent, result);
+        if (reconciliation.performed) {
+          const report = reconciliation.report;
           if (report?.status !== 'integrated') outcome = { result: { version: 1, status: 'blocked', output: { summary: 'Worktree reconciliation requires review.', evidence: [] }, usage: result.usage } };
           else outcome = { result };
         } else outcome = { result };
@@ -995,6 +1029,7 @@ export function createOrchestrator(input) {
     };
     let state = await inspect();
     if (state.version !== exactVersion(options.expectedVersion)) fail('version-conflict');
+    if (state.terminal === 'budget-exhausted') return Object.freeze({ version: state.version, action: null });
     let active = state.graph.nodes.find(node => node.status === 'running'
       && state.launchIntents[node.id]?.status === 'started');
     if (!active) {
@@ -1046,8 +1081,9 @@ export function createOrchestrator(input) {
       || intent.worktree?.reservationId !== options.reservationId) fail('version-conflict');
     let report = null;
     let outcome = { result };
-    if (config.reconcile) {
-      report = clone(await config.reconcile(clone(node), clone(intent), result));
+    const reconciliation = await reconcileResult(instance, node, intent, result);
+    if (reconciliation.performed) {
+      report = reconciliation.report;
       if (report?.status !== 'integrated') {
         outcome = {
           result: {

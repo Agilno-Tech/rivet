@@ -52,6 +52,10 @@ Interactive `rivet run "task"` offers a choice between compatible installed adap
 
 The status-server tests require loopback networking. A sandbox that prohibits listeners can fail these checks independently of application behavior. Run them in an environment that permits loopback, and record that environment with the result.
 
+## A Claude task exhausts its token budget despite a low cost
+
+Cached context still contributes to the token count. Rivet uses Claude's native counters, including repeated cache reads, and retains an overrun as `budget-exhausted`. Inspect task status, review the token and cost allocations in project orchestration policy, then create and approve a new plan if a larger allowance is appropriate. Resuming the same approved task does not increase its budget. See [native usage and task budgets](./runtime-reference.md#native-usage-and-task-budgets).
+
 ## A branch is already checked out
 
 Run `rivet task status` to see reserved and active Worker checkout paths, expected branches and their registered locations. `git worktree list` also lists the repository's checkouts. Inspect and preserve existing edits; do not delete worktrees or force-reset branches to get past this error. See [task and checkout status](./statuses.md) for the observation meanings.

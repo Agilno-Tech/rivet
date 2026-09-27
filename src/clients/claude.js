@@ -142,7 +142,7 @@ export function createClaudeClient(input) {
       worktreeIdentity: { dev: contract.worktree.dev, ino: contract.worktree.ino },
       environment, signal: signalState.value,
       timeoutMs: Math.min(timeoutMs ?? contract.budget.maxRuntimeMs, contract.budget.maxRuntimeMs, 10 * 60_000),
-      maxOutputBytes, allowOptionArgs: true,
+      maxOutputBytes, allowOptionArgs: true, resultFormat: 'claude-json',
     });
     await checkCompatibility(runner, 'claude', [...args, '--json-schema', '--max-budget-usd'], expectedVersion);
     return runner.run({

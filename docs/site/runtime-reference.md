@@ -130,6 +130,14 @@ Help checks establish advertised options; they cannot prove unchanged semantics,
 
 Spawned process adapters currently support macOS and Linux. Native Windows execution is not supported; an app running on Windows does not remove that runtime limit. WSL needs its own compatible environment and qualification.
 
+### Native usage and task budgets
+
+Claude Worker results use the CLI's native `modelUsage` counters and `total_cost_usd`, rather than usage figures written by the model. Token totals include input, output, cache creation and cache reads across all reported models, including delegated agents. Missing or invalid native accounting stops the result. The native cost is a client-side estimate, not a billing receipt; see [Claude's usage documentation](https://code.claude.com/docs/en/agent-sdk/cost-tracking).
+
+A measured overrun or native cost-cap stop records the observed usage and ends the task as `budget-exhausted`. It cannot accept success evidence or start another reconciliation. An operation already in progress may finish, but its result cannot advance an exhausted task to completion. Limits are checked against the approved allocation; counts are never clamped to make a task pass.
+
+Large contexts can consume a token allowance even when cache use keeps the estimated cost low. Review the project's orchestration budgets and approve a new plan when a different allowance is needed. Existing approved runs keep their limits. Codex's current direct-result adapter still uses model-reported usage; those figures are estimates, not native usage measurements or billing guarantees.
+
 ### CLI and desktop host sessions
 
 Host mode uses the current session's model and tools without checking its app or CLI version.

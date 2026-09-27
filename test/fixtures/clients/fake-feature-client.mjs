@@ -68,9 +68,15 @@ let result = run(['add', '--', ...contract.ownedPaths]);
 if (result.status !== 0) process.exit(42);
 result = run(['-c', 'user.name=Fixture Worker', '-c', 'user.email=worker@example.invalid', 'commit', '--quiet', '-m', `implement ${contract.nodeId}`]);
 if (result.status !== 0) process.exit(43);
-process.stdout.write(`${JSON.stringify({
+const agentResult = {
   version: 1,
   status: 'success',
   output: { summary: `Completed ${contract.nodeId}.`, evidence: contract.evidence },
   usage: { tokens: 10, costUsd: 0 },
-})}\n`);
+};
+const response = provider === 'claude' ? {
+  type: 'result', subtype: 'success', is_error: false, total_cost_usd: 0,
+  modelUsage: {'fixture-model': {inputTokens: 10, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0}},
+  structured_output: agentResult,
+} : agentResult;
+process.stdout.write(`${JSON.stringify(response)}\n`);

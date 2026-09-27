@@ -280,3 +280,85 @@ test('snapshots hostile request getters once and rejects option/traversal inputs
   await createProcessRunner(config);
   assert.equal(executableReads, 1);
 });
+
+function nativeClaudeResult({tokens = 500000, cost = 0.15, nativeTokens = 100, nativeCost = 0.17} = {}) {
+  return {
+    type: 'result', subtype: 'success', is_error: false,
+    structured_output: {...JSON.parse(envelope()), usage: {tokens, costUsd: cost}},
+    total_cost_usd: nativeCost,
+    usage: {input_tokens: 999999}, // Aggregate must not be added to whole-tree totals.
+    modelUsage: {model: {inputTokens: 10, outputTokens: 20, cacheCreationInputTokens: 30, cacheReadInputTokens: nativeTokens - 60}},
+  };
+}
+
+async function runClaudeResult(t, native, exitCode = 0) {
+  const f = await fixture(t, `cat >/dev/null\nprintf '%s\\n' '${JSON.stringify(native)}'\nexit ${exitCode}`);
+  const runner = await createProcessRunner({executable: f.executable, interpreter: f.interpreter, worktree: f.worktree, resultFormat: 'claude-json'});
+  return runner.run({args: [], cwd: '.', payload: await payload(f)});
+}
+
+test('Claude native telemetry replaces model-invented usage and counts cache tokens once', async t => {
+  const result = await runClaudeResult(t, nativeClaudeResult());
+  assert.equal(result.status, 'success');
+  assert.deepEqual({...result.usage}, {tokens: 100, costUsd: 0.17});
+});
+
+test('Claude measured token and estimated cost overruns cannot report success', async t => {
+  for (const input of [{nativeTokens: 1100}, {nativeCost: 1.1}]) {
+    const result = await runClaudeResult(t, nativeClaudeResult({...input, tokens: 1, cost: 0}));
+    assert.equal(result.status, 'budget-exhausted');
+    assert.equal(result.usage.tokens, input.nativeTokens ?? 100);
+    assert.equal(result.usage.costUsd, input.nativeCost ?? 0.17);
+  }
+});
+
+test('Claude requires valid whole-tree native telemetry and a successful native envelope', async t => {
+  for (const mutate of [
+    v => {delete v.modelUsage;}, v => {v.modelUsage = {};},
+    v => {v.modelUsage.model.cacheReadInputTokens = -1;},
+    v => {v.modelUsage.model.inputTokens = 1.5;},
+    v => {v.modelUsage.model.outputTokens = Number.MAX_SAFE_INTEGER;},
+    v => {v.total_cost_usd = '0.17';}, v => {delete v.total_cost_usd;},
+    v => {v.is_error = true;}, v => {v.subtype = 'error_max_turns';},
+  ]) {
+    const value = nativeClaudeResult(); mutate(value);
+    await assert.rejects(runClaudeResult(t, value), error => error.code === 'ERR_AGENT_OUTPUT_INVALID');
+  }
+});
+
+test('Claude counts each model once including nested-agent tokens', async t => {
+  const native = nativeClaudeResult();
+  native.modelUsage.nested = {inputTokens: 1, outputTokens: 2, cacheCreationInputTokens: 3, cacheReadInputTokens: 4};
+  const result = await runClaudeResult(t, native);
+  assert.equal(result.usage.tokens, 110);
+});
+
+test('generic results retain their declared usage and overbudget success is rejected', async t => {
+  for (const tokens of [10, 1100]) {
+    const value = {...JSON.parse(envelope()), usage: {tokens, costUsd: 0.01}};
+    const f = await fixture(t, `cat >/dev/null\nprintf '%s\\n' '${JSON.stringify(value)}'`);
+    const runner = await createProcessRunner({executable: f.executable, interpreter: f.interpreter, worktree: f.worktree});
+    const result = runner.run({args: [], cwd: '.', payload: await payload(f)});
+    if (tokens > 1000) await assert.rejects(result, error => error.code === 'ERR_AGENT_OUTPUT_INVALID');
+    else assert.equal((await result).usage.tokens, tokens);
+  }
+});
+
+
+test('Claude native cost-cap stop preserves telemetry on nonzero exit without accepting model evidence', async t => {
+  const native = nativeClaudeResult({nativeCost: 1.1});
+  native.subtype = 'error_max_budget_usd';
+  native.is_error = true;
+  delete native.structured_output;
+  for (const exitCode of [0, 1]) {
+    const result = await runClaudeResult(t, native, exitCode);
+    assert.equal(result.status, 'budget-exhausted');
+    assert.equal(result.usage.costUsd, 1.1);
+    assert.equal(result.usage.tokens, 100);
+    assert.deepEqual([...result.output.evidence], []);
+  }
+});
+
+test('a nonzero Claude exit cannot present a success envelope as successful work', async t => {
+  await assert.rejects(runClaudeResult(t, nativeClaudeResult({tokens: 1}), 1));
+});
