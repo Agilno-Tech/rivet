@@ -447,7 +447,7 @@ export function createHostExecution(input) {
           projectRoot: integration.path,
           commitSha: integrated.headSha,
           authority: featureQualityAuthority(config),
-          gates: await configuredFeatureGates(config, resolveCommandExecutable),
+          gates: await configuredFeatureGates(config, resolveCommandExecutable, integration.path),
           environment,
         }, { gitClient, now: () => featureNowMilliseconds(now) });
       } catch (error) {

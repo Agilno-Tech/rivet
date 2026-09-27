@@ -95,7 +95,7 @@ shutil.copytree(ROOT / 'test/fixtures/config/valid/.rivet', root / '.rivet')
 for args in [['init', '-q', '--initial-branch=main'], ['add', '.'],
              ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'fixture']]:
     subprocess.run(['git', '-C', str(root), *args], check=True, capture_output=True)
-node = os.path.realpath(shutil.which('node'))
+node = os.path.realpath(os.environ.get('RIVET_TEST_NODE_EXECUTABLE') or shutil.which('node'))
 git = os.path.realpath(shutil.which('git'))
 fake = scratch / 'codex'
 gate = scratch / 'gate'

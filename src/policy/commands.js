@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { lstat, realpath } from 'node:fs/promises';
-import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { verifyApproval } from './approvals.js';
@@ -14,6 +14,7 @@ const WINDOWS_RESERVED = /^(?:con|prn|aux|nul|conin\$|conout\$|com[1-9]|lpt[1-9]
 const SENSITIVE_ENVIRONMENT_KEY = /(?:^|_)(?:API_KEY|ACCESS_KEY|PRIVATE_KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|AUTH(?:ORIZATION)?)(?:_|$)/i;
 const SHELL_METACHARACTER = /[;&|`$<>*?!(){}[\]~\r\n\u0000]/;
 const UNSAFE_EXECUTABLE = /^(?:sh|bash|dash|mksh|yash|zsh|fish|nu|elvish|cmd(?:\.exe)?|powershell(?:\.exe)?|pwsh(?:\.exe)?|node(?:\.exe)?|python\d*(?:\.exe)?|ruby(?:\.exe)?|perl(?:\.exe)?|env|sudo)$/i;
+const SHELL_EXECUTABLE = /^(?:sh|bash|dash|mksh|yash|zsh|fish|nu|elvish|cmd|powershell|pwsh|env|sudo)(?:\.exe|\.cmd)?$/i;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_OUTPUT_BYTES = 256 * 1024;
@@ -143,8 +144,10 @@ function snapshotInputs(contractInput, requestInput) {
   const configured = commands[request.commandId];
   if (configured === undefined) fail('command-not-allowlisted');
   const command = capture(configured, new Set([
-    'executable', 'args', 'action', 'allowExtraArgs', 'elevated', 'approvalPolicyId', 'approverId',
+    'executable', 'args', 'action', 'execution', 'allowExtraArgs', 'elevated', 'approvalPolicyId', 'approverId',
   ]), ['executable', 'args', 'action'], 'invalid-command-entry');
+  if (command.execution !== undefined && command.execution !== 'argv') fail('invalid-command-entry');
+  if (command.execution === 'argv' && command.allowExtraArgs === true) fail('unexpected-command-args');
   const configuredArgs = captureArray(command.args, 256, 4_096, 'invalid-command-args');
   const extraArgs = request.args === undefined ? [] : captureArray(request.args, 128, 4_096, 'invalid-command-args');
   const environment = captureEnvironment(contract.environment);
@@ -156,7 +159,9 @@ function snapshotInputs(contractInput, requestInput) {
   if (command.allowExtraArgs !== undefined && typeof command.allowExtraArgs !== 'boolean') fail('invalid-command-entry');
   if (extraArgs.length > 0 && command.allowExtraArgs !== true) fail('unexpected-command-args');
   const args = [...configuredArgs, ...extraArgs];
-  if (args.some(argument => SHELL_METACHARACTER.test(argument))) fail('shell-metacharacter');
+  if (command.execution === 'argv') {
+    if (args.some(argument => /[\u0000-\u001f\u007f-\u009f]/.test(argument))) fail('invalid-command-args');
+  } else if (args.some(argument => SHELL_METACHARACTER.test(argument))) fail('shell-metacharacter');
   const elevated = command.elevated ?? false;
   if (typeof elevated !== 'boolean') fail('invalid-command-entry');
   if (command.action === 'dependency.install' && !elevated) fail('approval-required');
@@ -168,6 +173,7 @@ function snapshotInputs(contractInput, requestInput) {
     worktree: contract.worktree,
     authority: contract.authority,
     executable: command.executable,
+    execution: command.execution,
     args: Object.freeze(args),
     action: command.action,
     elevated,
@@ -243,10 +249,27 @@ async function verifyCwd(worktree, cwdInput) {
   return verified;
 }
 
-export async function verifyCommandExecutable(executable) {
+export async function verifyCommandExecutable(executable, options = {}) {
+  if (options.execution !== undefined && options.execution !== 'argv') fail('unsafe-executable');
+  const direct = options.execution === 'argv';
   if (typeof executable !== 'string' || executable.length === 0 || executable.length > 1_024 || !isAbsolute(executable)) fail('unsafe-executable');
-  if (SHELL_METACHARACTER.test(executable) || UNSAFE_EXECUTABLE.test(basename(executable))) fail('unsafe-executable');
+  if (direct ? /[\u0000-\u001f\u007f-\u009f]/.test(executable) || SHELL_EXECUTABLE.test(basename(executable))
+    : SHELL_METACHARACTER.test(executable) || UNSAFE_EXECUTABLE.test(basename(executable))) fail('unsafe-executable');
   const before = await lstat(executable, { bigint: true });
+  if (direct) {
+    if (!before.isFile() && !before.isSymbolicLink()) fail('unsafe-executable');
+    const parent = await verifiedDirectory(dirname(executable), 'unsafe-executable');
+    const canonical = await realpath(executable);
+    if (canonical.length > 1_024 || /[\u0000-\u001f\u007f-\u009f]/.test(canonical)
+      || SHELL_EXECUTABLE.test(basename(canonical))) fail('unsafe-executable');
+    const target = await lstat(canonical, { bigint: true });
+    if (!target.isFile() || target.isSymbolicLink() || (target.mode & 0o111n) === 0n) fail('unsafe-executable');
+    const invocation = Object.freeze({
+      target: canonical, parent: parent.path, identity: identity(before), parentIdentity: parent.identity,
+    });
+    if (!await invocationStillValid(executable, invocation, identity(target))) fail('unsafe-executable');
+    return Object.freeze({ path: executable, identity: identity(target), invocation });
+  }
   if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1n || (before.mode & 0o111n) === 0n) fail('unsafe-executable');
   const canonical = await realpath(executable);
   const after = await lstat(executable, { bigint: true });
@@ -280,7 +303,7 @@ export async function prepareCommand(contractInput, requestInput) {
     const input = snapshotInputs(contractInput, requestInput);
     const worktree = resolve(input.worktree);
     const verifiedWorktree = await verifiedDirectory(worktree, 'invalid-worktree');
-    const executable = await verifyCommandExecutable(input.executable);
+    const executable = await verifyCommandExecutable(input.executable, { execution: input.execution });
     const cwd = await verifyCwd(worktree, input.cwd);
     if (input.maxStreamOutputBytes > input.maxOutputBytes) fail('invalid-output-limit');
     const authorityDecision = evaluateAuthority(input.authority, {
@@ -306,6 +329,8 @@ export async function prepareCommand(contractInput, requestInput) {
     preparedData.set(prepared, Object.freeze({
       worktree: verifiedWorktree.path,
       environment: input.environment,
+      execution: input.execution,
+      invocation: executable.invocation,
       identities: Object.freeze({
         worktree: verifiedWorktree.identity,
         cwd: cwd.identity,
@@ -370,11 +395,26 @@ async function sameVerifiedPath(path, expected, kind) {
   }
 }
 
+async function invocationStillValid(path, invocation, targetIdentity) {
+  try {
+    const [entry, targetPath, parentValid, targetValid] = await Promise.all([
+      lstat(path, { bigint: true }), realpath(path),
+      sameVerifiedPath(invocation.parent, invocation.parentIdentity, 'directory'),
+      sameVerifiedPath(invocation.target, targetIdentity, 'file'),
+    ]);
+    return (entry.isFile() || entry.isSymbolicLink()) && targetPath === invocation.target
+      && dirname(path) === invocation.parent && parentValid && targetValid
+      && entry.dev.toString() === invocation.identity.dev && entry.ino.toString() === invocation.identity.ino;
+  } catch { return false; }
+}
+
 async function anchorsStillValid(prepared, data) {
   const [worktree, cwd, executable] = await Promise.all([
     sameVerifiedPath(data.worktree, data.identities.worktree, 'directory'),
     sameVerifiedPath(prepared.cwd, data.identities.cwd, 'directory'),
-    sameVerifiedPath(prepared.executable, data.identities.executable, 'file'),
+    data.execution === 'argv'
+      ? invocationStillValid(prepared.executable, data.invocation, data.identities.executable)
+      : sameVerifiedPath(prepared.executable, data.identities.executable, 'file'),
   ]);
   return worktree && cwd && executable && isWithin(data.worktree, prepared.cwd);
 }
@@ -528,6 +568,7 @@ function executeAnchored(prepared, data, abortHandle) {
       args: prepared.args,
       environment: data.environment,
       identities: data.identities,
+      ...(data.execution === 'argv' ? { execution: 'argv', invocation: data.invocation } : {}),
     }, error => { if (error) malformed(); });
     timeoutTimer = setTimeout(() => { timedOut = true; stop(); }, prepared.timeoutMs);
     timeoutTimer.unref?.();

@@ -148,9 +148,11 @@ function packageScript(value, args) {
 
 function gate(value) {
   const input = capture(value, new Set([
-    'id', 'executable', 'args', 'cwd', 'packageScript', 'required', 'artifactPaths', 'tests', 'resultPath',
+    'id', 'executable', 'args', 'cwd', 'packageScript', 'execution', 'required', 'artifactPaths', 'tests', 'resultPath',
   ]), ['id', 'executable', 'args', 'cwd', 'required', 'artifactPaths', 'tests']);
   const gateId = id(input.id);
+  if (input.execution !== undefined && input.execution !== 'argv') fail('invalid-quality-input');
+  if (input.execution === 'argv' && input.packageScript !== undefined) fail('invalid-quality-input');
   if (typeof input.executable !== 'string' || !isAbsolute(input.executable)
     || input.executable.length > 1_024 || /[\u0000\r\n]/.test(input.executable)
     || typeof input.required !== 'boolean') fail('invalid-quality-input');
@@ -166,6 +168,7 @@ function gate(value) {
   return Object.freeze({
     id: gateId,
     executable: input.executable,
+    ...(input.execution === 'argv' ? { execution: 'argv' } : {}),
     args,
     cwd: relativePath(input.cwd, true),
     packageScript: packageScript(input.packageScript, args),
@@ -395,6 +398,7 @@ export async function runQualityGates(input, options = {}) {
         commands: {
           [configured.id]: {
             executable: configured.executable,
+            ...(configured.execution === 'argv' ? { execution: 'argv' } : {}),
             args: configured.args,
             action: 'command.' + configured.id,
           },

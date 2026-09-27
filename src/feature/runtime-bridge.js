@@ -454,15 +454,17 @@ export function createFeatureLaunchInput(node, intent, planNode, run) {
   };
 }
 
-export async function configuredFeatureGates(config, resolveCommandExecutable) {
+export async function configuredFeatureGates(config, resolveCommandExecutable, worktree) {
   const gates = [];
   for (const configured of compileQualitySteps(config)) {
     gates.push(Object.freeze({
       id: configured.id,
-      executable: await resolveCommandExecutable(configured.argv[0]),
+      executable: await resolveCommandExecutable(configured.argv[0], configured.execution === 'argv'
+        ? { execution: 'argv', ...(worktree === undefined ? {} : { worktree, cwd: configured.cwd }) } : {}),
       args: Object.freeze(configured.argv.slice(1)),
       cwd: configured.cwd,
-      packageScript: Object.freeze({ runner: configured.argv[0], script: configured.argv[2] }),
+      ...(configured.execution === 'argv' ? { execution: 'argv' }
+        : { packageScript: Object.freeze({ runner: configured.argv[0], script: configured.argv[2] }) }),
       required: configured.required,
       artifactPaths: Object.freeze([]),
       tests: Object.freeze([]),
@@ -528,9 +530,11 @@ export function createFeatureExecutor(input) {
     }
 
     async function prepareDependencies(worker, branch, expectedCommit) {
+      if (config.project.schemaVersion === 3 && !config.project.dependencies
+        && !['npm', 'pnpm', 'yarn', 'bun'].includes(config.project.stack.packageManager)) return;
       const input = {
         projectRoot: project, worktreePath: worker.root, expectedCommit,
-        expectedBranch: branch, manager: config.project.stack.packageManager,
+        expectedBranch: branch, ...(config.project.dependencies ? {dependencies:config.project.dependencies} : {manager: config.project.stack.packageManager}),
       };
       try {
         await inspectWorktreeDependencies(input, { gitClient: configured.gitClient });
@@ -791,11 +795,12 @@ export function createFeatureExecutor(input) {
     let quality;
     let failure;
     try {
+      if (config.project.dependencies) await prepareDependencies({root:integration.path}, integration.branch, identity.commitSha);
       quality = await runQualityGates({
         projectRoot: integration.path,
         commitSha: identity.commitSha,
         authority: featureQualityAuthority(config),
-        gates: await configuredFeatureGates(config, configured.resolveCommandExecutable),
+        gates: await configuredFeatureGates(config, configured.resolveCommandExecutable, integration.path),
         environment: configured.environment,
       }, { gitClient: configured.gitClient, now: nowMs, signal });
     } catch (error) {

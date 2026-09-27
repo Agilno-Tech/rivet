@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 
 import { EXIT_CODES } from '../cli/output.js';
 import { inspectCommandReadiness } from '../config/command-readiness.js';
-import { compileQualitySteps } from '../config/commands.js';
+import { commandToolKey, compileProjectDependencies, compileQualitySteps } from '../config/commands.js';
 import { loadProjectConfig, providerCredentialStatus } from '../config/load.js';
 import { discoverTools } from '../discovery/tools.js';
 import { verifyCommandExecutable } from '../policy/commands.js';
@@ -15,6 +15,9 @@ function emit(output, json, payload, exitCode) {
     output.log(`Doctor: ${payload.status}. ${payload.summary}`);
   } else {
     output.error(`Doctor: ${payload.status}. ${payload.summary}`);
+    for(const step of payload.checks?.commands?.steps??[]) {
+      if(!step.available) output.error(`  ${step.id}: ${step.status}; command ${JSON.stringify(step.argv)} in ${JSON.stringify(step.cwd)}. Check the executable on PATH and the configured project command.`);
+    }
   }
   return exitCode;
 }
@@ -95,33 +98,38 @@ export async function diagnoseDoctor(projectRoot, dependencies = {}) {
   }
   const environment = dependencies.env ?? process.env;
   const packageManager = config.project.stack.packageManager;
+  const direct=config.project.schemaVersion===3;
+  const commandSteps = compileQualitySteps(config);
+  const dependencyPlan = compileProjectDependencies(config.project);
+  const executableSteps = [...commandSteps, ...(dependencyPlan?.steps ?? [])];
   const managers = [...new Set([
-    packageManager,
-    ...compileQualitySteps(config).map(step => step.argv[0].toLowerCase().replace(/\.(?:cmd|exe)$/, '')),
+    ...(direct ? [] : [packageManager]),
+    ...executableSteps.map(step => direct ? step.argv[0] : step.argv[0].toLowerCase().replace(/\.(?:cmd|exe)$/, '')),
   ])];
   const toolDiscovery = dependencies.toolDiscovery ?? discoverTools;
-  const reports = await Promise.all(managers.map(manager => toolDiscovery({ packageManager: manager }, {
+  const reports = direct ? [await toolDiscovery({runtimeOnly:true},{cwd:projectRoot,runner:dependencies.runner})] : await Promise.all(managers.map(manager => toolDiscovery({ packageManager: manager }, {
     cwd: projectRoot,
     runner: dependencies.runner,
   })));
   let tools = Object.freeze({
     ...reports[0],
-    ...Object.fromEntries(managers.map((manager, index) => [manager, reports[index]?.[manager] ?? {}])),
+    ...(!direct ? Object.fromEntries(managers.map((manager, index) => [manager, reports[index]?.[manager] ?? {}])) : {}),
   });
   if (typeof dependencies.resolveCommandExecutable === 'function') {
-    const resolutions = await Promise.all(managers.map(async manager => {
+    const entries = direct ? [...new Map(executableSteps.map(step => [
+      commandToolKey(step.argv[0], step.cwd), { runner: step.argv[0], cwd: step.cwd },
+    ])).entries()] : managers.map(manager => [manager, { runner: manager, cwd: '.' }]);
+    const resolutions = await Promise.all(entries.map(async ([key, step]) => {
       let runtimeResolved = false;
       try {
-        const executable = await dependencies.resolveCommandExecutable(manager);
-        await verifyCommandExecutable(executable);
+        const executable = await dependencies.resolveCommandExecutable(step.runner, direct
+          ? { execution: 'argv', worktree: projectRoot, cwd: step.cwd } : {});
+        await verifyCommandExecutable(executable, direct ? { execution: 'argv' } : {});
         runtimeResolved = true;
       } catch {}
-      return [manager, Object.freeze({ ...(tools[manager] ?? {}), runtimeResolved })];
+      return [key, Object.freeze({ ...(tools[key] ?? {}), runtimeResolved })];
     }));
-    tools = Object.freeze({
-      ...tools,
-      ...Object.fromEntries(resolutions),
-    });
+    tools = Object.freeze({ ...tools, ...Object.fromEntries(resolutions) });
   }
   const credentials = dependencies.hostReadiness === true ? [] : providerCredentialStatus(config, environment);
   const providers = dependencies.hostReadiness === true ? [] : await providerChecks(
@@ -133,15 +141,20 @@ export async function diagnoseDoctor(projectRoot, dependencies = {}) {
   const missingCredentials = credentials.filter(item => item.required && !item.present);
   const unavailableProviders = providers.filter(item => ['unavailable', 'timeout', 'error'].includes(item.connectivity));
   const toolsReady = requiredToolReady(tools.node)
-    && managers.every(manager => requiredToolReady(tools[manager]) && tools[manager].runtimeResolved !== false)
+    && (direct || managers.every(manager => requiredToolReady(tools[manager]) && tools[manager].runtimeResolved !== false))
     && requiredToolReady(tools.git);
-  const failed = missingCredentials.length > 0 || unavailableProviders.length > 0 || !toolsReady || !commands.ready;
+  const otherFailure = missingCredentials.length > 0 || unavailableProviders.length > 0 || !toolsReady;
+  const preparationReady = !otherFailure && commands.preparationReady === true;
+  const preparationRequired = preparationReady && !commands.ready;
+  const failed = otherFailure || (!commands.ready && !preparationReady)
+    || commands.dependencies?.preparationReady === false;
   const exitCode = missingCredentials.length > 0 || unavailableProviders.length > 0
     ? EXIT_CODES.PROVIDER_UNAVAILABLE
     : failed ? EXIT_CODES.FAILED_GATE : EXIT_CODES.SUCCESS;
   return {
     ok: !failed,
-    status: failed ? 'fail' : providers.some(item => item.connectivity === 'not_checked') ? 'warn' : 'pass',
+    preparationReady,
+    status: failed ? 'fail' : preparationRequired ? 'preparation-required' : providers.some(item => item.connectivity === 'not_checked') ? 'warn' : 'pass',
     exitCode,
     checks: {
       configuration: { status: 'pass' },
@@ -151,7 +164,9 @@ export async function diagnoseDoctor(projectRoot, dependencies = {}) {
       commands,
       integrations: createIntegrationRegistry({config,projectId:config.project.id,environment,host:dependencies.integrationHost}).check(),
     },
-    summary: failed ? 'One or more readiness checks failed.' : 'Configuration and local readiness checks completed.',
+    summary: failed ? 'One or more readiness checks failed.' : preparationRequired
+      ? 'Configured dependencies require installation in the isolated checkout after approval. Quality commands have not run; use rivet task deps once the checkout exists.'
+      : 'Configuration and local readiness checks completed.',
   };
 }
 

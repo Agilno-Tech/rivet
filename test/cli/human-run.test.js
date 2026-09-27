@@ -105,11 +105,19 @@ test('decline and noninteractive terminal cannot activate', async t => {
   assert.equal(eof.calls.some(item => item[0] === 'start'), false);
 });
 
-test('two eligible harnesses require an explicit choice and blocked work exits nonzero', async t => {
+test('two eligible harnesses offer an inline choice and blocked work exits nonzero', async t => {
   const { root } = await fixture(t);
   const ambiguous = services(root, { selected: ['claude', 'codex'] });
-  assert.equal(await main(['run', 'Add a greeting module'], ambiguous.overrides), EXIT_CODES.INVALID_INPUT);
-  assert.equal(ambiguous.calls.length, 0);
+  ambiguous.overrides.harnessChoicePrompt = async question => {
+    assert.equal(question.choices.length,2);
+    return 'codex';
+  };
+  assert.equal(await main(['run', 'Add a greeting module'], ambiguous.overrides), EXIT_CODES.SUCCESS);
+  assert.deepEqual(ambiguous.calls[0], ['select','codex']);
+  const cancelled=services(root,{selected:['claude','codex']});
+  cancelled.overrides.harnessChoicePrompt=async()=>null;
+  assert.equal(await main(['run','Add a greeting module'],cancelled.overrides),EXIT_CODES.SUCCESS);
+  assert.equal(cancelled.calls.length,0);
   const chosen = services(root, { selected: ['claude', 'codex'], status: 'blocked' });
   assert.equal(await main(['run', 'Add a greeting module', '--harness=codex'], chosen.overrides), EXIT_CODES.REPOSITORY_CONFLICT);
   assert.deepEqual(chosen.calls[0], ['select', 'codex']);
@@ -127,6 +135,14 @@ test('multiline quoted task survives normalization and review without invented c
   assert.ok(sent.includes(task));
   assert.match(sent, /- Add `greet\(name\)` to src\/greeting\.js\. Return "Hello, Ada!" for Ada\./);
   assert.ok(s.messages.join('\n').includes(task));
+});
+
+test('interruption during harness selection cannot call a model', async t => {
+  const {root}=await fixture(t);
+  const s=services(root,{selected:['claude','codex']});
+  s.overrides.harnessChoicePrompt=async()=>{process.emit('SIGTERM');return 'codex';};
+  assert.equal(await main(['run','Add a greeting module'],s.overrides),EXIT_CODES.REPOSITORY_CONFLICT);
+  assert.equal(s.calls.length,0);
 });
 
 test('a plan output failure before approval cannot start execution', async t => {

@@ -78,7 +78,8 @@ const USAGE = `Usage:
   rivet models check --profile=<file> [--json]  Validate a model profile without calling a model
   rivet install                    Interactive — pick which skills to install (project)
   rivet install --all              Install all skills (project)
-  rivet setup [--project=<path>|--global] [--remote=<name>] [--target=claude|codex|both] [--write] [--json]
+  rivet setup [--project=<path>|--global] [--remote=<name>] [--target=claude|codex|both] [--checks-json='<json>'] [--dependencies-json='<json>'] [--write] [--json]
+                                  Project checks are exact argv arrays; unknown projects prompt with --write
   rivet run "task" [--harness=claude|codex] [--project=<path>]
   rivet task recover [--project=<path>] [--run=<id>]
   rivet task status [--project=<path>] [--run=<id>]
@@ -117,8 +118,8 @@ const USAGE = `Usage:
   rivet uninstall --target=claude  Uninstall from Claude only
   rivet uninstall --target=both    Uninstall from both
   rivet init                       Copy governance rule templates to .claude/ in current project
-  rivet init --project <path>      Propose v2 project configuration without writing
-  rivet init --project <path> --write [--overwrite] [--remote=<name>]
+  rivet init --project <path> [--checks-json='<json>'] [--dependencies-json='<json>']  Preview detected project configuration
+  rivet init --project <path> --write [--overwrite] [--remote=<name>] [--checks-json='<json>'] [--dependencies-json='<json>']
   rivet doctor [--project <path>] [--json]
   rivet support [--project=<path>] [--probe-harnesses] [--json]
   rivet preflight [--project <path>] [--mode=host|orchestration] [--json]
@@ -249,6 +250,8 @@ function resolveDependencies(overrides = {}) {
     confirmFeatureActivation: overrides.confirmFeatureActivation ?? defaultConfirmFeatureActivation,
     confirmDependencyInstall: overrides.confirmDependencyInstall ?? defaultConfirmDependencyInstall,
     setupRemotePrompt: overrides.setupRemotePrompt,
+    projectChecksPrompt: overrides.projectChecksPrompt,
+    harnessChoicePrompt: overrides.harnessChoicePrompt,
     terminalIsInteractive: overrides.terminalIsInteractive ?? (() => process.stdin.isTTY === true && process.stdout.isTTY === true),
     harnesses: overrides.harnesses,
     packageRoot: overrides.packageRoot ?? PACKAGE_ROOT,

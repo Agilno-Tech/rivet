@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import Ajv from 'ajv';
 
 import { EVIDENCE_TYPES, SCHEMA_FILES } from './defaults.js';
-import { CommandConfigurationError, compileProjectCommands, compileQualitySteps } from './commands.js';
+import { CommandConfigurationError, compileProjectCommands, compileQualitySteps, compileProjectDependencies } from './commands.js';
 
 const ajv = new Ajv({ allErrors: true, strict: true });
 const validators = Object.fromEntries(
@@ -251,12 +251,14 @@ function validateConfigSemantics(config) {
   for (const gate of config.quality.commandGates) {
     if (!commandNames.has(gate.command)) fail(`/quality/commandGates/${gate.id}/command`, 'command-reference');
   }
-  try { compileQualitySteps(config); }
+  try { compileQualitySteps(config); compileProjectDependencies(config.project); }
   catch (error) {
     if (error instanceof CommandConfigurationError) fail(error.path, error.reason);
     fail('/quality/commandGates', 'command-expansion');
   }
-  for (const mandatoryCommand of ['build', 'test']) {
+  if (config.project.schemaVersion === 3 && !config.quality.commandGates.some(gate =>
+    gate.required && ['test', 'check'].includes(gate.command))) fail('/quality/commandGates', 'mandatory-command-gate');
+  for (const mandatoryCommand of config.project.schemaVersion === 3 ? [] : ['build', 'test']) {
     if (![...gateIds].some(id => config.quality.commandGates.some(gate => gate.id === id && gate.command === mandatoryCommand && gate.required))) {
       fail('/quality/commandGates', 'mandatory-command-gate');
     }

@@ -27,6 +27,7 @@ for (const [stage, signal] of [
     let stdout;
     try {
       ({ stdout } = await execFile('python3', [probe, stage, signal], {
+        env: { ...process.env, RIVET_TEST_NODE_EXECUTABLE: process.execPath },
         timeout: 35_000, maxBuffer: 64 * 1024,
       }));
     } catch (error) {

@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { lstat, realpath } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
+import { inspectDependencyDirectory } from '../runtime/dependency-directory.js';
 
 const MAX_OUTPUT_BYTES = 256 * 1024;
 const TIMEOUT_MS = 15_000;
@@ -225,7 +226,7 @@ function diffPaths(output) {
   return Object.freeze([...new Set(paths)].sort());
 }
 
-function parseStatusPaths(output) {
+function parseStatusPaths(output, managedDependencies = false) {
   if (output === '') return Object.freeze([]);
   if (!output.endsWith('\0')) fail('git-output-invalid');
   const records = output.slice(0, -1).split('\0');
@@ -237,7 +238,8 @@ function parseStatusPaths(output) {
     // Git represents an ignored directory as a synthetic path with a trailing
     // slash (for example, `!! node_modules/`). It is a directory marker, not
     // an evidence path; ignored files inside it are still reported separately.
-    if (!(record[0] === '!' && record[1] === '!' && path.endsWith('/'))) {
+    if (!(record[0] === '!' && record[1] === '!'
+      && (path.endsWith('/') || (managedDependencies && path.startsWith('.rivet-deps/'))))) {
       paths.push(repositoryPath(path));
     }
     if (record[0] === 'R' || record[0] === 'C' || record[1] === 'R' || record[1] === 'C') {
@@ -406,11 +408,24 @@ export async function createGitClient(options = {}) {
       return diffPaths(result.output);
     },
 
+    async inspectTrackedFile(cwd, commit, path) {
+      if (!validSha(commit)) fail('invalid-input');
+      repositoryPath(path);
+      const result = await run(absoluteInput(cwd), ['ls-tree', '-z', commit, '--', path]);
+      const match = /^(100644|100755) blob ([0-9a-f]{40}|[0-9a-f]{64})\t([^\0]+)\0$/.exec(result.output);
+      if (!match || match[3] !== path) fail('repository-path-unsafe');
+      return Object.freeze({ path, blob: match[2] });
+    },
+
     async statusPaths(cwd) {
       const result = await run(absoluteInput(cwd), [
         'status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching',
       ]);
-      return parseStatusPaths(result.output);
+      // Only ignored records may be omitted, and only for this checkout's
+      // validated owned directory. Foreign or damaged metadata remains evidence.
+      let managedDependencies = false;
+      try { managedDependencies = (await inspectDependencyDirectory(absoluteInput(cwd))) !== null; } catch {}
+      return parseStatusPaths(result.output, managedDependencies);
     },
 
     async commitPaths(cwdInput, input) {
