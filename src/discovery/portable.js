@@ -15,6 +15,17 @@ export function parseProjectChecks(value) {
   catch { throw new ProjectChecksRequiredError('Option --checks-json must contain valid JSON, for example: {"test":["python3","-m","pytest"]}.'); }
 }
 
+export function parseProjectDependencies(value) {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || Buffer.byteLength(value) > 16384) throw new ProjectChecksRequiredError('Option --dependencies-json must be a bounded JSON dependency plan.');
+  try {
+    const parsed=JSON.parse(value);
+    if(!parsed || typeof parsed!=='object' || Array.isArray(parsed))throw new Error('Invalid dependency object');
+    return parsed;
+  }
+  catch { throw new ProjectChecksRequiredError('Option --dependencies-json must contain valid JSON with inputs, provides, and ordered steps.'); }
+}
+
 // Tokenize one argv command for the setup prompt. No expansion or shell dispatch.
 export function parseCheckCommand(value) {
   if(typeof value!=='string' || value.length>16384 || /[\u0000-\u001f\u007f]/.test(value)) throw new ProjectChecksRequiredError('Enter one bounded verification command without control characters.');
@@ -74,14 +85,24 @@ export function discoverPortableProject(root, {fs, inspect, read, checks}) {
     commands=Object.fromEntries(Object.entries(checks).map(([key,value])=>[key,Array.isArray(value)?group(value):value]));
     source='explicit --checks-json';
   }
+  let dependencies;
+  if (language === 'python' && metadata.has('requirements.txt') && checks === undefined) {
+    const python='./.rivet-deps/venv/bin/python';
+    dependencies={inputs:['requirements.txt'],provides:[python],steps:[
+      {cwd:'.',argv:['python3','-m','venv','.rivet-deps/venv']},
+      {cwd:'.',argv:[python,'-m','pip','--isolated','install','--require-virtualenv','--no-user','-r','requirements.txt']},
+    ]};
+    for(const group of Object.values(commands)) for(const step of group.steps) if(step.argv[0]==='python3')step.argv[0]=python;
+  }
   if(!commands.test && !commands.check) throw new ProjectChecksRequiredError();
   const name=basename(root).normalize('NFKC').slice(0,120);
   const id=name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,60).replace(/-$/,'');
   const projectId=(/^[a-z]/.test(id)?id:`project-${id||'local'}`).slice(0,64).replace(/-$/,'');
-  const proposal={schemaVersion:3,id:projectId,name,stack:{framework,language,packageManager},commands};
+  const proposal={schemaVersion:3,id:projectId,name,stack:{framework,language,packageManager},commands,...(dependencies?{dependencies}:{})};
   try { compileProjectCommands(proposal); }
   catch { throw new ProjectChecksRequiredError('Project checks are invalid. Use bounded argv arrays with executable names, safe relative working directories, and at least one test or check command. Shell commands are not supported.'); }
   const provenance={id:'project directory basename',name:'project directory basename','stack.framework':source,'stack.language':source,'stack.packageManager':source,'features.storybook':'not detected','features.playwright':'not detected'};
   for(const [key,group] of Object.entries(commands)) group.steps.forEach((_,index)=>{provenance[`commands.${key}.steps[${index}]`]=source;});
-  return {root,proposal,inspectedFiles:[...metadata.keys()],features:{storybook:false,playwright:false},architectureHints:metadata.has('AGENTS.md')?['AGENTS.md']:[],existingConfig:fs.existsSync(`${root}/.rivet`),warnings:[{code:'environment-preparation',message:'Review the proposed commands and prepare this project’s dependency environment before running work. Automatic locked dependency installation currently applies to Node package managers.'}],unresolved:[],provenance};
+  if(dependencies)provenance.dependencies='requirements.txt (isolated Python environment proposal; review before installation)';
+  return {root,proposal,inspectedFiles:[...metadata.keys()],features:{storybook:false,playwright:false},architectureHints:metadata.has('AGENTS.md')?['AGENTS.md']:[],existingConfig:fs.existsSync(`${root}/.rivet`),warnings:[{code:'environment-preparation',message:dependencies?'Review the proposed dependency steps. Installation requires separate approval in each isolated checkout.':'Review the proposed commands. Configure dependency installation steps when this project needs environment preparation.'}],unresolved:[],provenance};
 }

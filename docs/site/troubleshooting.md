@@ -10,9 +10,13 @@ If Git cannot be found or used, the error now identifies Git and explains how to
 
 No Rivet package has been published from this repository yet. Use the source installation instructions. The temporary package name does not establish ownership of a public namespace.
 
-## npm reports success but rivet is missing
+## Installation succeeds but rivet is missing
 
-First check `npm prefix --global` and ensure its `bin` directory is on your shell PATH. If the installed package links to a missing temporary Git clone, reinstall with the documented `--install-links` option, then verify `rivet --help`. Do not treat npm's success message alone as proof that the command works.
+Run `yarn global bin` and ensure the returned directory is on your shell PATH, then verify `rivet --help`. These installation examples require Yarn Classic 1.22; modern Yarn does not provide `yarn global`. Reinstall using the [documented source command](./installation.md) if the installed binary is missing. Package-manager success alone does not prove the CLI is available.
+
+## Setup cannot install the harness skill
+
+Codex and other coding-agent sandboxes may protect their instruction directories, including `.agents/skills`. If installation reports a permission denial, run the reviewed `rivet setup --write` command from your regular terminal, or grant the exact operation through the harness's normal approval flow. Reload the harness afterward. Existing project configuration is preserved if skill installation stops partway through setup; inspect the reported partial state before retrying.
 
 ## A provider is listed but cannot execute
 
@@ -38,7 +42,7 @@ Use the actual command your project runs. At least one required `test` or `check
 
 ## A configured check cannot find its executable or dependencies
 
-Read `rivet doctor` for the exact failing command and working directory. Make that executable available on the `PATH` used to launch Rivet. Prepare and activate the project's normal dependency environment, such as its Python virtual environment. Checks execute in isolated checkouts, so checkout-specific dependencies must be prepared at the Worker or integration path shown by task status. Rivet does not copy dependencies from the original checkout or install packages through verification commands. `rivet task deps` supports locked Node dependencies only; use the project's documented dependency procedure for other toolchains.
+Read `rivet doctor` for the exact failing command and working directory. Make that executable available on the `PATH` used to launch Rivet. Checks execute in isolated checkouts, so prepare dependencies at the Worker or integration path shown by task status. Use `rivet task deps` for a configured dependency plan and approve its exact commands, or follow the project’s documented environment procedure. Generated Python setup uses the checkout’s `.rivet-deps/venv`. Rivet does not copy source dependencies or install packages through verification commands. `preparation-required` means the configured plan can create a missing executable; it does not certify successful tests.
 
 ## Both Claude and Codex are installed
 
@@ -58,7 +62,7 @@ Run `rivet preflight --project=<path> --mode=host --json` for the host workflow.
 
 ## Verification fails after the Worker submitted
 
-Run `rivet task status` inside the project, or `rivet work status <run-id> --project=<path> --json` for the full report. Its `verification` report identifies the tested commit, isolated integration checkout, changed paths, and executed checks. A failed `work verify` exits nonzero and keeps the run before final approval. For missing locked dependencies in the clean accepted integration checkout, run `rivet task deps`; review and approve its exact package-manager command, then retry verification of the unchanged commit. The same command prepares a clean active host Worker before editing. It requires one matching lockfile and an interactive terminal. Other environment issues still need repair. A source correction requires a new reviewed proposal. Rivet does not install dependencies through its quality commands.
+Run `rivet task status` inside the project, or `rivet work status <run-id> --project=<path> --json` for the full report. Its `verification` report identifies the tested commit, isolated integration checkout, changed paths, and executed checks. A failed `work verify` exits nonzero and keeps the run before final approval. For missing configured dependencies in the clean accepted integration checkout, run `rivet task deps`; review and approve its exact installation commands, then retry verification of the unchanged commit. The same command prepares a clean active host Worker before editing. It validates the configured dependency inputs and requires an interactive terminal. Other environment issues still need repair. A source correction requires a new reviewed proposal. Rivet does not install dependencies through its quality commands.
 
 ## A host action was interrupted or blocked
 

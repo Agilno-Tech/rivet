@@ -3,27 +3,31 @@
 ## Install the CLI globally
 
 ```sh
-npm install --global --install-links github:FraneAgilno/rivet#main
+yarn global add "https://github.com/FraneAgilno/rivet.git#main"
 rivet --help
 rivet setup
 rivet setup --write
 ```
 
-The source branch is a moving alpha, not a versioned npm release. For reproducible installation, replace `main` with a reviewed commit SHA. Global npm installation uses your existing npm prefix; configure a user-owned prefix/runtime manager if necessary rather than running the installer as root.
+These examples use **Yarn Classic 1.22** (`yarn --version`). Modern Yarn uses different installation commands; do not pass Classic's `global` command to it. The source branch is a moving alpha, not a versioned registry release. Replace `main` with a reviewed commit SHA for reproducible source selection. Use a user-owned Yarn prefix rather than running the installer as root.
 
-Keep `--install-links` in the source install command. A tested npm 10 installation without it reported success but linked the package to a deleted temporary Git clone, leaving `rivet` unavailable. Verify `rivet --help` succeeds before setup. This flag requests a packaged installation rather than a directory link; see [npm installation options](https://docs.npmjs.com/cli/v10/commands/npm-install/#install-links).
+Confirm `rivet --help` works before setup. `yarn global bin` shows the directory that needs to be on your shell's PATH. See [Yarn Classic global installation](https://classic.yarnpkg.com/lang/en/docs/cli/global/). Installing Rivet does not change your application's package manager.
 
 ## Install for one project without a global CLI
 
-From the project root, use npm to run the installer once:
+From the project root, create a temporary Yarn Classic installation and use it to pin Rivet for this project:
 
 ```sh
-npm exec --yes --ignore-scripts --install-links --package=github:FraneAgilno/rivet#main -- rivet install --project-runtime
+rivet_bootstrap=$(mktemp -d)
+yarn global add "https://github.com/FraneAgilno/rivet.git#main" \
+  --global-folder "$rivet_bootstrap/global" --prefix "$rivet_bootstrap" \
+  --cache-folder "$rivet_bootstrap/cache" --ignore-scripts
+"$rivet_bootstrap/bin/rivet" install --project-runtime
 node .rivet.cjs setup
 node .rivet.cjs setup --write
 ```
 
-Use a reviewed commit SHA instead of `main` for reproducible source selection. Use Node 22 or newer, npm 10 or newer, and Git. Unsupported Node versions are rejected before installation changes. The initial command requires access to the GitHub source and dependency registry; it does not require a global Rivet executable.
+Use a reviewed commit SHA instead of `main` for reproducible source selection. Use Node 22 or newer, Yarn Classic 1.22, and Git. The private runtime installer also requires npm 10 or newer, included with the supported Node distribution, for its internal dependency installation. Unsupported Node versions are rejected before installation changes. The initial command requires access to the GitHub source and dependency registry; it does not require a global Rivet executable.
 
 Project installation snapshots the running Rivet package and installs its runtime and dependencies into your private `~/.cache/rivet/project-runtimes` cache. A small owned `.rivet.cjs` file pins the Rivet source. Each user keeps their platform-specific runtime and resolved dependency inventory privately. Your application's `package.json`, lockfile and dependencies are preserved. The selected minimal harness instructions use this project reference even when another Rivet version is available globally. Use `--target=claude` or `--target=codex` to install only one target; both are the default. Use `--project=<path>` only when automatic project discovery is insufficient.
 
@@ -38,7 +42,7 @@ node .rivet.cjs doctor
 
 The reference uses your current Node runtime and validates the pinned Rivet source and private dependency inventory before loading Rivet. It keeps the current working directory and needs no PATH export. The installed harness discovers the project root and uses the reference for its own commands. Review and commit the project reference, configuration and instructions before starting a workflow that requires a clean checkout. Another collaborator needs their own private runtime installation; the cache is not committed to the project.
 
-Repeat the `npm exec` command above from the selected approved source to update the pin. Unchanged sources reuse a verified cache. Edited or unowned project references and instructions stop replacement. Later ordinary `setup` calls preserve the pinned harness routing. Interrupted installation preserves existing application files; inspect any reported partial instruction installation before retrying.
+Repeat the temporary Yarn installation and `install --project-runtime` commands above from the selected approved source to update the pin. Unchanged sources reuse a verified cache. Edited or unowned project references and instructions stop replacement. Later ordinary `setup` calls preserve the pinned harness routing. Interrupted installation preserves existing application files; inspect any reported partial instruction installation before retrying.
 
 Remove the owned project installation with:
 
@@ -91,14 +95,14 @@ It records ownership and installed-content hashes alongside the skill. Repeating
 
 ## Update or remove
 
-Update the CLI using the same npm install command, then repeat minimal installation for the original scope and targets. Remove managed instructions with:
+Update the CLI using the same Yarn global installation command, then repeat minimal installation for the original scope and targets. Remove managed instructions with:
 
 ```sh
 rivet uninstall --minimal --project=. --target=both
 rivet uninstall --minimal --global --target=both
 ```
 
-Removal preserves unowned files and refuses to delete modified managed content. Project policy is retained. Remove the globally installed CLI separately with `npm uninstall --global @agilno/rivet`.
+Removal preserves unowned files and refuses to delete modified managed content. Project policy is retained. Remove the globally installed CLI separately with `yarn global remove @agilno/rivet`.
 
 ## Advanced legacy capability packs
 
@@ -109,10 +113,12 @@ The earlier `install --all` and interactive installers remain available. They in
 ```sh
 git clone https://github.com/FraneAgilno/rivet.git
 cd rivet
-npm ci
-npm run build
+yarn install --ignore-scripts --no-lockfile
+yarn run build
 node bin/cli.js --help
 ```
+
+The contributor command uses `--no-lockfile` because the repository currently maintains a different package-manager lockfile. It leaves that lockfile unchanged but does not reproduce its exact dependency tree; use the repository's CI results for the locked dependency baseline. Do not commit a second lockfile as part of setup. `--ignore-scripts` prevents dependency lifecycle scripts during this source installation; build Rivet explicitly afterward.
 
 Use `--json` with setup and minimal install/uninstall for machine-readable results. If setup reports partial completion, preserve the written configuration, resolve the installation conflict, and rerun. Configuration and harness installation are separate transactions.
 

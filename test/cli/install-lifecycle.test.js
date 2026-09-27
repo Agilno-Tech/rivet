@@ -311,3 +311,19 @@ test('a concurrent in-place edit during update is preserved and stops publicatio
   );
   assert.equal(await readFile(skillPath, 'utf8'), 'concurrent user edit\n');
 });
+
+test('managed skill filesystem denials become safe actionable authority errors', async t => {
+  for (const code of ['EPERM', 'EACCES']) {
+    const state = await fixture(t);
+    const denied = Object.assign(new Error('private-path-and-secret'), { code });
+    const fs = { ...filesystem, mkdirSync() { throw denied; } };
+    await assert.rejects(managedInstall(parsed('install', { project: state.project, target: 'codex' }), dependencies(state, { fs })), error => {
+      assert.equal(error.code, 'BLOCKED_AUTHORITY');
+      assert.equal(error.exitCode, 3);
+      assert.match(error.safeMessage, /protected.*skill directory/i);
+      assert.match(error.safeMessage, /terminal|permission/i);
+      assert.doesNotMatch(error.safeMessage, /private-path-and-secret/);
+      return true;
+    });
+  }
+});

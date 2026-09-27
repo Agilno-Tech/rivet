@@ -41,9 +41,11 @@
         "productionEnvironment": { "type": "boolean" }
       }
     },
-    "commands": {}
+    "commands": {},
+    "dependencies": { "$ref": "#/$defs/dependencies" }
   },
   "allOf": [
+    { "if": { "properties": { "dependencies": {} }, "required": ["dependencies"] }, "then": { "properties": { "schemaVersion": { "const": 3 } } } },
     {
       "if": { "properties": { "schemaVersion": { "const": 1 } } },
       "then": { "properties": { "commands": { "$ref": "#/$defs/commandsV1" } } },
@@ -119,6 +121,15 @@
         "test": { "$ref": "#/$defs/commandGroup" },
         "lint": { "$ref": "#/$defs/commandGroup" },
         "typecheck": { "$ref": "#/$defs/commandGroup" }
+      }
+    },
+    "dependencies": {
+      "type": "object", "additionalProperties": false,
+      "required": ["inputs", "provides", "steps"],
+      "properties": {
+        "inputs": { "type": "array", "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/$defs/relativePath" } },
+        "provides": { "type": "array", "maxItems": 16, "uniqueItems": true, "items": { "type": "string", "minLength": 3, "maxLength": 302, "pattern": "^\\./" } },
+        "steps": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/$defs/argvStep" } }
       }
     },
     "argv": {

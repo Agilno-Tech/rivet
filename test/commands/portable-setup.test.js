@@ -63,10 +63,39 @@ test('Django discovery proposes real Python checks without a Node manifest',asyn
   const result=await discoverProject(root);
   assert.equal(result.proposal.schemaVersion,3);
   assert.equal(result.proposal.stack.framework,'django');
-  assert.deepEqual(result.proposal.commands.check.steps[0].argv,['python3','manage.py','check']);
-  assert.deepEqual(result.proposal.commands.test.steps[0].argv,['python3','manage.py','test']);
+  assert.deepEqual(result.proposal.commands.check.steps[0].argv,['./.rivet-deps/venv/bin/python','manage.py','check']);
+  assert.deepEqual(result.proposal.commands.test.steps[0].argv,['./.rivet-deps/venv/bin/python','manage.py','test']);
+  assert.deepEqual(result.proposal.dependencies.inputs,['requirements.txt']);
+  assert.deepEqual(result.proposal.dependencies.provides,['./.rivet-deps/venv/bin/python']);
+  assert.deepEqual(result.proposal.dependencies.steps[0].argv,['python3','-m','venv','.rivet-deps/venv']);
+  assert.ok(result.proposal.dependencies.steps[1].argv.includes('--require-virtualenv'));
   assert.equal(result.proposal.commands.build,undefined);
   await assert.rejects(access(join(root,'package.json')));
+});
+
+test('setup accepts an explicit generic dependency plan without running its commands',async t=>{
+  const root=await fixture(t,{'Gemfile':'source "https://rubygems.org"\n'});
+  const dependencies={inputs:['Gemfile'],provides:[],steps:[{cwd:'.',argv:['bundle','install']}]};
+  let payload;
+  const parsed=parseArgs(['init',`--project=${root}`,'--write','--json','--checks-json={"test":["bundle","exec","rspec"]}',`--dependencies-json=${JSON.stringify(dependencies)}`]);
+  const code=await init(parsed,{output:{json:value=>{payload=value;}},gitDiscovery:async()=>({repository:false}),toolDiscovery:async()=>({})});
+  assert.equal(code,0,JSON.stringify(payload));
+  assert.deepEqual((await loadProjectConfig(root)).project.dependencies,dependencies);
+});
+
+test('host preflight admits declared dependency preparation without claiming checks are ready',async t=>{
+  const root=await realpath(await fixture(t,{'manage.py':'# Django project\n','requirements.txt':'Django\n'}));
+  assert.equal(await init({flags:{project:root,write:true,json:true}},{output:{json(){}},gitDiscovery:async()=>({repository:false}),toolDiscovery:async()=>({})}),0);
+  let payload;
+  const code=await preflight({flags:{project:root,mode:'host',json:true}},{
+    output:{json:value=>{payload=value;}},
+    toolDiscovery:async()=>({node:{present:true,supported:true,version:'22.0.0'},git:{present:true,supported:true,version:'2.0.0'}}),
+    resolveCommandExecutable:async name=>{if(name.startsWith('./'))throw new Error('not prepared');return realpath(process.execPath);},
+    gitDiscovery:async()=>({repository:true,dirty:false,detached:false,currentBranch:'main',defaultBranch:'main',baseFreshness:'fresh',worktreeCheck:{checked:true}}),
+  });
+  assert.equal(code,0,JSON.stringify(payload));
+  assert.equal(payload.dependencyPreparation,'required');
+  assert.equal(payload.checks.find(check=>check.id==='quality-commands').commands[0].available,false);
 });
 test('Go and Rust discovery use their own commands',async t=>{
   for(const [file,content,runner] of [['go.mod','module example.invalid/app\n','go'],['Cargo.toml','[package]\nname="demo"\nversion="0.1.0"\n','cargo']]){

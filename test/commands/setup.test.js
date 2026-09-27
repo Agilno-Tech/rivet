@@ -469,3 +469,23 @@ test('external project setup quotes its actual project path in readiness guidanc
   assert.ok(steps.includes(`rivet doctor --project='${root}'`));
   assert.ok(steps.includes(`rivet preflight --mode=host --project='${root}'`));
 });
+
+test('setup preserves written policy and exposes a safe skill permission diagnostic', async t => {
+  for (const json of [true, false]) {
+    const root = await createProject(t);
+    const capture = captureOutput();
+    const { dependencies } = makeDependencies(root, capture, {
+      install: async () => { throw new CliError('The protected skill directory requires normal harness permission. Run reviewed rivet setup --write from your terminal.', 'BLOCKED_AUTHORITY'); },
+    });
+    const code = await setupCommand(parsedSetup(root, { write: true, json }), dependencies);
+    assert.equal(code, EXIT_CODES.BLOCKED_AUTHORITY);
+    await loadProjectConfig(root);
+    if (json) {
+      const result = capture.writes.at(-1).value;
+      assert.equal(result.status, 'partial');
+      assert.equal(result.configurationWritten, true);
+      assert.equal(result.error.code, 'BLOCKED_AUTHORITY');
+      assert.match(result.error.message, /protected skill directory/);
+    } else assert.match(capture.writes.map(item => item.value).join('\n'), /protected skill directory/);
+  }
+});

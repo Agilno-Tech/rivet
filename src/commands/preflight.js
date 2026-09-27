@@ -14,7 +14,7 @@ function emit(output, json, payload, exitCode) {
   if (json) {
     output.json(payload, exitCode === EXIT_CODES.SUCCESS ? 'stdout' : 'stderr');
   } else if (exitCode === EXIT_CODES.SUCCESS) {
-    output.log(`Preflight: ${payload.status}.`);
+    output.log(`Preflight: ${payload.status}.${payload.dependencyPreparation==='required'?' Dependencies require separate approval and installation in the isolated task checkout before checks can run.':''}`);
   } else {
     output.error(`Preflight: ${payload.status}. ${payload.remediations.join(' ')}`);
   }
@@ -92,7 +92,7 @@ export async function preflight(parsed, dependencies = {}) {
       ...(mode === 'host' ? [] : [check('goal-state', goalState?.status === 'ready', 'Initialize and approve the private goal instance.')]),
       check('toolchain', tools.node?.supported === true && (direct || tools[packageManager]?.supported === true) && tools.git?.supported === true,
         direct ? 'Install a supported local Node runtime and Git.' : 'Install a supported local Node, package manager, and Git toolchain.'),
-      check('quality-commands', qualityCommands.ready, direct
+      check('quality-commands', qualityCommands.ready || (direct && qualityCommands.preparationReady === true), direct
         ? 'Resolve the configured command executables on PATH and verify their project working directories. Run rivet doctor for the failing command.'
         : 'Define every required quality command as an effective bounded package script.', {
         commands: qualityCommands.steps,
@@ -103,6 +103,7 @@ export async function preflight(parsed, dependencies = {}) {
       ok: failed.length === 0,
       status: failed.length === 0 ? 'pass' : 'fail',
       ...(mode === 'host' ? { mode } : {}),
+      ...(doctor.status === 'preparation-required' ? { dependencyPreparation: 'required' } : {}),
       checks,
       remediations: [...new Set(failed.map(item => item.remediation))],
     };

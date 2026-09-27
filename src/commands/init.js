@@ -19,7 +19,8 @@ import {
   readStrictBoundedFile,
 } from '../discovery/project.js';
 import { discoverTools } from '../discovery/tools.js';
-import {ProjectChecksRequiredError,parseProjectChecks} from '../discovery/portable.js';
+import {ProjectChecksRequiredError,parseProjectChecks,parseProjectDependencies} from '../discovery/portable.js';
+import {compileProjectDependencies} from '../config/commands.js';
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const FILES = Object.freeze(['project.yaml', 'providers.yaml', 'orchestration.yaml', 'quality.yaml']);
@@ -97,6 +98,10 @@ function proposalProvenance(config, discovery, git) {
       provenanceRecord(discovery.provenance[field], fallbackName ? 'inferred' : 'detected', fallbackName ? 'low' : 'high'),
     );
   }
+  if(config.project.dependencies) {
+    replaceProvenance(provenance,'project.dependencies',{});
+    collectLeafProvenance(config.project.dependencies,'project.dependencies',provenanceRecord(discovery.provenance.dependencies??'explicit --dependencies-json','inferred','medium'),provenance);
+  }
   replaceProvenance(
     provenance,
     'project.repository.defaultBranch',
@@ -156,6 +161,7 @@ function proposalFromTemplates(discovery, git, packageRoot, fs, remote) {
   config.project.repository.defaultBranch = git.defaultBranch ?? 'main';
   if (remote) config.project.repository.remote = remote;
   config.project.commands = discovery.proposal.commands;
+  if(discovery.proposal.dependencies)config.project.dependencies=discovery.proposal.dependencies;
   if (config.project.schemaVersion === 3) {
     config.quality.commandGates = Object.keys(config.project.commands).map(command=>({id:command,command,required:['test','check','build'].includes(command)}));
   }
@@ -622,6 +628,14 @@ export async function init(parsed, dependencies = {}) {
   const projectRoot = resolve(parsed.flags.project ?? dependencies.cwd?.() ?? process.cwd());
   try {
     const discovery = await (dependencies.projectDiscovery ?? discoverProject)(projectRoot, { fs, checks: parseProjectChecks(parsed.flags['checks-json']) });
+    const installation = parseProjectDependencies(parsed.flags['dependencies-json']);
+    if(installation !== undefined) {
+      discovery.proposal.schemaVersion=3;
+      discovery.proposal.commands=Object.fromEntries(Object.entries(discovery.proposal.commands).map(([name,command])=>[name,Array.isArray(command)?{steps:[{cwd:'.',argv:command}]}:command]));
+      discovery.proposal.dependencies=installation;
+      try {compileProjectDependencies(discovery.proposal);}
+      catch {throw new ProjectChecksRequiredError('Dependency installation is invalid. Use bounded inputs, provides, and ordered cwd/argv steps without shell commands.');}
+    }
     const git = await (dependencies.gitDiscovery ?? discoverGit)(projectRoot, { runner: dependencies.runner });
     const tools = await (dependencies.toolDiscovery ?? discoverTools)({
       ...(discovery.proposal.schemaVersion===3?{runtimeOnly:true}:{}),
@@ -642,6 +656,7 @@ export async function init(parsed, dependencies = {}) {
           remoteSelection: {status:remote.status, choices:remote.choices},
           schemaVersion: discovery.proposal.schemaVersion,
           commands: discovery.proposal.commands,
+          ...(discovery.proposal.dependencies?{dependencies:discovery.proposal.dependencies}:{}),
           qualityGates: proposal.config.quality.commandGates,
           files: proposal.files,
           provenance: proposal.provenance,
@@ -675,6 +690,7 @@ export async function init(parsed, dependencies = {}) {
           remoteSelection: {status:remote.status, choices:remote.choices},
           schemaVersion: discovery.proposal.schemaVersion,
           commands: discovery.proposal.commands,
+          ...(discovery.proposal.dependencies?{dependencies:discovery.proposal.dependencies}:{}),
           qualityGates: proposal.config.quality.commandGates,
           files: proposal.files,
           provenance: proposal.provenance,

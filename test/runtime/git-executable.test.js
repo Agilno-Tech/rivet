@@ -80,7 +80,7 @@ test('Git discovery exhaustion explains how to configure Git without leaking loo
     import { register } from 'node:module';
     function resolve(specifier, context, next) {
       if (specifier === 'node:fs/promises' && context.parentURL?.endsWith('/src/runtime/application.js')) {
-        return { shortCircuit: true, url: 'data:text/javascript,export async function realpath() { throw new Error("private-lookup-value"); }' };
+        return { shortCircuit: true, url: 'data:text/javascript,export async function realpath() { throw new Error("private-lookup-value"); } export async function lstat() { throw new Error("private-lookup-value"); }' };
       }
       return next(specifier, context);
     }

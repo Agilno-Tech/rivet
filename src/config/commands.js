@@ -56,6 +56,16 @@ function validArgv(value, logicalId, path, allowTypeCheckAlias) {
 // Schema 3 grants execution only to these exact reviewed argv values.
 const DIRECT_EXECUTABLE = /^[A-Za-z][A-Za-z0-9._+-]{0,127}$/;
 const SHELL_EXECUTABLE = /^(?:sh|bash|dash|mksh|yash|zsh|fish|nu|elvish|cmd|powershell|pwsh|env|sudo)(?:\.exe|\.cmd)?$/i;
+export function isProjectExecutable(value) {
+  return typeof value === 'string' && value.startsWith('./') && value.length > 2
+    && isExecutionCompatibleCwd(value.slice(2))
+    && !SHELL_EXECUTABLE.test(value.split('/').at(-1));
+}
+
+export function commandToolKey(runner, cwd = '.') {
+  return runner.startsWith('./') ? JSON.stringify([cwd, runner]) : runner;
+}
+
 function directArgv(value, path) {
   if (!Array.isArray(value) || value.length < 1 || value.length > 257
     || Reflect.ownKeys(value).length !== value.length + 1) fail(path, 'command-grammar');
@@ -67,7 +77,7 @@ function directArgv(value, path) {
       || /[\u0000-\u001f\u007f-\u009f]/.test(descriptor.value)) fail(path, 'command-grammar');
     argv.push(descriptor.value);
   }
-  if (!DIRECT_EXECUTABLE.test(argv[0]) || SHELL_EXECUTABLE.test(argv[0])) fail(path, 'unsafe-executable');
+  if ((!DIRECT_EXECUTABLE.test(argv[0]) && !isProjectExecutable(argv[0])) || SHELL_EXECUTABLE.test(argv[0])) fail(path, 'unsafe-executable');
   return Object.freeze(argv);
 }
 
@@ -96,6 +106,43 @@ function compiledGroup(logicalId, rawSteps, path, allowTypeCheckAlias, direct = 
     return Object.freeze({ id: multiple ? `${logicalId}-${index + 1}` : logicalId, cwd, argv, ...(direct ? { execution: 'argv' } : {}) });
   });
   return Object.freeze({ logicalId, steps: Object.freeze(steps) });
+}
+
+export function compileProjectDependencies(project) {
+  if (!project || typeof project !== 'object' || Array.isArray(project)) fail('/project', 'project');
+  const descriptor = Object.getOwnPropertyDescriptor(project, 'dependencies');
+  if (!descriptor) return undefined;
+  if (project.schemaVersion !== 3 || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
+    fail('/project/dependencies', 'dependencies');
+  }
+  const value = descriptor.value;
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) fail('/project/dependencies', 'dependencies');
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== 3 || keys.some(key => !['inputs', 'provides', 'steps'].includes(key))) fail('/project/dependencies', 'dependencies');
+  for (const key of keys) {
+    const field = Object.getOwnPropertyDescriptor(value, key);
+    if (!field?.enumerable || !Object.hasOwn(field, 'value')) fail(`/project/dependencies/${key}`, 'dependencies');
+  }
+  const bounded = (array, key) => {
+    if (!Array.isArray(array) || array.length > 16 || Reflect.ownKeys(array).length !== array.length + 1) fail(`/project/dependencies/${key}`, 'dependency-count');
+    for (let index = 0; index < array.length; index += 1) {
+      const item = Object.getOwnPropertyDescriptor(array, String(index));
+      if (!item?.enumerable || !Object.hasOwn(item, 'value')) fail(`/project/dependencies/${key}`, 'dependencies');
+    }
+    return array;
+  };
+  const inputs = bounded(value.inputs, 'inputs').map(path => {
+    if (path === '.' || !isExecutionCompatibleCwd(path)) fail('/project/dependencies/inputs', 'unsafe-path');
+    return path;
+  });
+  const provides = bounded(value.provides, 'provides').map(path => {
+    if (!isProjectExecutable(path)) fail('/project/dependencies/provides', 'unsafe-path');
+    return path;
+  });
+  if (new Set(inputs).size !== inputs.length || new Set(provides).size !== provides.length) fail('/project/dependencies', 'duplicate-step');
+  const steps = compiledGroup('install', bounded(value.steps, 'steps'), '/project/dependencies/steps', false, true).steps;
+  return Object.freeze({ inputs: Object.freeze(inputs), provides: Object.freeze(provides), steps });
 }
 
 export function compileProjectCommands(project) {

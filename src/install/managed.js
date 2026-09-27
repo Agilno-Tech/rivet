@@ -23,6 +23,20 @@ function conflict(message, cause) {
   return new CliError(message, 'REPOSITORY_CONFLICT', cause ? { cause } : {});
 }
 
+function installationError(error) {
+  const seen = new Set();
+  let current = error;
+  for (let depth = 0; depth < 8 && current && typeof current === 'object' && !seen.has(current); depth += 1) {
+    seen.add(current);
+    const code = Object.getOwnPropertyDescriptor(current, 'code')?.value;
+    if (code === 'EACCES' || code === 'EPERM') {
+      return new CliError('Access to a protected Rivet skill directory was denied. Approve this operation through the harness, or run the reviewed Rivet setup, install or uninstall command from your terminal. The operation may be partial; inspect its state before retrying.', 'BLOCKED_AUTHORITY');
+    }
+    current = Object.getOwnPropertyDescriptor(current, 'cause')?.value;
+  }
+  return error;
+}
+
 function lstatIfExists(path, fs) {
   try {
     return fs.lstatSync(path);
@@ -320,7 +334,8 @@ function buildPlan(parsed, dependencies) {
 }
 
 export function inspectManagedInstall(parsed, dependencies) {
-  return publicPlan(buildPlan(parsed, dependencies));
+  try { return publicPlan(buildPlan(parsed, dependencies)); }
+  catch (error) { throw installationError(error); }
 }
 
 function writeAll(descriptor, bytes, fs) {
@@ -549,11 +564,15 @@ function emitSuccess(parsed, dependencies, plan) {
 }
 
 export async function managedInstall(parsed, dependencies) {
-  const plan = buildPlan(parsed, dependencies);
-  for (const target of plan.targets) {
-    if (plan.operation === 'install') installTarget(target, plan.source, dependencies.fs);
-    else uninstallTarget(target, dependencies.fs);
+  try {
+    const plan = buildPlan(parsed, dependencies);
+    for (const target of plan.targets) {
+      if (plan.operation === 'install') installTarget(target, plan.source, dependencies.fs);
+      else uninstallTarget(target, dependencies.fs);
+    }
+    emitSuccess(parsed, dependencies, plan);
+    return EXIT_CODES.SUCCESS;
+  } catch (error) {
+    throw installationError(error);
   }
-  emitSuccess(parsed, dependencies, plan);
-  return EXIT_CODES.SUCCESS;
 }

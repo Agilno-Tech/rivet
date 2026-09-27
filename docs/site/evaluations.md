@@ -7,8 +7,8 @@ Rivet's deterministic evaluations check selected workflow mechanics. They do not
 From a development checkout with dependencies installed:
 
 ```sh
-npm run evals -- --mode=fixture
-npm run evals -- --mode=fixture --scenario=host --json > fixture-evaluation.json
+yarn run evals --mode=fixture
+yarn run evals --mode=fixture --scenario=host --json > fixture-evaluation.json
 ```
 
 Available scenarios: `intake`, `host`, `repository-adapter`, `authority`, `recovery`, and `model`.
@@ -32,8 +32,8 @@ Live mode is separate from CI's deterministic fixtures. It can call an installed
 Use the same fixed `feature` and `bugfix` scenarios with either harness:
 
 ```sh
-npm run evals -- --mode=live --scenario=feature --profile=codex --account-policy=approved-team-trial --json > codex-feature.json
-npm run evals -- --mode=live --scenario=bugfix --profile=claude --account-policy=approved-team-trial --json > claude-bugfix.json
+yarn run evals --mode=live --scenario=feature --profile=codex --account-policy=approved-team-trial --json > codex-feature.json
+yarn run evals --mode=live --scenario=bugfix --profile=claude --account-policy=approved-team-trial --json > claude-bugfix.json
 ```
 
 The account-policy label records the spending/account policy you have actually approved. It does not configure or enforce an account spending limit. Review the concrete task, model choices, destination, time/call limits, cost assurance and retained workspace before approving. There is no unattended approval flag. Standard input and error must remain connected to an interactive terminal; JSON goes to standard output, so it can be redirected to a report file.
@@ -47,8 +47,8 @@ Claude's initial built-in profile uses `sonnet` for planning and execution. Code
 The separate `text-review` scenario asks a text model to identify seeded defects. Its automatic rubric checks finding IDs, locations and response structure; it does not grade semantic correctness or demonstrate implementation execution. Bounded findings and a redacted response excerpt are retained as untrusted model output for human review. Supported profiles are `anthropic`, `openai`, `gemini`, `ollama` and `openai-compatible`.
 
 ```sh
-npm run evals -- --mode=live --scenario=text-review --profile=ollama --model=<installed-model> --cost-policy=local-compute --account-policy=approved-local-trial --json > local-review.json
-npm run evals -- --mode=live --scenario=text-review --profile=openai --model=<available-model> --credential-env=RIVET_EVAL_API_KEY --account-policy=approved-team-trial --json > api-review.json
+yarn run evals --mode=live --scenario=text-review --profile=ollama --model=<installed-model> --cost-policy=local-compute --account-policy=approved-local-trial --json > local-review.json
+yarn run evals --mode=live --scenario=text-review --profile=openai --model=<available-model> --credential-env=RIVET_EVAL_API_KEY --account-policy=approved-team-trial --json > api-review.json
 ```
 
 Credentials come from the named local environment variable, never a command-line value. `--endpoint` is available for supported explicit endpoints. Scenario/profile combinations and settings are validated; arbitrary commands, modules, fixture paths and profile files are not accepted.

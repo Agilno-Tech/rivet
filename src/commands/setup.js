@@ -51,7 +51,7 @@ function previewSteps(preview) {
   if (!preview?.proposal?.commands) return [];
   const gates = new Map((preview.proposal.qualityGates ?? [])
     .map(gate => [gate.command, gate.required ? 'required' : 'optional']));
-  return Object.entries(preview.proposal.commands).flatMap(([logicalId, command]) => {
+  const commands=Object.entries(preview.proposal.commands).flatMap(([logicalId, command]) => {
     const steps = Array.isArray(command) ? [{ cwd: '.', argv: command }] : command.steps;
     return steps.map((step, index) => {
       const prefix = Array.isArray(command)
@@ -63,13 +63,19 @@ function previewSteps(preview) {
       return `${logicalId} (${gates.get(logicalId) ?? 'not-gated'}): ${step.cwd} -> ${step.argv.join(' ')} [source: ${source}]`;
     });
   });
+  const installation=preview.proposal.dependencies;
+  if(installation) {
+    commands.push(`Dependency inputs: ${JSON.stringify(installation.inputs)}. Installation requires separate approval.`);
+    for(const step of installation.steps)commands.push(`Dependency install: ${JSON.stringify(step.cwd)} -> ${JSON.stringify(step.argv)}`);
+  }
+  return commands;
 }
 
 export async function setupCommand(parsed, dependencies) {
   const flags = parsed.flags;
   if (parsed.operands.length || parsed.subcommand !== null
-    || Object.keys(flags).some(key => !['project', 'global', 'target', 'write', 'json', 'remote', 'checks-json'].includes(key))
-    || (flags.global && (flags.project !== undefined || flags.remote !== undefined || flags['checks-json'] !== undefined))
+    || Object.keys(flags).some(key => !['project', 'global', 'target', 'write', 'json', 'remote', 'checks-json', 'dependencies-json'].includes(key))
+    || (flags.global && (flags.project !== undefined || flags.remote !== undefined || flags['checks-json'] !== undefined || flags['dependencies-json'] !== undefined))
     || (flags.target !== undefined && !['claude', 'codex', 'both'].includes(flags.target))) {
     throw new CliError('Use rivet setup [--project=<path>|--global] [--remote=<name>] [--target=claude|codex|both] [--write].', 'INVALID_INPUT');
   }
@@ -90,9 +96,10 @@ export async function setupCommand(parsed, dependencies) {
   let configuration = { status: 'not-applicable' };
   let preview, remote, remoteUpdate;
   let checks = flags['checks-json'];
+  const installFlags=flags['dependencies-json']===undefined?{}:{'dependencies-json':flags['dependencies-json']};
   if (!flags.global) {
     const retained = await existingConfiguration(root, fs);
-    if(retained && checks!==undefined) throw new CliError('Existing configuration was preserved. Review and edit commands in .rivet/project.yaml and gates in .rivet/quality.yaml to change existing checks.','INVALID_INPUT');
+    if(retained && (checks!==undefined || flags['dependencies-json']!==undefined)) throw new CliError('Existing configuration was preserved. Review and edit commands in .rivet/project.yaml and gates in .rivet/quality.yaml to change existing checks or dependency installation.','INVALID_INPUT');
     const existing = retained ? await loadProjectConfig(root, {fs}) : null;
     remote = await prepareSetupRemote(root, flags, dependencies, existing?.project.repository.remote);
     if (retained) {
@@ -105,14 +112,14 @@ export async function setupCommand(parsed, dependencies) {
     }
     else {
       preview = await captured(initialize, {
-        command: 'init', subcommand: null, operands: [], flags: { project: root, ...(checks!==undefined?{'checks-json':checks}:{}) },
+        command: 'init', subcommand: null, operands: [], flags: { project: root, ...installFlags, ...(checks!==undefined?{'checks-json':checks}:{}) },
       }, {...dependencies,setupRemoteSelection:remote});
       if(preview.code===EXIT_CODES.MISSING_CONFIGURATION && checks===undefined && flags.write && !flags.json && dependencies.terminalIsInteractive?.()) {
         const answer=await (dependencies.projectChecksPrompt??defaultIntegrationSetupPrompt)({type:'input',message:'No checks were detected. Enter this project’s verification command (for example python3 -m pytest; no shell chaining):'});
         if(answer) {
           try {checks=JSON.stringify({test:parseCheckCommand(answer)});}
           catch(error) {throw new CliError(error.message,'INVALID_INPUT');}
-          preview=await captured(initialize,{command:'init',subcommand:null,operands:[],flags:{project:root,'checks-json':checks}}, {...dependencies,setupRemoteSelection:remote});
+          preview=await captured(initialize,{command:'init',subcommand:null,operands:[],flags:{project:root,...installFlags,'checks-json':checks}}, {...dependencies,setupRemoteSelection:remote});
         }
       }
       if (preview.code !== 0) return emit(parsed, dependencies, {
@@ -166,7 +173,7 @@ export async function setupCommand(parsed, dependencies) {
   }
   if (preview) {
     const written = await captured(initialize, {
-      command: 'init', subcommand: null, operands: [], flags: { project: root, write: true, ...(checks!==undefined?{'checks-json':checks}:{}) },
+      command: 'init', subcommand: null, operands: [], flags: { project: root, write: true, ...installFlags, ...(checks!==undefined?{'checks-json':checks}:{}) },
     }, {...dependencies,setupRemoteSelection:remote});
     if (written.code !== 0) return emit(parsed, dependencies, {
       ...result, ok: false, status: 'blocked', configuration: written.value,
@@ -194,11 +201,14 @@ export async function setupCommand(parsed, dependencies) {
         'This configures instructions and policy; model authentication and active-harness execution are separate.',
       ],
     });
-  } catch {
+  } catch (error) {
+    const denied = error instanceof CliError && error.code === 'BLOCKED_AUTHORITY';
     return emit(parsed, dependencies, {
       ok: false, status: configurationWritten ? 'partial' : 'blocked', configurationWritten,
-      message: 'Harness installation stopped. Existing files and any newly written project configuration are preserved.',
-      nextSteps: ['Resolve the installation conflict, then rerun setup. Inspect rivet install --minimal --json for details.'],
-    }, EXIT_CODES.REPOSITORY_CONFLICT);
+      message: denied ? error.safeMessage : 'Harness installation stopped. Existing files and any newly written project configuration are preserved.',
+      ...(denied ? { error: { code: error.code, exitCode: error.exitCode, message: error.safeMessage } } : {}),
+      nextSteps: denied ? ['Existing project configuration is preserved. After normal permission approval, rerun the reviewed setup command.']
+        : ['Resolve the installation conflict, then rerun setup. Inspect rivet install --minimal --json for details.'],
+    }, denied ? EXIT_CODES.BLOCKED_AUTHORITY : EXIT_CODES.REPOSITORY_CONFLICT);
   }
 }

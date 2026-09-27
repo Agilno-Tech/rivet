@@ -6,6 +6,7 @@ import { assertGitClient } from '../git/client.js';
 import { createApprovalReceipt, createApprovalRegistry } from '../policy/approvals.js';
 import { createAuthorityEnvelope } from '../policy/authority.js';
 import { runCommand } from '../policy/commands.js';
+import { inspectPortableDependencies, bootstrapPortableDependencies } from './portable-dependencies.js';
 
 const LOCKFILES = Object.freeze({
   npm: ['package-lock.json', 'npm-shrinkwrap.json'],
@@ -45,11 +46,12 @@ export class WorktreeBootstrapError extends Error {
 
 function fail(reason) { throw new WorktreeBootstrapError(reason); }
 
-function inputValue(input) {
+export function bootstrapInput(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)
     || ![Object.prototype, null].includes(Object.getPrototypeOf(input))) fail('invalid-input');
   const keys = Reflect.ownKeys(input);
-  const expected = ['projectRoot', 'worktreePath', 'expectedCommit', 'expectedBranch', 'manager'];
+  const portable = Object.hasOwn(input, 'dependencies');
+  const expected = ['projectRoot', 'worktreePath', 'expectedCommit', 'expectedBranch', portable ? 'dependencies' : 'manager'];
   if (keys.length !== expected.length || keys.some(key => typeof key !== 'string' || !expected.includes(key))) fail('invalid-input');
   const value = Object.create(null);
   for (const key of keys) {
@@ -61,7 +63,7 @@ function inputValue(input) {
     || resolve(path) !== path || /[\u0000\r\n]/.test(path))
     || value.projectRoot === value.worktreePath
     || typeof value.expectedBranch !== 'string' || !value.expectedBranch || /[\u0000\r\n]/.test(value.expectedBranch)
-    || !SHA.test(value.expectedCommit) || !Object.hasOwn(LOCKFILES, value.manager)) fail('invalid-input');
+    || !SHA.test(value.expectedCommit) || (!portable && !Object.hasOwn(LOCKFILES, value.manager))) fail('invalid-input');
   return Object.freeze(value);
 }
 
@@ -80,7 +82,7 @@ async function safeFile(path) {
   }
 }
 
-async function checkout(value, gitClient) {
+export async function verifyBootstrapCheckout(value, gitClient) {
   let source;
   let isolated;
   try {
@@ -99,10 +101,11 @@ async function checkout(value, gitClient) {
 }
 
 export async function inspectWorktreeDependencies(input, options = {}) {
-  const value = inputValue(input);
+  const value = bootstrapInput(input);
+  if (Object.hasOwn(value, 'dependencies')) return inspectPortableDependencies(value, options);
   const gitClient = options.gitClient;
   try { assertGitClient(gitClient); } catch { fail('invalid-input'); }
-  await checkout(value, gitClient);
+  await verifyBootstrapCheckout(value, gitClient);
   if (!(await safeFile(join(value.worktreePath, 'package.json')))) fail('missing-manifest');
   const found = [];
   for (const [manager, names] of Object.entries(LOCKFILES)) {
@@ -123,6 +126,8 @@ export async function inspectWorktreeDependencies(input, options = {}) {
 }
 
 export async function bootstrapWorktreeDependencies(input, options = {}) {
+  const value = bootstrapInput(input);
+  if (Object.hasOwn(value, 'dependencies')) return bootstrapPortableDependencies(value, options);
   const plan = await inspectWorktreeDependencies(input, options);
   if (typeof options.resolveCommandExecutable !== 'function' || typeof options.confirm !== 'function') fail('invalid-input');
   const executable = await options.resolveCommandExecutable(plan.manager);

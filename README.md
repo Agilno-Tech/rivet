@@ -6,10 +6,10 @@ Rivet is a **standalone development alpha** with its own CLI, configuration, sta
 
 ## Connect a project
 
-With Node.js 22 or 24, npm and Git installed, install the alpha CLI, then run setup from your project:
+With Node.js 22 or 24, Yarn Classic 1.22 and Git installed, install the alpha CLI, then run setup from your project:
 
 ```sh
-npm install --global --install-links github:FraneAgilno/rivet#main
+yarn global add "https://github.com/FraneAgilno/rivet.git#main"
 rivet setup
 ```
 
@@ -28,16 +28,18 @@ Rivet discovers the project, shows the plan for approval, and manages internal r
 
 ## Contributor checkout
 
-Use Node.js 22 or 24 and Git. From this source checkout:
+Use Node.js 22 or 24, Yarn Classic 1.22 and Git. From this source checkout:
 
 ```sh
-npm ci
-npm run build
+yarn install --ignore-scripts --no-lockfile
+yarn run build
 node bin/cli.js --help
 node bin/cli.js models list
-npm run docs:build
-npm run docs:preview
+yarn run docs:build
+yarn run docs:preview
 ```
+
+This local Yarn installation leaves the existing lockfile unchanged; it does not reproduce the exact locked CI dependency tree. See [contributor guidance](https://franeagilno.github.io/rivet/contributing.html).
 
 No public package has been published. The package namespace is provisional, publication is disabled, and the license is awaiting owner selection.
 

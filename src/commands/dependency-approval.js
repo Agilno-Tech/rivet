@@ -5,6 +5,14 @@ function visible(value) {
 
 export function confirmIsolatedDependencyInstall(dependencies, signal) {
   return plan => {
+    if (plan.kind === 'portable') {
+      dependencies.output.log(`Prepare project dependencies in ${visible(plan.worktreePath)}?`);
+      dependencies.output.log(`Approved checkout: ${visible(plan.expectedBranch)} at ${visible(plan.expectedCommit)}`);
+      for (const input of plan.inputs) dependencies.output.log(`Input: ${visible(input.path)} sha256=${input.sha256}`);
+      for (const step of plan.steps) dependencies.output.log(`Command in ${visible(step.cwd)}: ${JSON.stringify(step.argv)}`);
+      dependencies.output.log('These exact project commands may execute dependency code. Approval is not a filesystem sandbox.');
+      return dependencies.confirmDependencyInstall(plan, { signal });
+    }
     dependencies.output.log(`Install locked dependencies in ${visible(plan.worktreePath)}?`);
     dependencies.output.log(`Command: ${visible(plan.executable)} ${plan.args.map(visible).join(' ')}`);
     dependencies.output.log('Package installation may run scripts supplied by the project or its dependencies.');

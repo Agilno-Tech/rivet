@@ -1,7 +1,7 @@
 import * as filesystem from 'node:fs';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
-import { compileQualitySteps } from './commands.js';
+import { commandToolKey, compileProjectDependencies, compileQualitySteps } from './commands.js';
 
 const MAX_MANIFEST_BYTES = 256 * 1024;
 
@@ -101,6 +101,57 @@ function frozen(value) {
   return value;
 }
 
+function localExecutableStatus(root, cwd, runner, fs) {
+  if (!runner.startsWith('./')) return 'external';
+  let current = root;
+  const parts = [...(cwd === '.' ? [] : cwd.split('/')), ...runner.slice(2).split('/')];
+  try {
+    for (const part of parts.slice(0, -1)) {
+      current = join(current, part);
+      const metadata = fs.lstatSync(current, { throwIfNoEntry: false });
+      if (!metadata) return 'missing';
+      if (!metadata.isDirectory() || metadata.isSymbolicLink() || fs.realpathSync(current) !== current) return 'unsafe';
+    }
+    return fs.lstatSync(join(current, parts.at(-1)), { throwIfNoEntry: false }) ? 'exists' : 'missing';
+  } catch { return 'unsafe'; }
+}
+
+function providedExecutable(dependencies, cwd, runner) {
+  return runner.startsWith('./') && dependencies?.provides.includes(`./${cwd === '.' ? '' : `${cwd}/`}${runner.slice(2)}`);
+}
+
+function dependencyReadiness(root, rootSafe, dependencies, tools, fs) {
+  if (!dependencies) return undefined;
+  const inputs = dependencies.inputs.map(path => {
+    let status = 'unsafe-input';
+    try {
+      const directory = directoryFor(root, dirname(path), fs);
+      const file = join(root, path);
+      const metadata = fs.lstatSync(file, { throwIfNoEntry: false });
+      if (!metadata) status = 'missing-input';
+      else if (rootSafe && directory.status === 'ready' && metadata.isFile() && !metadata.isSymbolicLink()
+        && metadata.nlink === 1 && metadata.size <= 4 * 1024 * 1024 && fs.realpathSync(file) === file
+        && sameIdentity(metadata, fs.statSync(file)) && directoryIdentityStatus(directory, fs) === 'ready') status = 'ready';
+    } catch {}
+    return { path, status };
+  });
+  let precedingStep = false;
+  const steps = dependencies.steps.map(step => {
+    let status = rootSafe ? directoryFor(root, step.cwd, fs).status : 'unsafe-directory';
+    if (status === 'ready') {
+      if (tools[commandToolKey(step.argv[0], step.cwd)]?.runtimeResolved === true) status = 'ready';
+      else if (precedingStep && providedExecutable(dependencies, step.cwd, step.argv[0])
+        && localExecutableStatus(root, step.cwd, step.argv[0], fs) === 'missing') status = 'preparation-required';
+      else status = 'tool-unavailable';
+    }
+    if (status === 'ready') precedingStep = true;
+    return { ...step, status, available: status === 'ready' };
+  });
+  const preparationReady = rootSafe && inputs.every(input => input.status === 'ready')
+    && steps.every(step => ['ready', 'preparation-required'].includes(step.status));
+  return { preparationReady, inputs, steps };
+}
+
 export function inspectCommandReadiness(projectRoot, config, options = {}) {
   const fs = options.fs ?? filesystem;
   const tools = options.tools ?? {};
@@ -111,13 +162,15 @@ export function inspectCommandReadiness(projectRoot, config, options = {}) {
   const rootSafe = rootMetadata?.isDirectory() && !rootMetadata.isSymbolicLink()
     && sameIdentity(rootMetadata, fs.statSync(root));
   const expectedManager = config.project.stack.packageManager;
+  const dependencies = compileProjectDependencies(config.project);
+  const dependencyStatus = dependencyReadiness(root, rootSafe, dependencies, tools, fs);
   const steps = compileQualitySteps(config).map(step => {
     const direct = step.execution === 'argv';
     const manager = direct ? step.argv[0] : runnerManager(step.argv[0]);
     let status = 'ready';
     if (!rootSafe) status = 'unsafe-directory';
     else if (config.project.schemaVersion === 2 && manager !== expectedManager) status = 'manager-mismatch';
-    else if (direct ? tools[manager]?.runtimeResolved !== true
+    else if (direct ? tools[commandToolKey(manager, step.cwd)]?.runtimeResolved !== true
       : tools[manager]?.present !== true || tools[manager]?.supported !== true
       || tools[manager]?.runtimeResolved === false) status = 'tool-unavailable';
     else {
@@ -136,6 +189,10 @@ export function inspectCommandReadiness(projectRoot, config, options = {}) {
         }
       }
     }
+    if (direct && status === 'tool-unavailable' && dependencyStatus?.preparationReady
+      && directoryFor(root, step.cwd, fs).status === 'ready'
+      && providedExecutable(dependencies, step.cwd, manager)
+      && localExecutableStatus(root, step.cwd, manager, fs) === 'missing') status = 'preparation-required';
     return {
       id: step.id,
       logicalId: step.logicalId,
@@ -151,6 +208,9 @@ export function inspectCommandReadiness(projectRoot, config, options = {}) {
   return frozen({
     ready: steps.filter(step => step.required).every(step => step.status === 'ready'),
     allReady: steps.every(step => step.status === 'ready'),
+    preparationReady: steps.filter(step => step.required).every(step => ['ready', 'preparation-required'].includes(step.status))
+      && (!dependencyStatus || dependencyStatus.preparationReady),
+    ...(dependencyStatus ? { dependencies: dependencyStatus } : {}),
     steps,
   });
 }
