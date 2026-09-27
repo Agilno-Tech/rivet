@@ -9,7 +9,7 @@
     "schemaVersion": { "type": "integer", "const": 1 },
     "providerRefs": { "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
     "completionProfileRefs": { "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
-    "commandGates": { "type": "array", "minItems": 2, "maxItems": 32, "items": { "$ref": "#/$defs/commandGate" } },
+    "commandGates": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "$ref": "#/$defs/commandGate" } },
     "expectations": {
       "type": "object",
       "additionalProperties": false,
@@ -42,7 +42,7 @@
       "required": ["id", "command", "required"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
-        "command": { "enum": ["build", "test", "lint", "typecheck", "dev"] },
+        "command": { "enum": ["build", "test", "lint", "typecheck", "dev", "check"] },
         "required": { "type": "boolean" }
       }
     }

@@ -115,3 +115,7 @@ node bin/cli.js --help
 ```
 
 Use `--json` with setup and minimal install/uninstall for machine-readable results. If setup reports partial completion, preserve the written configuration, resolve the installation conflict, and rerun. Configuration and harness installation are separate transactions.
+
+## Application language
+
+Node.js is required to run Rivet itself. The application repository does not need Node, npm scripts or a `package.json`. See [Python, Django and other project languages](./getting-started.md#python-django-and-other-project-languages) for language-neutral setup and custom verification commands.

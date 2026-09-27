@@ -100,6 +100,9 @@ async function dependencyCommand(project, record, dependencies) {
     fail('This task has no eligible isolated checkout yet. Continue the task, then retry dependency setup.', 'REPOSITORY_CONFLICT');
   }
   const config = await loadProjectConfig(project.root);
+  if(!['npm','pnpm','yarn','bun'].includes(config.project.stack.packageManager)) {
+    fail('Automatic dependency installation currently supports Node package managers. Prepare your project environment in the isolated checkout shown by rivet task status (for example activate its Python environment), then continue the task. No npm installation was attempted.','INVALID_INPUT');
+  }
   let gitClient;
   try { gitClient = await createGitClient({ gitExecutable: await dependencies.resolveCommandExecutable('git') }); }
   catch { fail('A supported Git executable is required for dependency setup.', 'PROVIDER_UNAVAILABLE'); }

@@ -19,6 +19,7 @@ import {
   readStrictBoundedFile,
 } from '../discovery/project.js';
 import { discoverTools } from '../discovery/tools.js';
+import {ProjectChecksRequiredError,parseProjectChecks} from '../discovery/portable.js';
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const FILES = Object.freeze(['project.yaml', 'providers.yaml', 'orchestration.yaml', 'quality.yaml']);
@@ -155,8 +156,11 @@ function proposalFromTemplates(discovery, git, packageRoot, fs, remote) {
   config.project.repository.defaultBranch = git.defaultBranch ?? 'main';
   if (remote) config.project.repository.remote = remote;
   config.project.commands = discovery.proposal.commands;
+  if (config.project.schemaVersion === 3) {
+    config.quality.commandGates = Object.keys(config.project.commands).map(command=>({id:command,command,required:['test','check','build'].includes(command)}));
+  }
   for (const command of ['lint', 'typecheck']) {
-    if (config.project.commands[command]) {
+    if (config.project.schemaVersion !== 3 && config.project.commands[command]) {
       config.quality.commandGates.push({ id: command, command, required: false });
     }
   }
@@ -617,9 +621,10 @@ export async function init(parsed, dependencies = {}) {
   const json = parsed.flags.json === true;
   const projectRoot = resolve(parsed.flags.project ?? dependencies.cwd?.() ?? process.cwd());
   try {
-    const discovery = await (dependencies.projectDiscovery ?? discoverProject)(projectRoot, { fs });
+    const discovery = await (dependencies.projectDiscovery ?? discoverProject)(projectRoot, { fs, checks: parseProjectChecks(parsed.flags['checks-json']) });
     const git = await (dependencies.gitDiscovery ?? discoverGit)(projectRoot, { runner: dependencies.runner });
     const tools = await (dependencies.toolDiscovery ?? discoverTools)({
+      ...(discovery.proposal.schemaVersion===3?{runtimeOnly:true}:{}),
       packageManager: discovery.proposal.stack.packageManager,
       playwright: discovery.features.playwright,
       storybook: discovery.features.storybook,
@@ -720,6 +725,7 @@ export async function init(parsed, dependencies = {}) {
     if (remote.selected) result.message += `\nSelected repository remote: ${remote.selected.name} -> ${remote.selected.url}`;
     return emit(output, json, result, EXIT_CODES.SUCCESS);
   } catch (error) {
+    if (error instanceof ProjectChecksRequiredError) return failure(output,json,'MISSING_CONFIGURATION',EXIT_CODES.MISSING_CONFIGURATION,error.message);
     return failure(output, json, 'REPOSITORY_CONFLICT', EXIT_CODES.REPOSITORY_CONFLICT,
       error instanceof CliError ? error.message : 'Project configuration could not be proposed or written safely.',
       error instanceof InitTransactionError ? { recovery: error.recovery }

@@ -6,6 +6,8 @@ Use Node.js 22 or 24, npm and Git on macOS or Linux. This is a development alpha
 npm install --global --install-links github:FraneAgilno/rivet#main
 ```
 
+Node.js runs the Rivet CLI. Your application can use Python/Django, Go, Rust, Node.js or another language; it does not need a `package.json`.
+
 Confirm `rivet --help` works before continuing. Keep `--install-links` in the GitHub installation command; see [installation details](./installation.md).
 
 For a project-only installation without a global CLI, use the [pinned project runtime](./installation.md#install-for-one-project-without-a-global-cli). Run the commands below through `node .rivet.cjs` instead of `rivet` when using that installation.
@@ -34,9 +36,22 @@ Setup inspects the root package and bounded immediate child package directories.
 
 When no `build` or `test` script exists in the supported root/immediate-child scope, setup still connects the project and reports an unresolved warning. The conservative placeholder remains non-executable until that exact package script exists: `doctor` and `preflight` fail readiness rather than treating it as available. Setup never runs scripts or installs dependencies.
 
-This milestone does not interpret workspace globs or dependency graphs, search nested package trees, run checks in parallel, or accept arbitrary executables and environment overrides. Add root scripts when the repository needs ordering beyond the bounded immediate-child model.
+For Node projects, discovery remains bounded to the root and immediate child packages; it does not interpret workspace dependency graphs.
 
-Other project types can install only the harness instructions using `install --minimal`; automatic setup for them is still planned.
+### Python, Django and other project languages
+
+Django projects with `manage.py` get proposed system and test checks. Python metadata mentioning pytest, Go modules and Cargo projects also have conventional checks proposed for review. Setup does not execute them or install application dependencies.
+
+When Rivet cannot determine a check, interactive `rivet setup --write` asks for the project’s verification command. You can enter a command such as `python3 -m pytest`. For automation, an existing coding agent, or a custom toolchain, provide exact argument arrays:
+
+```sh
+rivet setup --checks-json='{"test":["python3","-m","pytest"]}'
+rivet setup --write --checks-json='{"test":["python3","-m","pytest"]}'
+```
+
+These projects use schema version 3. Checks can use any configured executable on PATH, including project-specific tools. At least one required `test` or `check` is necessary; a build command is optional. Commands run directly with exact arguments, without shell expansion or command chaining. Review them as executable project policy. Existing Node configurations retain their original rules.
+
+Activate and prepare the project’s normal dependency environment before using Rivet. Automatic locked dependency installation currently supports Node package managers; Rivet does not attempt npm installation in a Python project. See [configuration](./runtime-reference.md) and the output of `rivet doctor` for the exact configured commands.
 
 ## Check the connection
 
@@ -72,7 +87,7 @@ Direct terminal adapters check required CLI options instead of enforcing a versi
 
 For Node CLI launchers with the exact `#!/usr/bin/env node` shebang, Rivet discovers the canonical native Node executable already running Rivet. No interpreter export is needed for that common installation. Other script entrypoints still require an explicit compatible `RIVET_CLAUDE_INTERPRETER` or `RIVET_CODEX_INTERPRETER`; an explicit override is never silently replaced. Ctrl-C and SIGTERM stop Rivet's local child process before the command exits; use `rivet task status` to inspect an interrupted run before resuming it.
 
-Run this from the configured project root or any folder inside it. Rivet finds the Git project, discovers a supported installed harness, plans the task, prints the full plan and required checks, and asks for approval in your terminal before starting. If both supported harnesses are installed, select one with `--harness=claude` or `--harness=codex`. Use `--project=<path>` only when you are outside the project or need an explicit root. The command does not treat a ticket ID alone as a verified request; describe the work or use the advanced ticket intake.
+Run this from the configured project root or any folder inside it. Rivet finds the Git project, discovers a supported installed harness, plans the task, prints the full plan and required checks, and asks for approval in your terminal before starting. If both supported harnesses are installed, Rivet offers a choice in the same terminal flow. Pass `--harness=claude` or `--harness=codex` to choose directly. Use `--project=<path>` only when you are outside the project or need an explicit root. The command does not treat a ticket ID alone as a verified request; describe the work or use the advanced ticket intake.
 
 Check progress and evidence without copying an internal run ID:
 
@@ -82,7 +97,7 @@ rivet task resume
 rivet task deps
 ```
 
-`task status` shows the next action, integration checkout, changed paths, and executed checks when available. `task resume` continues an approved or blocked spawned run after its cause is corrected. It will not duplicate a run still marked running. If several active tasks exist in the same project, Rivet lists them and asks you to select one with `--run=<id>`; it never guesses. A failed check exits nonzero and leaves its report available in `task status`. Spawned Workers ask separately before installing locked dependencies in their own checkout. For a host Worker that needs dependencies before editing, or for a clean accepted integration checkout missing dependencies during verification, run `rivet task deps` from anywhere inside the project. Rivet shows the exact frozen package-manager command and asks before running it there. After integration setup, use `rivet task resume` for a spawned run or retry `work verify` for a host run at the same commit. Source changes require a new reviewed proposal.
+`task status` shows the next action, integration checkout, changed paths, and executed checks when available. `task resume` continues an approved or blocked spawned run after its cause is corrected. It will not duplicate a run still marked running. If several active tasks exist in the same project, Rivet lists them and asks you to select one with `--run=<id>`; it never guesses. A failed check exits nonzero and leaves its report available in `task status`. For Node projects, spawned Workers ask separately before installing locked dependencies in their own checkout. For a Node host Worker that needs dependencies before editing, or for a clean accepted Node integration checkout missing dependencies during verification, run `rivet task deps` from anywhere inside the project. Rivet shows the exact frozen package-manager command and asks before running it there. After integration setup, use `rivet task resume` for a spawned run or retry `work verify` for a host run at the same commit. Source changes require a new reviewed proposal. For non-Node projects, prepare the project’s dependency environment explicitly and activate it before starting or resuming Rivet; `task deps` explains this limitation and does not try npm.
 
 The Worker and integration checkouts are isolated Git worktrees. Dependencies from your original checkout, such as `node_modules`, are not copied into them. Add `node_modules/` to your project's `.gitignore` so the isolated checkout remains clean after installation. Rivet's configured checks do not install packages. The result stops at `awaiting-final-approval` for your separate review; it is not a delivery or merge decision.
 

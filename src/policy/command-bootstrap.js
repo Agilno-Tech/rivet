@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { lstat, realpath } from 'node:fs/promises';
-import { isAbsolute, relative } from 'node:path';
+import { dirname, isAbsolute, relative } from 'node:path';
 
 const VERSION = 1;
 const STARTUP_TIMEOUT_MS = 1_000;
@@ -40,7 +40,7 @@ function validIdentity(value) {
 }
 
 function captureInit(message) {
-  if (!exactObject(message, ['version', 'type', 'nonce', 'worktree', 'cwd', 'executable', 'args', 'environment', 'identities'])) return null;
+  if (!exactObject(message, ['version', 'type', 'nonce', 'worktree', 'cwd', 'executable', 'args', 'environment', 'identities', ...(message?.execution === 'argv' ? ['execution', 'invocation'] : [])])) return null;
   if (message.version !== VERSION || message.type !== 'init' || !NONCE.test(message.nonce)) return null;
   if (![message.worktree, message.cwd, message.executable].every(value => (
     typeof value === 'string' && value.length > 0 && value.length <= 1_024 && isAbsolute(value) && !value.includes('\0')
@@ -48,8 +48,22 @@ function captureInit(message) {
   if (!boundedStrings(message.args, ACTION_ARG_LIMIT, 4_096) || !validEnvironment(message.environment)) return null;
   if (!exactObject(message.identities, ['worktree', 'cwd', 'executable'])) return null;
   if (!Object.values(message.identities).every(validIdentity)) return null;
+  if (message.execution === 'argv') {
+    const invocation = message.invocation;
+    if (!exactObject(invocation, ['target', 'parent', 'identity', 'parentIdentity'])
+      || ![invocation.target, invocation.parent].every(path => typeof path === 'string'
+        && path.length <= 1_024 && isAbsolute(path) && !/[\u0000\r\n]/.test(path))
+      || dirname(message.executable) !== invocation.parent
+      || !validIdentity(invocation.identity) || !validIdentity(invocation.parentIdentity)) return null;
+  }
   return Object.freeze({
     version: VERSION,
+    execution: message.execution,
+    ...(message.execution === 'argv' ? { invocation: Object.freeze({
+      target: message.invocation.target, parent: message.invocation.parent,
+      identity: Object.freeze({ ...message.invocation.identity }),
+      parentIdentity: Object.freeze({ ...message.invocation.parentIdentity }),
+    }) } : {}),
     nonce: message.nonce,
     worktree: message.worktree,
     cwd: message.cwd,
@@ -77,14 +91,32 @@ async function verifyAnchor(config) {
     lstat(config.executable, { bigint: true }),
     realpath(config.executable),
   ]);
+  let executableValid;
+  if (config.execution === 'argv') {
+    const invocation = config.invocation;
+    const [targetMetadata, targetReal, parentMetadata, parentReal] = await Promise.all([
+      lstat(invocation.target, { bigint: true }), realpath(invocation.target),
+      lstat(invocation.parent, { bigint: true }), realpath(invocation.parent),
+    ]);
+    executableValid = (executableMetadata.isFile() || executableMetadata.isSymbolicLink())
+      && executableReal === invocation.target && targetReal === invocation.target
+      && targetMetadata.isFile() && !targetMetadata.isSymbolicLink() && (targetMetadata.mode & 0o111n) !== 0n
+      && parentMetadata.isDirectory() && !parentMetadata.isSymbolicLink() && parentReal === invocation.parent
+      && sameIdentity(executableMetadata, invocation.identity)
+      && sameIdentity(targetMetadata, config.identities.executable)
+      && sameIdentity(parentMetadata, invocation.parentIdentity);
+  } else {
+    executableValid = executableMetadata.isFile() && !executableMetadata.isSymbolicLink()
+      && executableMetadata.nlink === 1n && executableReal === config.executable
+      && sameIdentity(executableMetadata, config.identities.executable);
+  }
   return cwdMetadata.isDirectory() && !cwdMetadata.isSymbolicLink()
     && worktreeMetadata.isDirectory() && !worktreeMetadata.isSymbolicLink()
-    && executableMetadata.isFile() && !executableMetadata.isSymbolicLink() && executableMetadata.nlink === 1n
-    && cwdReal === config.cwd && worktreeReal === config.worktree && executableReal === config.executable
+    && cwdReal === config.cwd && worktreeReal === config.worktree
     && within(worktreeReal, cwdReal)
     && sameIdentity(cwdMetadata, config.identities.cwd)
     && sameIdentity(worktreeMetadata, config.identities.worktree)
-    && sameIdentity(executableMetadata, config.identities.executable);
+    && executableValid;
 }
 
 function startBootstrap() {

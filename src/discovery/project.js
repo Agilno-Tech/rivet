@@ -2,6 +2,7 @@ import * as filesystem from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { isExecutionCompatibleCwd } from '../config/commands.js';
+import {discoverPortableProject} from './portable.js';
 
 const MAX_DISCOVERY_FILE_BYTES = 256 * 1024;
 const MAX_DISCOVERY_AGGREGATE_BYTES = 2 * 1024 * 1024;
@@ -251,7 +252,10 @@ export async function discoverProject(projectRoot, options = {}) {
   if (!sameIdentity(rootMetadata, fs.statSync(root))) {
     throw new Error('Project root changed identity during validation');
   }
-  const manifestFile = safeFile(root, 'package.json', fs, true);
+  const manifestFile = safeFile(root, 'package.json', fs, false);
+  if (!manifestFile || options.checks !== undefined) return discoverPortableProject(root, {
+    fs, inspect: inspectBoundedFile, read: readStrictBoundedFile, checks: options.checks,
+  });
   const files = new Map([['package.json', manifestFile]]);
   for (const name of OPTIONAL_FILES) {
     const file = safeFile(root, name, fs);

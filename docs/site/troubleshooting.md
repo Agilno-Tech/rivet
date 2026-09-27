@@ -22,6 +22,28 @@ Run `rivet models list`. `planned` means the descriptor/profile contract exists 
 
 Rivet uses `.rivet` and `RIVET_*`. Preview a fresh configuration with `rivet init --project=<path>` and review it before writing.
 
+## A Python or other non-Node project asks for package.json
+
+Node.js runs the Rivet CLI, but your application does not need a Node manifest. Older installations required `package.json` during discovery and could report its absence as `REPOSITORY_CONFLICT`. Update Rivet using the [installation instructions](./installation.md), then preview `rivet setup` in the project root. Do not add a dummy manifest as a workaround.
+
+Django, pytest metadata, Go modules, and Cargo projects have conventional checks proposed for review. If no commands can be detected, interactive `rivet setup --write` asks for a verification command. A harness or automated setup can pass explicit arguments:
+
+```sh
+rivet setup --checks-json='{"test":["python3","-m","pytest"]}'
+rivet setup --write --checks-json='{"test":["python3","-m","pytest"]}'
+rivet doctor
+```
+
+Use the actual command your project runs. At least one required `test` or `check` is needed; a build command is optional. See [schema 3 checks](./runtime-reference.md#checks-for-any-project-language). Setup preserves existing valid policy, so review its project and quality files if they still contain unsuitable commands.
+
+## A configured check cannot find its executable or dependencies
+
+Read `rivet doctor` for the exact failing command and working directory. Make that executable available on the `PATH` used to launch Rivet. Prepare and activate the project's normal dependency environment, such as its Python virtual environment. Checks execute in isolated checkouts, so checkout-specific dependencies must be prepared at the Worker or integration path shown by task status. Rivet does not copy dependencies from the original checkout or install packages through verification commands. `rivet task deps` supports locked Node dependencies only; use the project's documented dependency procedure for other toolchains.
+
+## Both Claude and Codex are installed
+
+Interactive `rivet run "task"` offers a choice between compatible installed adapters. Use `--harness=claude` or `--harness=codex` to choose directly. Older versions stopped with a choice error instead of prompting. A runtime configuration failure before planning does not establish a Claude or Codex failure; inspect the reported Git or project-check diagnostic first.
+
 ## Tests cannot open a local server
 
 The status-server tests require loopback networking. A sandbox that prohibits listeners can fail these checks independently of application behavior. Run them in an environment that permits loopback, and record that environment with the result.

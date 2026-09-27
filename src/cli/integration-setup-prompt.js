@@ -13,7 +13,7 @@ export async function defaultIntegrationSetupPrompt(question) {
     } else if (question.type === 'confirm') prompt += ' [y/N] ';
     else prompt += question.defaultValue ? ` [${question.defaultValue}] (q to cancel): ` : ' (blank to cancel): ';
     const answer = String(await Promise.race([
-      readline.question(prompt),
+      readline.question(prompt, { signal: question.signal }),
       new Promise(resolve => { timer = setTimeout(() => resolve('q'), 120000); }),
     ])).trim();
     if (answer.toLowerCase() === 'q') return null;

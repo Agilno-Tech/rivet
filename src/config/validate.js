@@ -256,7 +256,9 @@ function validateConfigSemantics(config) {
     if (error instanceof CommandConfigurationError) fail(error.path, error.reason);
     fail('/quality/commandGates', 'command-expansion');
   }
-  for (const mandatoryCommand of ['build', 'test']) {
+  if (config.project.schemaVersion === 3 && !config.quality.commandGates.some(gate =>
+    gate.required && ['test', 'check'].includes(gate.command))) fail('/quality/commandGates', 'mandatory-command-gate');
+  for (const mandatoryCommand of config.project.schemaVersion === 3 ? [] : ['build', 'test']) {
     if (![...gateIds].some(id => config.quality.commandGates.some(gate => gate.id === id && gate.command === mandatoryCommand && gate.required))) {
       fail('/quality/commandGates', 'mandatory-command-gate');
     }

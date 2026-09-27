@@ -112,18 +112,20 @@ export function inspectCommandReadiness(projectRoot, config, options = {}) {
     && sameIdentity(rootMetadata, fs.statSync(root));
   const expectedManager = config.project.stack.packageManager;
   const steps = compileQualitySteps(config).map(step => {
-    const manager = runnerManager(step.argv[0]);
+    const direct = step.execution === 'argv';
+    const manager = direct ? step.argv[0] : runnerManager(step.argv[0]);
     let status = 'ready';
     if (!rootSafe) status = 'unsafe-directory';
     else if (config.project.schemaVersion === 2 && manager !== expectedManager) status = 'manager-mismatch';
-    else if (tools[manager]?.present !== true || tools[manager]?.supported !== true
+    else if (direct ? tools[manager]?.runtimeResolved !== true
+      : tools[manager]?.present !== true || tools[manager]?.supported !== true
       || tools[manager]?.runtimeResolved === false) status = 'tool-unavailable';
     else {
       const directory = directoryFor(root, step.cwd, fs);
       status = directory.status;
       if (status === 'ready') {
         status = directoryIdentityStatus(directory, fs);
-        const manifest = status === 'ready' ? readManifest(directory, fs) : null;
+        const manifest = status === 'ready' && !direct ? readManifest(directory, fs) : null;
         if (manifest) status = manifest.status;
         const finalDirectoryStatus = directoryIdentityStatus(directory, fs);
         if (finalDirectoryStatus !== 'ready') status = finalDirectoryStatus;
@@ -139,7 +141,7 @@ export function inspectCommandReadiness(projectRoot, config, options = {}) {
       logicalId: step.logicalId,
       cwd: step.cwd,
       argv: step.argv,
-      script: step.argv[2],
+      script: direct ? null : step.argv[2],
       manager,
       required: step.required,
       status,

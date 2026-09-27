@@ -3,6 +3,7 @@ import { withTerminalInterruption } from '../cli/interrupt.js';
 import { CliError, EXIT_CODES, observeOutputErrors } from '../cli/output.js';
 import { invokeFeature } from './feature.js';
 import { confirmIsolatedDependencyInstall } from './dependency-approval.js';
+import {defaultIntegrationSetupPrompt} from '../cli/integration-setup-prompt.js';
 
 const KINDS = new Set(['claude', 'codex']);
 
@@ -126,7 +127,13 @@ async function runInteractive(parsed, dependencies, signal) {
     const scripts = discovered.filter(item => item.reason === 'interpreter-required').map(item => `RIVET_${item.kind.toUpperCase()}_INTERPRETER`);
     const interpreterHelp = scripts.length ? ` Script CLIs need a canonical native interpreter path in ${scripts.join(' or ')}.` : '';
     fail(`No compatible CLI was found. ${discovered.map(item => `${item.kind}: ${visible(item.reason)}`).join('; ')}.${interpreterHelp} Check claude --help or codex exec --help, or use the Rivet skill in your coding harness.`, 'PROVIDER_UNAVAILABLE');
-  } else fail('Both Claude and Codex are available. Choose --harness=claude or --harness=codex.');
+  } else {
+    const kind=await (dependencies.harnessChoicePrompt??defaultIntegrationSetupPrompt)({type:'select',signal,message:'Choose an installed harness for this task:',choices:eligible.map(item=>({value:item.kind,label:`${item.kind} (${visible(item.version)})`}))});
+    if(kind===null || kind===undefined) {dependencies.output.log('Harness selection cancelled. No model was called.');return EXIT_CODES.SUCCESS;}
+    choice=eligible.find(item=>item.kind===kind);
+    if(!choice)fail('Select an available harness, or use --harness=claude or --harness=codex.');
+  }
+  signal.throwIfAborted();
   let selected;
   try { selected = await harnesses.select(choice.kind, project.root, { signal }); }
   catch { fail(`The ${choice.kind} adapter changed during discovery. Check the installed CLI and retry.`, 'PROVIDER_UNAVAILABLE'); }

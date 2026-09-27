@@ -115,28 +115,27 @@ export async function discoverTools(context = {}, options = {}) {
     : packageManager;
   const [node, manager, git] = await Promise.all([
     inspect('node', ['--version'], runner, cwd),
-    inspect(managerExecutable, ['--version'], runner, cwd),
+    context.runtimeOnly === true ? Promise.resolve(null) : inspect(managerExecutable, ['--version'], runner, cwd),
     inspect('git', ['--version'], runner, cwd),
   ]);
   const nodeMajor = node.version ? Number.parseInt(node.version, 10) : null;
   node.supported = node.present && nodeMajor >= SUPPORTED_NODE_MAJOR;
   node.compatible = node.supported;
   node.recommended = node.present && nodeMajor >= RECOMMENDED_NODE_MAJOR;
-  manager.supported = manager.present;
-  manager.compatible = manager.supported;
+  if(manager) {manager.supported = manager.present;manager.compatible = manager.supported;}
   git.supported = git.present;
   git.compatible = git.supported;
   return {
     node,
-    [packageManager]: manager,
+    ...(manager?{[packageManager]: manager}:{}),
     git,
     playwright: {
       relevant: context.playwright === true,
-      available: context.playwright === true && manager.present,
+      available: context.playwright === true && manager?.present === true,
     },
     storybook: {
       relevant: context.storybook === true,
-      available: context.storybook === true && manager.present,
+      available: context.storybook === true && manager?.present === true,
     },
     thresholds: {
       nodeSupportedMajor: SUPPORTED_NODE_MAJOR,

@@ -3,7 +3,7 @@ import { createNodeProviderTransport } from '../adapters/node-transport.js';
 import * as filesystem from 'node:fs';
 import { spawn as nodeSpawn } from 'node:child_process';
 import { realpath as realpathFile } from 'node:fs/promises';
-import { isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 import {
   createClaudeClient,
@@ -41,6 +41,7 @@ export class ApplicationConfigurationError extends Error {
   constructor(reason = 'configuration') {
     const messages = {
       configuration: 'Rivet runtime configuration is missing or invalid.',
+      'command-executable-unavailable': 'A configured quality command executable is unavailable. Activate the project environment, install the required tool on PATH, or correct its RIVET_<TOOL>_EXECUTABLE override, then run rivet doctor.',
       'git-unavailable': 'No usable Git executable was found. Install Git on PATH or set RIVET_GIT_EXECUTABLE to its absolute canonical executable path.',
       'git-executable-invalid': 'RIVET_GIT_EXECUTABLE must be an absolute canonical path to a Git executable. Correct this setting and retry.',
       'git-executable-unusable': 'RIVET_GIT_EXECUTABLE does not identify a usable regular Git executable. Check that the path is canonical and the file exists with execute permission, then retry.',
@@ -229,14 +230,27 @@ export function createRivetApplication(input = {}) {
     });
     fail();
   };
-  const resolveCommandExecutable = async runner => {
-    if (typeof runner !== 'string' || !/^[a-z][a-z0-9.-]{0,31}$/i.test(runner)) fail();
+  const resolveCommandExecutable = async (runner, options = {}) => {
+    if (typeof runner !== 'string' || !/^[a-z][a-z0-9._+-]{0,127}$/i.test(runner)
+      || !options || typeof options !== 'object' || Array.isArray(options)
+      || Object.keys(options).some(key => key !== 'execution')
+      || (options.execution !== undefined && options.execution !== 'argv')) fail();
+    const direct = options.execution === 'argv';
+    const resolveExecutable = async candidate => {
+      const path = executable(candidate);
+      const canonical = executable(await realpathFile(path));
+      // Interpreter and tool aliases can select an environment or invocation mode.
+      return direct ? executable(join(await realpathFile(dirname(path)), basename(path))) : canonical;
+    };
     const configuredPath = env[`RIVET_${runner.toUpperCase().replaceAll('-', '_')}_EXECUTABLE`];
-    if (configuredPath !== undefined) return executable(await realpathFile(executable(configuredPath)));
-    for (const candidate of executableCandidates(runner, env.PATH)) {
-      try { return executable(await realpathFile(candidate)); } catch {}
+    if (configuredPath !== undefined) {
+      try { return await resolveExecutable(configuredPath); }
+      catch (error) { if (direct) fail('command-executable-unavailable'); throw error; }
     }
-    fail();
+    for (const candidate of executableCandidates(runner, env.PATH)) {
+      try { return await resolveExecutable(candidate); } catch {}
+    }
+    fail(direct ? 'command-executable-unavailable' : undefined);
   };
   const executeFeature = async (request, options) => {
     executorPromise ??= gitClient().then(client => createFeatureExecutor({

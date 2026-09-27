@@ -459,10 +459,11 @@ export async function configuredFeatureGates(config, resolveCommandExecutable) {
   for (const configured of compileQualitySteps(config)) {
     gates.push(Object.freeze({
       id: configured.id,
-      executable: await resolveCommandExecutable(configured.argv[0]),
+      executable: await resolveCommandExecutable(configured.argv[0], configured.execution === 'argv' ? { execution: 'argv' } : {}),
       args: Object.freeze(configured.argv.slice(1)),
       cwd: configured.cwd,
-      packageScript: Object.freeze({ runner: configured.argv[0], script: configured.argv[2] }),
+      ...(configured.execution === 'argv' ? { execution: 'argv' }
+        : { packageScript: Object.freeze({ runner: configured.argv[0], script: configured.argv[2] }) }),
       required: configured.required,
       artifactPaths: Object.freeze([]),
       tests: Object.freeze([]),
@@ -528,6 +529,8 @@ export function createFeatureExecutor(input) {
     }
 
     async function prepareDependencies(worker, branch, expectedCommit) {
+      if (config.project.schemaVersion === 3
+        && !['npm', 'pnpm', 'yarn', 'bun'].includes(config.project.stack.packageManager)) return;
       const input = {
         projectRoot: project, worktreePath: worker.root, expectedCommit,
         expectedBranch: branch, manager: config.project.stack.packageManager,
