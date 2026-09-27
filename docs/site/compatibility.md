@@ -10,8 +10,8 @@ Rivet is an alpha. An implemented adapter, a passing fixture, and a successful t
 | Linux, Node 22 and 24 | CI tests and global tarball/Git installation lifecycle | Authenticated task and independent first-user trial |
 | Windows native | Spawned process adapters unsupported | Native platform implementation and qualification |
 | WSL | Unqualified | Separately qualified Linux installation, processes, filesystem and complete task checks |
-| GitHub source install | Earlier npm installation qualified on macOS; current instructions use Yarn Classic 1.22 | Yarn source-install qualification and independent onboarding; see [first-use evidence](./first-task-trial.md) |
-| Yarn Classic tarball install | Local macOS install with Yarn 1.22.22 into a disposable prefix; installed CLI help succeeds | Git source installation at the release commit and independent onboarding |
+| GitHub source install | Yarn Classic 1.22.22 on macOS: isolated Git install at `33f0094`, installed CLI help, non-Node setup and doctor passed | Independent onboarding and release-artifact qualification; see [first-use evidence](./first-task-trial.md) |
+| Yarn Classic tarball install | Local macOS install with Yarn 1.22.22 into a disposable prefix; installed CLI help succeeds | Independent onboarding and release-artifact qualification |
 | Project-only pinned runtime | macOS fresh-home tarball and Git-based npm-exec lifecycle without a global CLI; source and private dependency integrity checks | Public channel and independent collaborator onboarding |
 | Versioned release artifact | Release qualification pending | Downloaded artifact checksum, installation lifecycle and candidate evidence |
 
