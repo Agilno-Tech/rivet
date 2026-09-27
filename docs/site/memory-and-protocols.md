@@ -1,12 +1,6 @@
-# Memory and project protocols
+# Project protocols
 
-These are separate capabilities. Project protocols are implemented; shared memory is post-MVP.
-
-## Shared memory (post-MVP)
-
-Obsidian is the first planned memory integration. Team decisions, lessons, and handoffs live in a dedicated vault outside the application repository. Records retain project scope, provenance, and sync status. A local write must not be described as shared until the selected synchronization path confirms it.
-
-Before shared memory can be qualified, it requires a real two-collaborator test. Larger-team requirements must be assessed against the selected provider's access and sharing limits. Additional providers can implement the same memory contract.
+Project protocols let your team publish procedures that coding agents can discover and follow.
 
 ## Project-specific protocols
 
@@ -75,3 +69,7 @@ rivet protocols show database-changes --project=/path/to/source-project --expect
 ```
 
 Use the complete captured digest in place of `...`. Both expectations must be supplied together. A mismatch returns an error without emitting the replacement body. The harness receives the source location and lookup guidance; the user does not need to enter these values manually. Status remains available to inspect a run that needs replanning. The supplied lookup commands use the full document output. The optional `--json` interface has a 64 KiB response limit; omit it when inspecting a larger protocol.
+
+## Shared memory
+
+Shared cross-user memory, including an Obsidian integration, is planned and not available. Project protocols work without it.

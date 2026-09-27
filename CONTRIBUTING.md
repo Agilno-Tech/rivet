@@ -1,5 +1,7 @@
 # Contributing to Rivet
 
-Rivet is an independent development alpha. See [the contributor guide](docs/site/contributing.md), [architecture](docs/site/architecture.md), and [implementation status](docs/site/status.md).
+See the [contributor guide](docs/site/contributing.md) for local setup and checks, and [architecture](docs/site/architecture.md) for how Rivet works.
 
-The source import preserves Agilno authorship. The source repository is public at https://github.com/FraneAgilno/rivet. Package release and licensing are still pending. Work should extend the shared workflow service and document actual support rather than inferred compatibility.
+Bug reports and focused pull requests are welcome. Include reproduction steps and tests for behavior changes, and update affected documentation. Keep private project material and credentials out of contributions.
+
+Package publication is disabled and the source remains `UNLICENSED` until distribution terms are selected. Maintainers can find [release procedures](docs/maintainers/release.md) and [evaluation guidance](docs/maintainers/evaluations.md) separately from the user guides.

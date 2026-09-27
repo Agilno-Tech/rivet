@@ -1,61 +1,28 @@
-# Implementation status
+# Capabilities and limitations
 
-This is a foundation alpha, not the finished MVP or a published npm release.
+Rivet is available as an alpha from GitHub. The registry package has not been published yet.
 
-## Implemented in the foundation
+## Available now
 
-- Independent repository, package identity, CLI, configuration, and private-state namespace.
-- Minimal project/global harness installation with ownership tracking, plus the legacy capability packs.
-- Setup preview/apply with bounded root and immediate-child package discovery, ordered multi-step quality commands, honest unresolved warnings, and byte-preserving existing configuration.
-- Active-harness `work` commands for harness-supplied planning, isolated Worker execution, bounded integration, and verification without launching a second model process.
-- Interactive `rivet run "task"` from a configured project root or nested folder, with automatic project discovery, a reviewed approval gate, and compatible installed Claude/Codex execution.
-- `rivet task status`, `rivet task resume`, and `rivet task deps` select a unique active run without asking for its ID. Dependency setup prepares a clean active host Worker or accepted integration checkout after separate interactive approval. Spawned Workers ask before installing locked dependencies in their isolated checkout.
-- Direct terminal task trials on macOS completed with Claude Code `2.1.274` and Codex CLI `0.155.0-alpha.16`; both reached final review with passing build, test, lint, and typecheck evidence.
-- Project protocol commands with completeness checks, draft/publish/retire lifecycle, revision and digest validation, imports, live discovery, and exact protocol checks during execution.
-- Redacted support diagnostics with optional local harness capability probes.
-- Read-only Worker checkout recovery details, including branch locations, preserved edits and expired leases. Explicit `rivet task recover` safely recovers abandoned host locks while preserving snapshots and worktrees; it does not resume Workers.
-- Extensible model registry, bounded text-only API/local delegation and explicit role selection. Terminal workflow worker roles can select Claude or Codex independently of the planning harness.
-- Integration registry with explicit transport/scope/readiness, bounded host inventory, and sourced Jira/Linear requests with linked Figma/Confluence context. Host observations remain labeled and digest-bound; live provider qualification remains open.
-- Common read-only repository inspection for GitHub.com, Bitbucket Cloud and GitLab.com, with explicit remote selection and commit-bound evidence. See the [repository capability matrix](./repositories.md); live qualification remains open; separate delivery executors are described below.
-- Local delivery preparation/status from accepted host verification, plus a durable service for separately approved delivery operations. Native GitHub/Bitbucket PR and GitLab MR creation is implemented for already published verified branches, with exact-content approval and read-only reconciliation. Merging is implemented for documented bounded policy subsets. Create-only HTTPS branch publication is implemented for GitHub, GitLab and Bitbucket, with separate approval and read-only reconciliation. Remaining native operations and live qualification remain pending. See [delivery lifecycle](./delivery.md).
-- Project-configured GitHub Actions deployment of a confirmed merge SHA, with separate approval, mandatory workflow verification and correlated status/run reconciliation. Live deployment qualification remains open.
-- Jira/Linear delivery-summary comments on the recorded source ticket, with separate approval, exact-content read-back and reconciliation without automatic reposting. Separately approved status transitions support provider-listed choices and desired-state readback; live tracker qualification remains open.
-- Explicit delivery lock recovery for stale same-machine dead owners, preserving operation evidence before read-only reconciliation. Broader crash/live recovery qualification remains open.
-- Imported workflow, worktree, evidence, provider, and quality modules.
-- GitHub CI and documentation workflows for FraneAgilno/rivet.
-- Searchable documentation source and a local build.
-- Deterministic fixture evaluations for six workflow areas, with named assertion evidence and bounded execution. Live model evaluations and independent user trials remain pending. See [evaluations](./evaluations.md).
+| Capability | What you can do |
+| --- | --- |
+| Project setup | Preview and save checks, dependency commands and Claude/Codex skills. Use projects in any language with explicit commands when automatic detection is insufficient. |
+| Terminal tasks | Run a task with an installed Claude or Codex CLI, review its plan, inspect status and resume eligible tasks. |
+| Coding-harness tasks | Let your current coding agent follow Rivet's skill and execute approved actions. |
+| Isolated work and verification | Keep task changes in Git worktrees and record checks against the accepted commit. |
+| Project procedures | Create, publish, discover, update and retire versioned protocols. |
+| Context integrations | Configure Jira/Linear requests and linked Figma/Confluence context through supported transports. |
+| Models | Select Claude/Codex workers or explicitly delegate advisory text to supported API/local models. |
+| Repository delivery | Inspect GitHub, GitLab and Bitbucket; publish verified branches and create or update reviews. GitHub/GitLab merges support the documented policy subsets. |
+| Deployment and trackers | Separately approve a configured GitHub Actions deployment or Jira/Linear delivery updates. |
+| Troubleshooting | Inspect task/checkouts, collect a redacted support bundle and recover eligible abandoned host locks. |
 
-## Still required
+## Before you rely on a feature
 
-- Release licensing and final package namespace remain decisions for wider distribution; current metadata stays `UNLICENSED` and `@agilno/rivet`.
-- Versioned package distribution and discovery beyond bounded immediate child packages.
-- Conversational active-harness first-task demonstrations in real Claude and Codex sessions. Direct JSON inputs remove the temporary-file obstruction from earlier noninteractive trials; private Git state/worktree permissions and live lifecycle trials still need validation. Direct adapters check required capabilities without a version allowlist; Claude `2.1.274` and Codex `0.155.0-alpha.16` have local terminal trials on macOS. Desktop host lifecycle qualification remains open.
-- A fresh-user M1 trial that completes a small task without manual shell repair.
-- Live provider qualification for the integration registry and context intake.
-- Live qualification of repository delivery, model executors, and cross-harness routing. Bitbucket PRs are merged manually for the MVP.
-- External pilot, evaluations, and release qualification.
+- CLI workflows have completed small real tasks on macOS with both Claude and Codex. Full desktop workflows and unassisted onboarding still need testing.
+- CI covers Linux/macOS with Node 22 and 24. Native Windows execution is unsupported.
+- Context integrations, API/local model delegation and remote delivery have automated coverage; live validation across their supported providers is incomplete.
+- GitHub and GitLab merge support is limited to the policies documented in [delivery](./delivery.md). Merge Bitbucket reviews manually.
+- Shared cross-user memory is not available. Project protocols are available.
 
-The delivery lifecycle also preserves independent deployment/tracker completion order, binds reconciliation to the approved provider, and requires new post-merge completion receipts to match the merge result. Native GitHub Actions deployment is implemented for a configured workflow; Jira/Linear delivery-summary comments are implemented; separately approved tracker status transitions are implemented; live delivery qualification remains pending.
-
-See the [roadmap](./roadmap.md) for the next milestones. Detailed implementation planning is maintained outside this repository.
-
-## Host onboarding observations (2026-09-23)
-
-Installed-package proposal trials on macOS found the managed skill in both Claude Code `2.1.274` and Codex CLI `0.155.0-alpha.16`. They exposed missing proposal examples and private Git-state permission failures. The skill now includes the exact request/decomposition format, and direct filesystem permission errors explain how to request normal harness approval.
-
-Noninteractive Codex stopped at the permission boundary. An initial interactive Codex attempt was canceled at approval. A follow-up interactive trial approved the exact proposal command through the normal permission prompt, created the proposal, and stopped at the activation gate with the source checkout clean. This establishes operator-assisted proposal creation only; execution and final review remain unqualified. Claude's noninteractive command checks rejected multiline arguments. The skill now explicitly requires stopping for ordinary approval instead of trying alternative encodings or files after a safety denial.
-
-A noninteractive Claude retest still attempted alternative inputs after denial and was stopped. In a subsequent interactive default-permission session, the original proposal command succeeded after normal approval. Declining a separate preflight permission prompt interrupted the turn without another attempt. This establishes a supported interactive permission path for proposal creation; it does not qualify noninteractive behavior or the complete lifecycle.
-
-These are operator-run diagnostics, not completed first-task or fresh-user acceptance trials. Full host execution, desktop sessions, and fresh-user M1 validation remain open.
-
-## Public foundation
-
-The source is published at [FraneAgilno/rivet](https://github.com/FraneAgilno/rivet) and this documentation is deployed to GitHub Pages. [CI results](https://github.com/FraneAgilno/rivet/actions/workflows/ci.yml) record the macOS/Linux and Node 22/24 matrix. CI tests fixtures and package behavior; it does not qualify live model or MCP accounts.
-
-## Post-MVP
-
-Shared Obsidian memory, synchronization and two-user continuity are planned after the MVP. They remain unimplemented and do not block the MVP release.
-
-Native automatic Bitbucket merging is also post-MVP. The MVP uses manual merging in Bitbucket after Rivet branch publication and PR preparation.
+See [compatibility](./compatibility.md) for tested scope and [troubleshooting](./troubleshooting.md) for remedies.

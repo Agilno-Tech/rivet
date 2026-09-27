@@ -9,8 +9,8 @@ rivet models list --json
 
 | Provider ID | Kind | Current execution status |
 | --- | --- | --- |
-| `claude-code` | Harness | Imported adapter; environment/version requirements still apply |
-| `codex` | Harness | Imported adapter; environment/version requirements still apply |
+| `claude-code` | Harness | CLI execution; installed capabilities and authentication required |
+| `codex` | Harness | CLI execution; installed capabilities and authentication required |
 | `anthropic` | Hosted API | One-shot text delegation adapter |
 | `openai` | Hosted API | One-shot text delegation adapter |
 | `gemini` | Hosted API | One-shot text delegation adapter |
@@ -80,7 +80,7 @@ Hosted services use their fixed origins. For compatible endpoints, `credentialEn
 - `--json` and unattended delegation are unavailable. There are no automatic retries, fallback models, tool calls or streaming output.
 - Arbitrary model names are allowed, but a model must support this provider's request and response contract. This does not promise compatibility with every model or server version. Both requested and reported model identities are retained by the runtime.
 
-Explicit role selection is described below. Live account trials and broader workflow integration remain open in the implementation plan.
+Explicit role selection is described below. Live API/local account testing and broader workflow integration remain incomplete.
 
 ## Select a model or harness by role
 
@@ -146,10 +146,10 @@ Rivet records the worker executor and its client limits in the exact plan you ap
 
 The optional field applies to worker roles. Boss and manager nodes retain their existing governance responsibilities and human approval gates. Active-host workflows reject a configured spawned-worker override; remove that override to work entirely through the active agent. API/local text profiles remain advisory and cannot execute implementation nodes.
 
-This setting selects a CLI adapter. It does not select arbitrary per-node model IDs, assign a different model to every role, or qualify desktop app execution. Claude's existing bounded client profile still applies when Claude is selected as a worker. Cross-harness fixture coverage is automated evidence; real account and host demonstrations remain required by T14.
+This setting selects a CLI adapter. It does not select arbitrary per-node model IDs, assign a different model to every role, or qualify desktop app execution. Claude's existing bounded client profile still applies when Claude is selected as a worker. Cross-harness fixture coverage is automated evidence; live cross-harness and desktop demonstrations remain incomplete.
 
 ## Extending the registry
 
 `src/models/registry.js` exports `createModelRegistry()`. Register an adapter descriptor with a stable ID, protocol, kind, capabilities, and implementation status, then resolve profiles against it. Registration rejects duplicate IDs and unsupported profile fields. Descriptors are immutable copies.
 
-Registering metadata does not install an executor. Custom executors, broader role routing and live qualification remain separate work packages.
+Registering metadata does not install an executor. Custom executors, broader role routing and live qualification require additional implementation and testing.
