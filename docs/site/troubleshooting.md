@@ -1,5 +1,11 @@
 # Troubleshooting
 
+## Git fails before planning
+
+Rivet accepts standard installed Git binaries, including systems that give the same executable multiple hardlinked names. It still checks the executable path, permissions and file identity before use.
+
+If Git cannot be found or used, the error now identifies Git and explains how to correct it. Normally Git on `PATH` is sufficient. If you explicitly configured `RIVET_GIT_EXECUTABLE`, ensure it names an existing canonical executable file, or remove the override to use discovery. Older versions may report only `Rivet runtime configuration is missing or invalid` for this failure. This occurs before Claude or Codex planning and does not, by itself, indicate a harness problem.
+
 ## The public install command does not resolve
 
 No Rivet package has been published from this repository yet. Use the source installation instructions. The temporary package name does not establish ownership of a public namespace.

@@ -38,15 +38,23 @@ const INPUT_KEYS = new Set(['cwd', 'env', 'fs', 'fetch', 'spawn', 'now', 'featur
 const FEATURE_WORKFLOW_METHODS = Object.freeze(['propose', 'start', 'watch', 'status', 'resume', 'cancel']);
 
 export class ApplicationConfigurationError extends Error {
-  constructor() {
-    super('Rivet runtime configuration is missing or invalid.');
+  constructor(reason = 'configuration') {
+    const messages = {
+      configuration: 'Rivet runtime configuration is missing or invalid.',
+      'git-unavailable': 'No usable Git executable was found. Install Git on PATH or set RIVET_GIT_EXECUTABLE to its absolute canonical executable path.',
+      'git-executable-invalid': 'RIVET_GIT_EXECUTABLE must be an absolute canonical path to a Git executable. Correct this setting and retry.',
+      'git-executable-unusable': 'RIVET_GIT_EXECUTABLE does not identify a usable regular Git executable. Check that the path is canonical and the file exists with execute permission, then retry.',
+    };
+    const selectedReason = Object.hasOwn(messages, reason) ? reason : 'configuration';
+    super(messages[selectedReason]);
     this.name = 'ApplicationConfigurationError';
     this.code = 'ERR_APPLICATION_CONFIGURATION';
     this.safeMessage = this.message;
+    this.details = Object.freeze({ reason: selectedReason });
   }
 }
 
-function fail() { throw new ApplicationConfigurationError(); }
+function fail(reason) { throw new ApplicationConfigurationError(reason); }
 
 function capture(input) {
   try {
@@ -125,12 +133,18 @@ export function createRivetApplication(input = {}) {
   const gitClient = () => {
     gitClientPromise ??= (async () => {
       if (env.RIVET_GIT_EXECUTABLE !== undefined) {
-        return createGitClient({ gitExecutable: executable(env.RIVET_GIT_EXECUTABLE) });
+        let configuredGit;
+        try {
+          configuredGit = executable(env.RIVET_GIT_EXECUTABLE);
+          if (resolve(configuredGit) !== configuredGit) fail();
+        } catch { fail('git-executable-invalid'); }
+        try { return await createGitClient({ gitExecutable: configuredGit }); }
+        catch { fail('git-executable-unusable'); }
       }
       for (const candidate of executableCandidates('git', env.PATH)) {
         try { return await createGitClient({ gitExecutable: executable(await realpathFile(candidate)) }); } catch {}
       }
-      fail();
+      fail('git-unavailable');
     })();
     return gitClientPromise;
   };

@@ -172,12 +172,14 @@ async function verifyExecutable(path) {
   if (!validPath(path) || resolve(path) !== path) fail('unsafe-executable');
   let before;
   try { before = await lstat(path, { bigint: true }); } catch { fail('unsafe-executable'); }
-  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1n || (before.mode & 0o111n) === 0n) {
+  // Installed Git binaries may have hardlinked aliases. This path is executed,
+  // never mutated; canonical path and inode checks still pin its identity.
+  if (!before.isFile() || before.isSymbolicLink() || (before.mode & 0o111n) === 0n) {
     fail('unsafe-executable');
   }
   const canonical = await realpath(path);
   const after = await lstat(path, { bigint: true });
-  if (canonical !== path || !after.isFile() || after.isSymbolicLink() || after.nlink !== 1n || !sameIdentity(before, after)) {
+  if (canonical !== path || !after.isFile() || after.isSymbolicLink() || !sameIdentity(before, after)) {
     fail('unsafe-executable');
   }
   return Object.freeze({ path, dev: after.dev.toString(), ino: after.ino.toString() });
