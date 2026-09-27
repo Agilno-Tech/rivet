@@ -21,6 +21,12 @@ import {
 } from '../../src/clients/codex.js';
 import { createRivetApplication } from '../../src/runtime/application.js';
 
+function claudeEnvelope(result) {
+  return {type:'result',subtype:'success',is_error:false,total_cost_usd:result.usage.costUsd,
+    modelUsage:{'fixture-model':{inputTokens:result.usage.tokens,outputTokens:0,cacheCreationInputTokens:0,cacheReadInputTokens:0}},
+    structured_output:result};
+}
+
 export function validLaunch(overrides = {}) {
   return {
     nodeId: 'worker-one', parentId: 'manager-one', objective: 'Implement the agenda button.',
@@ -181,7 +187,7 @@ test('launches provider-specific, capability-checked argv on unfamiliar versions
   const worktree = join(root, 'worktree');
   await mkdir(worktree);
   const result = JSON.stringify({ version: 1, status: 'success', output: { summary: 'done', evidence: ['tests'] }, usage: { tokens: 1, costUsd: 0 } });
-  const claudeResult = JSON.stringify({ type: 'result', subtype: 'success', structured_output: JSON.parse(result) });
+  const claudeResult = JSON.stringify(claudeEnvelope(JSON.parse(result)));
   const interpreter = await realpath('/bin/sh');
   const metadata = await lstat(worktree, { bigint: true });
   const launch = validLaunch({ worktree: { path: worktree, dev: metadata.dev.toString(), ino: metadata.ino.toString(), reservationId: 'lease-one' } });
@@ -277,10 +283,7 @@ test('runs a pinned npm-style env node entrypoint through the configured native 
   t.after(() => rm(root, { recursive: true, force: true }));
   const executable = join(root, 'provider.js');
   const interpreter = await realpath(process.execPath);
-  const result = JSON.stringify({
-    type: 'result', subtype: 'success',
-    structured_output: { version: 1, status: 'success', output: { summary: 'node entrypoint', evidence: ['tests'] }, usage: { tokens: 1, costUsd: 0 } },
-  });
+  const result = JSON.stringify(claudeEnvelope({ version: 1, status: 'success', output: { summary: 'node entrypoint', evidence: ['tests'] }, usage: { tokens: 1, costUsd: 0 } }));
   const resultSchema = JSON.stringify(agentResultContract(validLaunch().evidence).schema);
   const source = `#!/usr/bin/env node\nconst chunks = [];\nif (process.argv[2] === '--version') { process.stdout.write('2.1.207 (Claude Code)\\n'); } else if (process.argv[2] === '--help') { process.stdout.write(${JSON.stringify(CLAUDE_ADAPTER_SYNTAX.requiredOptions.join('\n'))}); } else {\n  const expected = ${JSON.stringify([...CLAUDE_ADAPTER_SYNTAX.args.slice(0, -1), '--json-schema', '__RESULT_SCHEMA__', '--max-budget-usd', '2'])};\n  expected[expected.indexOf('__RESULT_SCHEMA__')] = ${JSON.stringify(resultSchema)};\n  if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(expected)) process.exit(41);\n  process.stdin.on('data', chunk => chunks.push(chunk));\n  process.stdin.on('end', () => {\n    const payload = Buffer.concat(chunks).toString('utf8');\n    if (!payload.includes('\\"kind\\":\\"agilno.agent-launch\\"')) process.exit(42);\n    process.stdout.write(${JSON.stringify(`${result}\n`)});\n  });\n}\n`;
   await writeFile(executable, source, { mode: 0o700 });
@@ -298,12 +301,12 @@ test('uses the bounded Sonnet execution profile while preserving only non-secret
   t.after(() => rm(root, { recursive: true, force: true }));
   const executable = join(root, 'provider.sh');
   const interpreter = await realpath('/bin/sh');
-  const result = JSON.stringify({
+  const result = JSON.stringify(claudeEnvelope({
     version: 1,
     status: 'success',
     output: { summary: 'user identity preserved', evidence: ['environment-sanitized'] },
     usage: { tokens: 1, costUsd: 0 },
-  });
+  }));
   await writeFile(executable, `#!${interpreter}\nif [ "$1" = "--version" ]; then printf '%s\\n' '${CLAUDE_ADAPTER_SYNTAX.observedVersion}'; exit 0; fi\nif [ "$1" = "--help" ] || [ "$2" = "--help" ]; then printf '%s\\n' '${CLAUDE_ADAPTER_SYNTAX.requiredOptions.join('\n')}'; exit 0; fi\n[ "$#" -eq 16 ] || exit 40\n[ "$7" = "--model" ] && [ "$8" = "sonnet" ] || exit 41\n[ "$9" = "--effort" ] && [ "\${10}" = "low" ] || exit 42\n[ "\${11}" = "--permission-mode" ] && [ "\${12}" = "acceptEdits" ] || exit 43\n[ "\${13}" = "--json-schema" ] && case "\${14}" in *agilno.agent-result*) true ;; *) false ;; esac || exit 43\n[ "\${15}" = "--max-budget-usd" ] && [ "\${16}" = "0.75" ] || exit 44\ncase " $* " in *" --fallback-model "*) exit 45 ;; esac\ncat >/dev/null\n[ "$USER" = "fixture-user" ] || exit 46\n[ -z "$ANTHROPIC_API_KEY" ] || exit 47\nprintf '%s\\n' '${result}'\n`, { mode: 0o700 });
   await chmod(executable, 0o700);
   const metadata = await lstat(worktree, { bigint: true });
