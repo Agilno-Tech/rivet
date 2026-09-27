@@ -101,15 +101,15 @@ If the ticket has no criteria and the user has supplied none, Rivet stops with g
 
 Use [repository inspection](./repositories.md) to read GitHub, Bitbucket Cloud and GitLab.com repository and review state through a shared interface. Its capability matrix distinguishes implemented reads from separately governed delivery actions and pending live qualification.
 
-## Qualification status
+## Support status
 
-| Provider | Implemented intake | Live qualification |
+| Provider | Implemented intake | Live testing |
 | --- | --- | --- |
-| Jira / Linear | Existing direct read adapters and normalized host snapshots | Pending authorized test resources |
-| Figma / Confluence | Existing adapter modules and bounded linked host context | Pending authorized test resources |
-| Custom MCP | Configurable descriptors, tool inventory and generic context snapshots | Per-server qualification required |
+| Jira / Linear | Existing direct read adapters and normalized host snapshots | Not yet validated end to end |
+| Figma / Confluence | Existing adapter modules and bounded linked host context | Not yet validated end to end |
+| Custom MCP | Configurable descriptors, tool inventory and generic context snapshots | Test each configured server |
 | Notion / Playwright / Sentry | Optional capability descriptions only | Not qualified |
 | Local CLI transports | Registry descriptors only | Execution not implemented |
-| Shared Obsidian memory | Planned post-MVP; not an MVP release requirement | Not implemented or qualified |
+| Shared Obsidian memory | Not available | Not implemented or qualified |
 
 A standalone CLI cannot inherit another application's MCP connection. The active harness performs authorized reads and supplies the bounded snapshots. No live account compatibility is implied by fixture tests.

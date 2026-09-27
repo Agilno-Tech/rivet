@@ -4,7 +4,7 @@ import ArchitectureDiagram from '../.vitepress/components/ArchitectureDiagram.vu
 
 # Architecture
 
-Rivet packages a repeatable team workflow. Coding harnesses already provide editing, terminals, MCP clients, and agent tools; Rivet should reuse those capabilities and add deterministic operations where shared configuration, state, verification, or recovery needs them.
+Rivet packages a repeatable team workflow. Coding harnesses already provide editing, terminals, MCP clients, and agent tools; Rivet reuses those capabilities and adds explicit operations where shared configuration, state, verification, or recovery needs them.
 
 <ArchitectureDiagram />
 
@@ -25,4 +25,4 @@ The feature bridge supports both spawned adapters and an active-host contract. I
 
 ## Evidence
 
-A model's success message is not a passing test. Rivet retains the imported verification and authority machinery so outcomes can be tied to repository changes and actual checks. External delivery is separate from local verification.
+A model's success message is not a passing test. Rivet ties recorded outcomes to repository changes and actual checks. External delivery is separate from local verification.

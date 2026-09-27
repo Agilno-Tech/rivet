@@ -27,7 +27,7 @@ node .rivet.cjs setup
 node .rivet.cjs setup --write
 ```
 
-Use a reviewed commit SHA instead of `main` for reproducible source selection. Use Node 22 or newer, Yarn Classic 1.22, and Git. The private runtime installer also requires npm 10 or newer, included with the supported Node distribution, for its internal dependency installation. Unsupported Node versions are rejected before installation changes. The initial command requires access to the GitHub source and dependency registry; it does not require a global Rivet executable.
+Use a reviewed commit SHA instead of `main` for reproducible source selection. Use Node 22 or newer, Yarn Classic 1.22, and Git. The project-only runtime installer also requires npm 10 or newer, included with the supported Node distribution, to install its dependencies. Unsupported Node versions are rejected before installation changes. The initial command requires access to the GitHub source and dependency registry; it does not require a global Rivet executable.
 
 Project installation snapshots the running Rivet package and installs its runtime and dependencies into your private `~/.cache/rivet/project-runtimes` cache. A small owned `.rivet.cjs` file pins the Rivet source. Each user keeps their platform-specific runtime and resolved dependency inventory privately. Your application's `package.json`, lockfile and dependencies are preserved. The selected minimal harness instructions use this project reference even when another Rivet version is available globally. Use `--target=claude` or `--target=codex` to install only one target; both are the default. Use `--project=<path>` only when automatic project discovery is insufficient.
 
@@ -69,7 +69,7 @@ The bootstrap requires Node 22 or newer, npm 10 or newer, Git, and tar on PATH. 
 
 Omit `--prefix` to use your current npm global prefix. Use a user-owned prefix or runtime manager. The bootstrap keeps your existing PATH, does not modify shell profiles, and removes its temporary copy on completion or failure. A failed npm installation can leave partial content in the selected prefix; inspect the reported location before retrying.
 
-See the [candidate checklist](./release.md) for artifact creation, qualification and release decisions.
+For published-channel availability and upgrade guidance, see [versions and updates](./release.md).
 
 ## Project or global instructions
 
@@ -106,7 +106,7 @@ Removal preserves unowned files and refuses to delete modified managed content. 
 
 ## Advanced legacy capability packs
 
-The earlier `install --all` and interactive installers remain available. They install the larger imported skill collection and use their original harness paths, including `.codex/skills` for Codex. They are separate from the new minimal installation lifecycle; use matching legacy uninstall options to remove those packs.
+The earlier `install --all` and interactive installers remain available. They install the optional skill collection and use their original harness paths, including `.codex/skills` for Codex. They are separate from the new minimal installation lifecycle; use matching legacy uninstall options to remove those packs.
 
 ## Contributor checkout
 

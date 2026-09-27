@@ -1,53 +1,44 @@
-# Compatibility and qualification
+# Compatibility
 
-Rivet is an alpha. An implemented adapter, a passing fixture, and a successful task with a real account are separate kinds of evidence. This matrix records those distinctions; it is not a claim that every listed integration is ready for unattended use.
+Rivet is an alpha. Use this page to check your environment and understand where testing is still incomplete.
 
 ## Runtime and installation
 
-| Environment | Evidence | Remaining qualification |
-| --- | --- | --- |
-| macOS, Node 22 and 24 | CI tests and global tarball/Git installation lifecycle | Independent first-user trial on the release artifact |
-| Linux, Node 22 and 24 | CI tests and global tarball/Git installation lifecycle | Authenticated task and independent first-user trial |
-| Windows native | Spawned process adapters unsupported | Native platform implementation and qualification |
-| WSL | Unqualified | Separately qualified Linux installation, processes, filesystem and complete task checks |
-| GitHub source install | Yarn Classic 1.22.22 on macOS: isolated Git install at `33f0094`, installed CLI help, non-Node setup and doctor passed | Independent onboarding and release-artifact qualification; see [first-use evidence](./first-task-trial.md) |
-| Yarn Classic tarball install | Local macOS install with Yarn 1.22.22 into a disposable prefix; installed CLI help succeeds | Independent onboarding and release-artifact qualification |
-| Project-only pinned runtime | macOS fresh-home tarball and Git-based npm-exec lifecycle without a global CLI; source and private dependency integrity checks | Public channel and independent collaborator onboarding |
-| Versioned release artifact | Release qualification pending | Downloaded artifact checksum, installation lifecycle and candidate evidence |
+| Environment | Support and testing |
+| --- | --- |
+| macOS and Linux, Node 22 or 24 | CI covers the regression suite and installed-package lifecycle. |
+| Native Windows | Spawned CLI execution is unsupported. |
+| WSL | Not yet tested as a complete environment. |
+| Yarn Classic 1.22 | Source and tarball installation tested on macOS. Modern Yarn does not provide `yarn global`. |
+| Project-only runtime | Installed-runtime checks cover setup and local verification without a global Rivet command. |
+| Registry package | Not published yet. Use [source installation](./installation.md). |
 
-Node 22 is the minimum declared runtime. A newer runtime is not automatically qualified by satisfying that minimum. CI records the actual runtime versions used in each run. Dependencies are resolved during installation; a Rivet tarball checksum does not make the dependency installation fully reproducible.
+Node runs Rivet, not your application. Python/Django, Node.js and other projects use their own configured checks and dependency procedures. Automatic discovery does not recognize every framework or workspace layout; review setup and provide explicit commands when necessary.
 
 ## Coding harnesses
 
-| Entry point | Evidence | Remaining qualification |
-| --- | --- | --- |
-| Claude Code CLI | Capability probes and direct terminal task trials on macOS with 2.1.274 | Full active-host lifecycle and independent onboarding |
-| Codex CLI | Capability probes and direct terminal task trials on macOS with 0.155.0-alpha.16 | Full active-host lifecycle and independent onboarding |
-| Claude desktop / Codex desktop | Host protocol available; no completed desktop qualification | Skill discovery and complete normal-permission desktop workflow |
-| Other coding harnesses | Host command contract available; no separate model account required by host mode | Harness-specific discovery, permissions and end-to-end task qualification |
+| Entry point | Tested scope |
+| --- | --- |
+| Claude Code CLI | Small spawned tasks on macOS, including Claude 2.1.280. |
+| Codex CLI | Small spawned tasks on macOS with Codex 0.155.0-alpha.16. |
+| Claude and Codex desktop | Host command support exists; complete desktop workflows have not been validated. |
+| Other coding harnesses | Require local file/terminal tools, Rivet instructions and permission to operate on the project. End-to-end compatibility must be checked for the harness. |
 
-The observed versions are evidence, not a fixed version allowlist. Spawned adapters probe required CLI capabilities and refuse incompatible installations. Host mode uses the current coding agent through explicit `work` commands; it does not assert that every host implements the same connector or permission interface. See [runtime reference](./runtime-reference.md).
+CLI versions above record test evidence, not a version lock. Rivet probes required capabilities and stops when an installation cannot satisfy them. See [harness compatibility](./runtime-reference.md#harness-compatibility).
 
-## Integrations and delivery
+Local trials with both CLIs completed documentation tasks in a Node project with build, 40 tests and type-check, and a Docker Django project with a system check. The trials used prepared disposable environments; the Django plans were operator-supplied and the Claude runs used reviewed larger token allowances. They do not establish full application testing or unassisted first-user setup. Full active-host and desktop workflows still need testing.
 
-| Area | Implemented evidence | Remaining live qualification |
-| --- | --- | --- |
-| Jira / Linear intake | Sourced request contracts, fixtures and scoped transports | Dummy project/ticket reads, source drift and permission handling |
-| Figma / Confluence context | Linked context, provenance and bounded intake fixtures | Real non-sensitive resource-to-task flow |
-| Harness MCP intake | Project-scoped inventory and readiness checks | Actual host-connected resources and authentication |
-| GitHub / GitLab / Bitbucket inspection | Common read contracts and public repository/branch smoke | Authenticated private sandbox flows; see [repository matrix](./repositories.md) |
-| GitHub / GitLab merge | Exact-head merge executors and governed lifecycle fixtures for documented policy subsets | Authorized sandbox delivery |
-| GitHub Actions deployment | Approved workflow dispatch and correlated outcome verification fixtures | One configured nonproduction deployment |
-| Jira / Linear delivery comments and status transitions | Separate approval, exact-content or target-status readback and reconciliation fixtures | Authorized live comments and status changes |
+## Integrations, models and delivery
 
-Native review creation and title/description updates, source branch publication and Bitbucket writes must be checked against the current [delivery documentation](./delivery.md). A fixture for one provider does not qualify the others. Custom repository hosts and enterprise/self-managed editions require separate qualification.
+Supported commands and their restrictions are described in [integrations](./integrations.md), [models](./models.md), [repository inspection](./repositories.md) and [delivery](./delivery.md).
 
-## Models and memory
+Automated coverage exists for these interfaces. Live validation across provider accounts is incomplete. Test your configured connection in a suitable project before relying on it. In particular:
 
-The model registry and text delegation support Anthropic, OpenAI, Gemini, Ollama and configurable OpenAI-compatible protocols. Fixture coverage establishes request, output and policy handling; it does not establish live account compatibility. Live text delegation through API/local profiles remains unqualified. Required evidence includes a provider outside Anthropic/OpenAI, a local model and cross-harness delegation. Monetary caps are not currently enforced by text delegation; see [model limits](./models.md#limits-and-current-scope).
+- Claude Worker budgets use native token counters, including cached context. Codex direct-result usage is model-reported and can understate consumption; do not rely on it as an enforced usage or billing limit. See [task budgets](./runtime-reference.md#native-usage-and-task-budgets).
+- API/local text models provide advice, not autonomous implementation with coding tools. They do not enforce a monetary cap.
+- GitHub and GitLab merges support specific repository policies. Unsupported or unreadable policies block merging.
+- Bitbucket merging is manual.
+- GitHub Actions deployment requires an explicitly configured workflow and separate approval.
+- Shared cross-user memory is not implemented.
 
-Shared Obsidian memory is post-MVP and remains unimplemented and unqualified. Two-user continuity, sync conflicts, offline recovery and access changes require their own evidence.
-
-## Candidate evidence
-
-For each release candidate, retain the exact source revision, artifact hash, OS/architecture, Node/npm versions, harness/model versions, test results, trial interventions and unresolved limitations. CI success does not close the independent pilot: five people who did not build Rivet must complete the plan's onboarding and reviewable-task requirements. See [evaluations and trials](./evaluations.md).
+For installation problems or failed tasks, use [troubleshooting](./troubleshooting.md).

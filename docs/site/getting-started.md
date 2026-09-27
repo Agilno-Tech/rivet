@@ -1,134 +1,88 @@
 # Get started
 
-Use Node.js 22 or 24, Yarn Classic 1.22 and Git on macOS or Linux. This is a development alpha; the npm package has not been published. Install the CLI from the public GitHub source branch:
+Rivet needs **Node.js 22 or 24, Yarn Classic 1.22 and Git** on macOS or Linux. Your application can use any language; it does not need a `package.json`.
+
+## 1. Install Rivet
+
+The alpha is currently installed from GitHub:
 
 ```sh
 yarn global add "https://github.com/FraneAgilno/rivet.git#main"
+rivet --help
 ```
 
-Node.js runs the Rivet CLI. Your application can use Python/Django, Go, Rust, Node.js or another language; it does not need a `package.json`.
+For a pinned source revision, PATH help or a project-only installation, see [installation](./installation.md).
 
-Confirm `rivet --help` works before continuing. These commands use Yarn Classic 1.22; see [installation details](./installation.md) for PATH checks and project-only installation.
+## 2. Connect your project
 
-For a project-only installation without a global CLI, use the [pinned project runtime](./installation.md#install-for-one-project-without-a-global-cli). Run the commands below through `node .rivet.cjs` instead of `rivet` when using that installation.
-
-## Connect a project
-
-Run initial setup from your regular terminal. Some coding-agent sandboxes protect their own instruction directories and cannot install skills without separate permission. From your project root, preview the setup:
+From the project root in your regular terminal:
 
 ```sh
 rivet setup
-```
-
-Review the detected checks and planned files, then apply:
-
-```sh
 rivet setup --write
+rivet doctor
 ```
 
-Setup creates `.rivet` project policy and one minimal Rivet skill for Claude Code and Codex. Use `--target=claude` or `--target=codex` to select one. Existing valid configuration is preserved; edited or unowned skill files are never silently replaced. Setup does not execute your build or test scripts.
+The first command previews the configuration. Review the checks and dependency commands before applying it with `--write`. Setup installs project policy and Rivet skills for Claude Code and Codex. It preserves existing valid configuration and does not run project checks or install application dependencies.
 
-Setup also previews the supported Git publishing remotes. If several are available, choose one when applying setup, or pass `--remote=<name>` explicitly for automation. Rivet saves its name and repository identity in project policy and checks them before later inspection or delivery. A project without a supported remote can still use local tasks. See [publishing remote selection](./repositories.md#choose-a-publishing-remote-during-setup).
+Rivet proposes checks for supported Node, Django, pytest, Go and Rust layouts. If it cannot find a check, interactive setup asks for your verification command. Use your project's normal tools, including Docker if required. See [custom check and dependency configuration](./runtime-reference.md#checks-for-any-project-language) for other layouts.
 
-For Jira, Linear, Figma or Confluence, optionally run `rivet integrations setup` next. The [integration guide](./integrations.md#guided-configuration) walks through project scope, transport and credential references with a preview before writing. Skip this for local tasks.
+Resolve the required checks shown by `doctor`. A `preparation-required` result means a reviewed dependency plan can prepare an isolated checkout later; dependencies are not installed yet. Review and commit setup files, then start from a clean checkout of the configured default branch. Host workflows also require a fresh or ahead remote-tracking ref; `rivet preflight --mode=host` reports readiness.
 
-Setup inspects the root package and bounded immediate child package directories. A root script takes precedence for its logical check. Otherwise, Rivet proposes the matching child scripts in stable path order. For example, a root with no scripts, a `backend` with `build` and `test`, and a `frontend` with `build` and `type-check` produces two ordered build steps, one backend test step, and an optional frontend typecheck step. Preview shows every exact `cwd` and `argv`, its provenance, unresolved required checks, and package-level coverage warnings. The checks have not run at preview time; `--write` is the explicit confirmation to store generated child steps.
+If setup cannot write the harness skill, use your regular terminal or approve the exact operation through the harness. See [permission troubleshooting](./troubleshooting.md#setup-cannot-install-the-harness-skill).
 
-When no `build` or `test` script exists in the supported root/immediate-child scope, setup still connects the project and reports an unresolved warning. The conservative placeholder remains non-executable until that exact package script exists: `doctor` and `preflight` fail readiness rather than treating it as available. Setup never runs scripts or installs dependencies.
+## 3. Complete a task
 
-For Node projects, Rivet supports Yarn, pnpm, npm and Bun according to the project's configuration and lockfile. Installing Rivet with Yarn does not change the application's package manager. Discovery remains bounded to the root and immediate child packages; it does not interpret workspace dependency graphs.
-
-### Python, Django and other project languages
-
-Django projects with `manage.py` get proposed system and test checks. Python metadata mentioning pytest, Go modules and Cargo projects also have conventional checks proposed for review. Setup does not execute them or install application dependencies. For a detected Python project with a root `requirements.txt`, it also proposes a virtual environment and dependency installation inside each isolated checkout. Review this plan before saving it.
-
-When Rivet cannot determine a check, interactive `rivet setup --write` asks for the project’s verification command. You can enter a command such as `python3 -m pytest`. For automation, an existing coding agent, or a custom toolchain, provide exact argument arrays:
-
-```sh
-rivet setup --checks-json='{"test":["python3","-m","pytest"]}'
-rivet setup --write --checks-json='{"test":["python3","-m","pytest"]}'
-```
-
-These projects use schema version 3. Checks can use a configured executable on PATH or a bounded `./` executable path inside the check’s working directory. At least one required `test` or `check` is necessary; a build command is optional. Commands run directly with exact arguments, without shell expansion or command chaining. Review them as executable project policy. Existing Node configurations retain their original rules.
-
-Dependency installation has its own approval. Rivet prepares the active Worker and accepted integration checkout separately; source-checkout dependencies are not copied. Generated Python setup uses `.rivet-deps/venv` in each checkout. Projects with other dependency procedures can configure exact installation steps using `--dependencies-json`; see [dependency configuration](./runtime-reference.md#project-dependency-installation). Follow repository policy when choosing commands, including Docker requirements.
-
-`rivet doctor` can report `preparation-required` when a valid dependency plan will create a configured executable. This permits preparing the task; it is not evidence that dependencies are installed or tests passed.
-
-## Check the connection
-
-Reload your coding harness if necessary, then ask:
-
-> Read the Rivet skill and report this project's configured checks.
-
-This verifies instruction discovery. The installed skill lets Claude Code, Codex, Gemini CLI, OpenCode, and other capable coding harnesses use Rivet's host workflow. Rivet seals the plan and evidence, then stops again for final human approval.
-
-## Complete a first task
-
-Review and commit the setup files and any package scripts needed by the configured checks. Start from a clean checkout of the configured default branch with a fresh or ahead remote-tracking ref. Run `rivet preflight --mode=host` to check host readiness, or `rivet doctor` for broader diagnostics. Resolve missing required checks before proposing work.
-
-### In your coding harness
-
-Give Claude Code, Codex, or another capable harness a request such as:
-
-> Read the Rivet skill. Add a greeting module that exports a greeting string. Show me the exact plan before activation, perform the approved work in Rivet's isolated checkout, and show the changed files and executed checks for final review.
-
-The harness handles Rivet's internal run ID, versions, digest, and JSON action files. You review the plan before activation and the verified result before delivery. If the harness needs to recover an interrupted action, it follows the skill's `work status` and `work next` instructions. Rivet does not push or merge the result automatically.
-
-For a Python API, use the same request in Claude Code or a Codex coding session:
-
-> Read the Rivet skill. Add a GET /health endpoint that returns HTTP 200 and a JSON status. Follow this repository's framework and test conventions. Show the plan and required checks before starting, then show the actual verification results for review.
-
-Use the project's normal tests and dependency procedure. A Django repository that requires Docker should retain that convention; do not replace it with host Python commands. Container checks must run against the exact isolated checkout being verified, with separate test resources where needed.
-
-The host skill passes proposal/action/result JSON directly to Rivet, so temporary input files are not required. Rivet still needs permission to write private Git state and create isolated worktrees. Approve those exact operations through your harness when prompted. If your environment cannot grant access, use the terminal flow below. Full live host and desktop qualification remains open.
+Choose one of these entry points.
 
 ### In a terminal
 
-If a compatible Claude or Codex CLI is installed and authenticated, you can start the same governed workflow with one command:
+Install and authenticate Claude Code or Codex CLI, then run:
 
 ```sh
-rivet run "Add a greeting module that exports a greeting string"
+rivet run "Add a GET /health endpoint with a regression test"
 ```
 
-To choose your installed CLI explicitly, use either:
+Run from the project root or any folder inside it. Rivet detects the project and offers a choice if both CLIs are available. To select one directly:
 
 ```sh
 rivet run "Add a GET /health endpoint with a regression test" --harness=claude
+# Alternatively:
 rivet run "Add a GET /health endpoint with a regression test" --harness=codex
 ```
 
-These are alternative ways to start a task. Use one per trial; Claude and Codex use the same configured project checks and approval gates.
+Review the proposed files, checks and budgets before approving. Rivet works in isolated Git checkouts and asks separately before preparing their dependencies. Existing dependencies in your source checkout are not copied. Installing Rivet with Yarn does not change your project's package manager; Yarn, pnpm, npm and Bun project scripts remain supported.
 
-Direct terminal adapters check required CLI options instead of enforcing a version allowlist. Compatible versions can run without a Rivet update. Rivet retains its permission and output-contract requirements and stops if required options are missing. See [harness compatibility](./runtime-reference#harness-compatibility). Claude Code `2.1.274` and Codex CLI `0.155.0-alpha.16` completed small local terminal tasks on macOS; that evidence does not guarantee every past or future release.
+### In Claude Code, Codex or another coding harness
 
-For Node CLI launchers with the exact `#!/usr/bin/env node` shebang, Rivet discovers the canonical native Node executable already running Rivet. No interpreter export is needed for that common installation. Other script entrypoints still require an explicit compatible `RIVET_CLAUDE_INTERPRETER` or `RIVET_CODEX_INTERPRETER`; an explicit override is never silently replaced. Ctrl-C and SIGTERM stop Rivet's local child process before the command exits; use `rivet task status` to inspect an interrupted run before resuming it.
+Open your configured project, reload the harness if needed, and ask:
 
-Run this from the configured project root or any folder inside it. Rivet finds the Git project, discovers a supported installed harness, plans the task, prints the full plan and required checks, and asks for approval in your terminal before starting. If both supported harnesses are installed, Rivet offers a choice in the same terminal flow. Pass `--harness=claude` or `--harness=codex` to choose directly. Use `--project=<path>` only when you are outside the project or need an explicit root. The command does not treat a ticket ID alone as a verified request; describe the work or use the advanced ticket intake.
+> Read the Rivet skill. Add a GET /health endpoint with a regression test using this project's framework. Show me the plan before starting, work in Rivet's isolated checkout, and show the changed files and executed checks for final review.
 
-Check progress and evidence without copying an internal run ID:
+The harness manages the detailed Rivet commands and task identifiers. Approve the required file, Git and worktree operations through its normal permission flow. See [compatibility](./compatibility.md) for tested CLI paths and current desktop limitations.
+
+## 4. Inspect the result
 
 ```sh
 rivet task status
+```
+
+Status shows the next action, checkout and verification results. At `awaiting-final-approval`, review the diff and actual check results. Local completion does not push, merge or deploy your work; [delivery](./delivery.md) requires separate approval.
+
+For interrupted terminal tasks or missing dependencies:
+
+```sh
 rivet task resume
 rivet task deps
 ```
 
-`task status` shows the next action, integration checkout, changed paths, and executed checks when available. `task resume` continues an approved or blocked spawned run after its cause is corrected. It will not duplicate a run still marked running. If several active tasks exist in the same project, Rivet lists them and asks you to select one with `--run=<id>`; it never guesses. A failed check exits nonzero and leaves its report available in `task status`. Spawned tasks ask separately before dependency installation in their Worker and accepted integration checkouts. For an active host Worker that needs dependencies before editing, or for the clean accepted integration checkout before verification, run `rivet task deps` from anywhere inside the project. Rivet shows the exact checkout and dependency commands and asks before running them there. After integration setup, use `rivet task resume` for a spawned run or retry `work verify` for a host run at the same commit. Source changes require a new reviewed proposal. For custom toolchains, configure a reviewed dependency plan or prepare the environment through the project’s documented procedure.
+Resume an eligible terminal task after correcting the reported problem. For a task owned by your coding harness, continue through that harness. `task deps` prepares a clean active Worker or accepted integration checkout using its configured dependency plan. Source corrections may require a new reviewed plan. See [troubleshooting](./troubleshooting.md) for blocked tasks.
 
-The Worker and integration checkouts are isolated Git worktrees. Dependencies from your original checkout, such as `node_modules`, are not copied into them. Add `node_modules/` to your project's `.gitignore` so the isolated checkout remains clean after installation. Rivet’s verification checks do not install packages. Approved generic dependency preparation owns a separate `.rivet-deps` directory with its own ignore file; it does not edit the source repository’s `.gitignore`. The result stops at `awaiting-final-approval` for your separate review; it is not a delivery or merge decision.
+You normally do not need a task ID or `--project`. When several tasks are active, select the one listed by status with `--run=<id>`. Use `--project=<path>` when running outside the project.
 
-For the exact `feature` and `work` commands used by coding harnesses and automation, see the [runtime reference](./runtime-reference.md).
+## Add more when you need it
 
-Project procedures are managed independently and discovered live:
-
-```sh
-rivet protocols add database-changes
-rivet protocols find database --include-drafts
-```
-
-See [runtime reference](./runtime-reference.md) for the host command sequence and [memory and project protocols](./memory-and-protocols.md) for protocol publishing.
-
-For global installation, updates, removal and contributor setup, see [installation details](./installation.md).
-
-For a measured first-use acceptance run, follow the [first-task trial](./first-task-trial.md).
+- [Jira, Linear, Figma and Confluence](./integrations.md): optional context and ticket connections.
+- [Project protocols](./memory-and-protocols.md): your team's reviewed procedures.
+- [Model selection](./models.md): worker harnesses and advisory text models.
+- [Runtime reference](./runtime-reference.md): configuration and advanced commands.

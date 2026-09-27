@@ -2,69 +2,44 @@
 
 A shared development workflow for teams and their coding agents.
 
-Rivet is a **standalone development alpha** with its own CLI, configuration, state, and releases.
+Review a plan, work in an isolated Git checkout, run your project's checks, and review the result before delivery. Use Rivet through a coding harness or from your terminal.
 
-## Connect a project
+## Get started
 
-With Node.js 22 or 24, Yarn Classic 1.22 and Git installed, install the alpha CLI, then run setup from your project:
+Install Node.js 22 or 24, Yarn Classic 1.22 and Git on macOS or Linux, then:
 
 ```sh
 yarn global add "https://github.com/FraneAgilno/rivet.git#main"
+```
+
+From your project root:
+
+```sh
 rivet setup
+rivet setup --write
+rivet doctor
 ```
 
-Review the preview, then repeat with `--write`. This configures project policy and minimal harness instructions; it does not run project scripts or configure model authentication. [Quickstart](https://franeagilno.github.io/rivet/getting-started.html).
-
-After committing the setup files and configuring the required project checks, ask your coding harness to read the Rivet skill and complete a task. With a compatible, authenticated Claude Code or Codex CLI, you can also run from the project root or any folder inside it:
+Review the setup preview before applying it. Resolve required checks and commit the configuration. With an installed, authenticated Claude Code or Codex CLI:
 
 ```sh
-rivet run "Add a greeting module"
+rivet run "Add a GET /health endpoint with a regression test"
 rivet task status
-rivet task resume
-rivet task deps
 ```
 
-Rivet discovers the project, shows the plan for approval, and manages internal run IDs and revisions. Locked dependencies get a separate approval before a spawned Worker starts; `task deps` prepares the active host Worker or accepted integration checkout when needed. `--project` is only needed when invoking it from outside the project. Direct terminal adapters support Claude Code `2.1.207` and `2.1.274`, and Codex CLI `0.148.0-alpha.9` and `0.155.0-alpha.16`. The current versions completed small local tasks with passing checks on macOS; broader first-user qualification remains open.
+Alternatively, ask your coding harness to read the Rivet skill and complete the task. Rivet detects the project, requests approval and keeps the verification results for review.
 
-## Contributor checkout
+Node.js runs Rivet itself. Your application can use Python/Django, Node.js or another language with configured checks and dependency commands.
 
-Use Node.js 22 or 24, Yarn Classic 1.22 and Git. From this source checkout:
-
-```sh
-yarn install --ignore-scripts --no-lockfile
-yarn run build
-node bin/cli.js --help
-node bin/cli.js models list
-yarn run docs:build
-yarn run docs:preview
-```
-
-This local Yarn installation leaves the existing lockfile unchanged; it does not reproduce the exact locked CI dependency tree. See [contributor guidance](https://franeagilno.github.io/rivet/contributing.html).
-
-No public package has been published. The package namespace is provisional, publication is disabled, and the license is awaiting owner selection.
-
-## What works today
-
-- Independent `rivet` command, `.rivet` configuration, and private state.
-- Namespaced Claude/Codex skill installation that preserves other frameworks' skills.
-- Harness-neutral host execution for Claude Code, Codex, Gemini CLI, OpenCode, editor agents, and other CLI-capable harnesses.
-- One-command terminal task planning and execution with project discovery, human approval, status, resume, and durable verification evidence for validated Claude/Codex CLI versions.
-- Live project protocols with explicit draft, publish, revision, and digest controls.
-- Extensible model registry with local profile validation for hosted, local, compatible, and harness providers.
-- Imported workflow, Git worktree, provider, and verification modules.
-- CI and searchable documentation source.
-
-Additional API/local model executors, shared Obsidian memory, and expanded repository delivery are **planned**, not completed. A provider appearing in the registry is not a claim of live model execution.
+**Alpha:** install from GitHub while registry distribution is being prepared. The package is currently `UNLICENSED`. See [compatibility](https://franeagilno.github.io/rivet/compatibility.html) for tested environments and limitations.
 
 ## Documentation
 
-[Read the documentation](https://franeagilno.github.io/rivet/) · [CI results](https://github.com/FraneAgilno/rivet/actions/workflows/ci.yml)
-
-- [Get started](docs/site/getting-started.md)
-- [Architecture](docs/site/architecture.md)
-- [Model providers](docs/site/models.md)
-- [Implementation status](docs/site/status.md)
+- [Quickstart](https://franeagilno.github.io/rivet/getting-started.html)
+- [Configuration and commands](https://franeagilno.github.io/rivet/runtime-reference.html)
+- [Integrations](https://franeagilno.github.io/rivet/integrations.html)
+- [Review and delivery](https://franeagilno.github.io/rivet/delivery.html)
+- [Troubleshooting](https://franeagilno.github.io/rivet/troubleshooting.html)
 - [Contributing](CONTRIBUTING.md)
-- [Source provenance](docs/PROVENANCE.md)
 
-The documentation site is built from `docs/site/` using VitePress. The public repository is [FraneAgilno/rivet](https://github.com/FraneAgilno/rivet). GitHub Pages publishing uses the repository’s documentation workflow.
+Found a problem or have an improvement? [Open an issue or pull request](https://github.com/FraneAgilno/rivet). Rivet is developed by Agilno.
