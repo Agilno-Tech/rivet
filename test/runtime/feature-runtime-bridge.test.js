@@ -13,6 +13,7 @@ import { featurePlanDigest } from '../../src/feature/plan-contract.js';
 import { createAcceptedIntegrationStore } from '../../src/feature/accepted-integration.js';
 import { createVerificationReportStore } from '../../src/feature/verification-report.js';
 import { createFeaturePlanner } from '../../src/feature/planner.js';
+import { createFeatureRunStore } from '../../src/feature/run-store.js';
 import {
   configuredFeatureGates,
   createFeatureExecutor,
@@ -104,6 +105,23 @@ function proposal() {
       },
     ],
   };
+}
+
+async function persistedRunningRun(root, runId, request, featurePlan) {
+  const store = createFeatureRunStore(await resolveFeatureRunPaths(root, runId));
+  const proposed = await store.create({ workRequest: request, featurePlan, createdAt: NOW });
+  const approved = await store.update({
+    status: 'approved', updatedAt: NOW,
+    activation: {
+      approverId: 'human-cli-operator', approvedAt: NOW,
+      requestDigest: request.digest, proposalDigest: proposed.proposalDigest,
+    },
+    runtimeRefs: [], evidenceRefs: ['approval:activation'],
+  }, { expectedVersion: proposed.version });
+  return store.update({
+    status: 'running', updatedAt: NOW,
+    runtimeRefs: approved.runtimeRefs, evidenceRefs: approved.evidenceRefs,
+  }, { expectedVersion: approved.version });
 }
 
 async function runtimeFixture(decomposition = proposal()) {
@@ -264,18 +282,7 @@ test('executes all Workers sequentially on an isolated integration branch and st
   const request = workRequest();
   const planner = createFeaturePlanner({ planningClient: { propose: async () => proposal(request) } });
   const featurePlan = await planner.propose({ config, workRequest: request, baselineCommit, client: 'claude' });
-  const digest = featurePlanDigest(featurePlan);
-  const run = structuredClone({
-    runId: 'smart-agenda-live-run',
-    status: 'running',
-    workRequest: request,
-    featurePlan,
-    proposalDigest: digest,
-    activation: {
-      approverId: 'human-cli-operator', approvedAt: NOW,
-      requestDigest: request.digest, proposalDigest: digest,
-    },
-  });
+  const run = await persistedRunningRun(root, 'smart-agenda-live-run', request, featurePlan);
   const gateExecutable = join(dirname(root), 'bounded-gate');
   await writeFile(gateExecutable, '#!/bin/sh\nif [ "$1" = ci ]; then mkdir -p node_modules; printf ready > node_modules/installed; exit 0; fi\n[ "$RIVET_GATE_ENV" = present ]\n', { mode: 0o700 });
   await chmod(gateExecutable, 0o700);
@@ -418,11 +425,7 @@ test('autonomous verification blocks a committed child-manifest deletion before 
     }],
   }) } });
   const featurePlan = await planner.propose({ config, workRequest: request, baselineCommit, client: 'claude' });
-  const digest = featurePlanDigest(featurePlan);
-  const run = {
-    runId: 'runtime-manifest-run', status: 'running', workRequest: request, featurePlan, proposalDigest: digest,
-    activation: { approverId: 'human-cli-operator', approvedAt: NOW, requestDigest: request.digest, proposalDigest: digest },
-  };
+  const run = await persistedRunningRun(root, 'runtime-manifest-run', request, featurePlan);
   const gateExecutable = join(parentRoot, 'bounded-gate');
   await writeFile(gateExecutable, `#!/bin/sh\nprintf ran > '${marker}'\n`, { mode: 0o700 });
   await chmod(gateExecutable, 0o700);
@@ -478,11 +481,7 @@ test('rejects mismatched Worker evidence before integrating its committed change
   const request = workRequest();
   const planner = createFeaturePlanner({ planningClient: { propose: async () => proposal(request) } });
   const featurePlan = await planner.propose({ config, workRequest: request, baselineCommit, client: 'claude' });
-  const digest = featurePlanDigest(featurePlan);
-  const run = {
-    runId: 'smart-agenda-evidence-run', status: 'running', workRequest: request, featurePlan, proposalDigest: digest,
-    activation: { approverId: 'human-cli-operator', approvedAt: NOW, requestDigest: request.digest, proposalDigest: digest },
-  };
+  const run = await persistedRunningRun(root, 'smart-agenda-evidence-run', request, featurePlan);
   let launches = 0;
   const executor = createFeatureExecutor({
     gitClient,
@@ -537,18 +536,7 @@ test('resumes one blocked Worker in its exact preserved checkout and records a b
   const request = workRequest();
   const planner = createFeaturePlanner({ planningClient: { propose: async () => proposal(request) } });
   const featurePlan = await planner.propose({ config, workRequest: request, baselineCommit, client: 'claude' });
-  const digest = featurePlanDigest(featurePlan);
-  const run = structuredClone({
-    runId: 'smart-agenda-recovery-run',
-    status: 'running',
-    workRequest: request,
-    featurePlan,
-    proposalDigest: digest,
-    activation: {
-      approverId: 'human-cli-operator', approvedAt: NOW,
-      requestDigest: request.digest, proposalDigest: digest,
-    },
-  });
+  const run = await persistedRunningRun(root, 'smart-agenda-recovery-run', request, featurePlan);
   const gateExecutable = join(parentRoot, 'bounded-gate');
   await writeFile(gateExecutable, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
   await chmod(gateExecutable, 0o700);

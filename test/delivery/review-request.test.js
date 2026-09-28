@@ -4,9 +4,9 @@ import { createTrustedProviderTransport } from '../../src/adapters/http.js';
 import { candidate, factsDigest } from '../../src/delivery/contract.js';
 
 const head = 'a'.repeat(40), base = 'b'.repeat(40), at = '2026-09-26T10:00:00.000Z';
-async function fixture(kind, liveClock = false, timeoutMs) {
+async function fixture(kind, liveClock = false, timeoutMs, decisionFields = {}) {
   const repository = { provider: kind, host: `${kind}.com`, namespace: 'team', name: 'repo', fullName: 'team/repo', url: `https://${kind}.com/team/repo` };
-  const target = candidate({ runId: 'run-one', repository, sourceBranch: 'feature/work', targetBranch: 'main', localVerification: { runId: 'run-one', headSha: head, evidenceDigest: 'd'.repeat(64), verifiedAt: at, status: 'passed' } });
+  const target = candidate({ runId: 'run-one', repository, sourceBranch: 'feature/work', targetBranch: 'main', ...decisionFields, localVerification: { runId: 'run-one', headSha: head, evidenceDigest: 'd'.repeat(64), verifiedAt: at, status: 'passed', ...decisionFields.localVerification } });
   const data = { head, base, repositoryId: 10, reviews: [], calls: [], postCount: 0 };
   const root = kind === 'github' ? '/repos/team/repo' : '/api/v4/projects/team%2Frepo';
   const reviewPath = kind === 'github' ? '/pulls' : '/merge_requests';
@@ -115,8 +115,8 @@ test('only explicit verified review creation can omit conditional-head support',
   assert.doesNotThrow(() => createTrustedDeliveryExecutor({ ...methods, capabilities: [{ action: 'merge', conditionalHead: true, reconcile: true }] }));
 });
 
-async function commandFixture(t, kind) {
-  const f = await fixture(kind, true);
+async function commandFixture(t, kind, decisionFields) {
+  const f = await fixture(kind, true, undefined, decisionFields);
   const { mkdtemp, rm } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
@@ -233,4 +233,41 @@ for (const kind of ['github', 'gitlab']) test(`${kind} accepts repository IDs ab
   assert.equal(receipt.status, 'succeeded');
   assert.equal((await f.executor.reconcile(op)).status, 'succeeded');
   assert.equal(f.data.postCount, 1);
+});
+
+async function decisionFields() {
+  const { createDecision, renderDecisions } = await import('../../src/feature/decisions.js');
+  const { hash } = await import('../../src/delivery/contract.js');
+  const bindings = { runId: 'run-one', requestDigest: 'a'.repeat(64), planDigest: 'b'.repeat(64) };
+  const decision = createDecision({ id: 'response-format', tier: 1, title: 'API response format',
+    options: [{ id: 'json', description: 'JSON status object' }, { id: 'text', description: 'Plain text' }],
+    choice: 'json', rationale: 'Match the existing endpoint convention.' },
+    { ...bindings, actor: { kind: 'agent', id: 'host-agent' }, now: at });
+  const decisionSummary = renderDecisions([decision], bindings);
+  return { decisionSummary, localVerification: { governanceDigest: 'c'.repeat(64), decisionSummaryDigest: hash(decisionSummary) } };
+}
+for (const kind of ['github', 'gitlab']) {
+  test(`${kind} sends the exact generated journal summary with review creation`, async () => {
+    const fields = await decisionFields();
+    const f = await fixture(kind, false, undefined, fields), operation = await f.operation();
+    await f.executor.dispatch(operation, { deadline: '2026-09-26T10:01:00.000Z' });
+    const wire = JSON.parse(f.data.calls.find(call => call.method === 'POST').body);
+    assert.ok((wire.body ?? wire.description).includes(fields.decisionSummary));
+    assert.equal(f.data.postCount, 1);
+  });
+}
+test('journal changing after human review prevents PR creation at the second local check', async t => {
+  const fields = await decisionFields();
+  const f = await commandFixture(t, 'github', fields);
+  let currentDigest = fields.localVerification.governanceDigest;
+  f.input.validateLocal = async candidate => {
+    f.calls.local++;
+    if (candidate.localVerification.governanceDigest !== currentDigest) throw new Error('Local governance evidence changed.');
+  };
+  f.input.dependencies.confirmDelivery = async () => { f.calls.confirm++; currentDigest = 'f'.repeat(64); return true; };
+  const { runRemoteDelivery } = await import('../../src/commands/delivery-remote.js');
+  await assert.rejects(runRemoteDelivery(f.input), /governance evidence changed/);
+  assert.equal(f.calls.local, 2);
+  assert.equal(f.calls.confirm, 1);
+  assert.equal(f.data.postCount, 0);
 });

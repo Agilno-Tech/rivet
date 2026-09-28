@@ -425,6 +425,18 @@ export async function createGitClient(options = {}) {
       }
     },
 
+    async readCommittedFile(cwd, commit, path) {
+      if (!validSha(commit)) fail('invalid-input');
+      repositoryPath(path);
+      const tree = await run(absoluteInput(cwd), ['ls-tree', '-z', commit, '--', path]);
+      if (!tree.output) return null; // Deleted paths have no blob in the target tree.
+      const match = /^(100644|100755) blob ([0-9a-f]{40}|[0-9a-f]{64})\t([^\0]+)\0$/.exec(tree.output);
+      if (!match || match[3] !== path) fail('repository-path-unsafe');
+      const result = await run(absoluteInput(cwd), ['cat-file', 'blob', match[2]], [0], 1024 * 1024);
+      if (result.output.includes('\0')) fail('git-output-invalid');
+      return Object.freeze({path, blob:match[2], content:result.output});
+    },
+
     async inspectTrackedFile(cwd, commit, path) {
       if (!validSha(commit)) fail('invalid-input');
       repositoryPath(path);

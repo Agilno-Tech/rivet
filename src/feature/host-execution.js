@@ -1,3 +1,4 @@
+import { inspectGovernance, requireGovernance } from './governance.js';
 import {assertSelectedProtocolRefs, selectedProtocolStatus} from '../protocols/project.js';
 import {createProtocolPresentation, protocolLookupContext} from '../protocols/presentation.js';
 import { lstat, realpath } from 'node:fs/promises';
@@ -260,6 +261,7 @@ export function createHostExecution(input) {
     const value = request(inputValue, 'expectedRunVersion');
     const { store, run } = await runRecord(value.project, value.runId);
     if (!['approved', 'running'].includes(run.status) || run.version !== value.expectedRunVersion) fail('state-conflict');
+    await requireGovernance({project:value.project,run,gitClient,phase:'plan'});
     const preparedContext = await runtimeContext(value.project, run);
     const running = run.status === 'running' ? run : await store.update({
       status: 'running',
@@ -299,6 +301,7 @@ export function createHostExecution(input) {
     try {
       const { run } = await runRecord(value.project, value.runId);
       if (run.status !== 'running') fail('state-conflict');
+      await requireGovernance({project:value.project,run,gitClient,phase:'plan'});
       const { instance, runtime } = await runtimeContext(value.project, run);
       const prepared = await runtime.prepareAction(instance, { expectedVersion: value.expectedRuntimeVersion });
       if (prepared.action === null) {
@@ -450,6 +453,7 @@ export function createHostExecution(input) {
           gates: await configuredFeatureGates(config, resolveCommandExecutable, integration.path),
           environment,
         }, { gitClient, now: () => featureNowMilliseconds(now) });
+        if(quality.status==='pass') await requireGovernance({project:value.project,run,gitClient,config,phase:'final',checkout:{path:integration.path,branch:integration.branch,commitSha:integrated.headSha}});
       } catch (error) {
         failure = typeof error?.safeMessage === 'string' ? error.safeMessage : 'Verification could not complete safely.';
       }
@@ -462,7 +466,7 @@ export function createHostExecution(input) {
         run, state, integration, commitSha: integrated.headSha, changedPaths,
         quality, failure, checkedAt: now(),
       }));
-      if (quality?.status !== 'pass') fail('verification-failed');
+      if (failure || quality?.status !== 'pass') fail('verification-failed');
       const beforeFinal = await gitClient.inspectRepository(integration.path);
       if (beforeFinal.dirty || beforeFinal.branch !== integration.branch
         || beforeFinal.headSha !== accepted.commitSha) fail('repository');
@@ -592,7 +596,10 @@ export function createHostExecution(input) {
     const verificationStale = verification !== null && accepted !== null
       && (verification.commitSha !== accepted.commitSha || checkout?.status !== 'clean');
     const protocols = selectedProtocolStatus(value.project, run.workRequest.contextRefs);
-    const deliverable = protocols.status === 'current' && run.status === 'awaiting-final-approval'
+    let governance;
+    try { governance = await inspectGovernance({project:value.project,run,gitClient,phase:readyForVerification?'final':'plan'}); }
+    catch (error) { governance = {ready:false,decisions:[],review:{humanEscalation:false},blockers:[{code:'governance-unavailable'}],nextAction:error.safeMessage ?? 'Decision or review evidence could not be read safely. Inspect private task state before continuing.'}; }
+    const deliverable = governance.ready && protocols.status === 'current' && run.status === 'awaiting-final-approval'
       && runtime !== null && readyForVerification
       && accepted !== null && checkout?.status === 'clean'
       && verification?.status === 'pass'
@@ -603,6 +610,7 @@ export function createHostExecution(input) {
       && verification.integration.branch === accepted.branch;
     const nextAction = protocols.status === 'changed' ? protocols.message : checkout?.status === 'stale' || verificationStale
       ? 'The integration checkout no longer matches the accepted tested commit. Do not deliver it; create a new reviewed proposal for source changes.'
+      : !governance.ready ? governance.nextAction
       : run.status === 'awaiting-final-approval' && !deliverable
       ? 'Final approval evidence is missing or inconsistent. Do not deliver this run; inspect private state and create a new reviewed proposal if it cannot be restored.'
       : deliverable
@@ -626,7 +634,7 @@ export function createHostExecution(input) {
                 ? 'Use work prepare with run.version to create the isolated execution state.'
                 : 'Use rivet task resume to continue the approved spawned task.'
               : 'Review the proposal and current run state before proceeding.';
-    return immutableJson({ run, runtime, protocols, verification, checkout, workerCheckouts, deliveryReady: deliverable, blockedNodes, nextAction });
+    return immutableJson({ run, runtime, protocols, governance, verification, checkout, workerCheckouts, deliveryReady: deliverable, blockedNodes, nextAction });
   }
 
   return Object.freeze({ prepare, nextAction, submitResult, verify, status, recover });

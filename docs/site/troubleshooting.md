@@ -26,20 +26,6 @@ Run `rivet models list`. `planned` means the descriptor/profile contract exists 
 
 Rivet uses `.rivet` and `RIVET_*`. Preview a fresh configuration with `rivet init --project=<path>` and review it before writing.
 
-## A Python or other non-Node project asks for package.json
-
-Node.js runs the Rivet CLI, but your application does not need a Node manifest. Older installations required `package.json` during discovery and could report its absence as `REPOSITORY_CONFLICT`. Update Rivet using the [installation instructions](./installation.md), then preview `rivet setup` in the project root. Do not add a dummy manifest as a workaround.
-
-Django, pytest metadata, Go modules, and Cargo projects have conventional checks proposed for review. If no commands can be detected, interactive `rivet setup --write` asks for a verification command. A harness or automated setup can pass explicit arguments:
-
-```sh
-rivet setup --checks-json='{"test":["python3","-m","pytest"]}'
-rivet setup --write --checks-json='{"test":["python3","-m","pytest"]}'
-rivet doctor
-```
-
-Use the actual command your project runs. At least one required `test` or `check` is needed; a build command is optional. See [schema 3 checks](./runtime-reference.md#checks-for-any-project-language). Setup preserves existing valid policy, so review its project and quality files if they still contain unsuitable commands.
-
 ## A configured check cannot find its executable or dependencies
 
 Read `rivet doctor` for the exact failing command and working directory. Make that executable available on the `PATH` used to launch Rivet. Checks execute in isolated checkouts, so prepare dependencies at the Worker or integration path shown by task status. Use `rivet task deps` for a configured dependency plan and approve its exact commands, or follow the project’s documented environment procedure. Generated Python setup uses the checkout’s `.rivet-deps/venv`. Rivet does not copy source dependencies or install packages through verification commands. `preparation-required` means the configured plan can create a missing executable; it does not certify successful tests.

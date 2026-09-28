@@ -37,7 +37,7 @@ test('bot release PR explicitly starts CI and docs without publishing docs', asy
 
 test('existing successful or active checks prevent duplicate dispatch', async () => {
   for (const run of [{ status: 'completed', conclusion: 'success' }, { status: 'in_progress' }, { status: 'queued' }]) {
-    const api = mock({ runs: [{ ...run, head_sha: pr.head.sha, head_branch: pr.head.ref }] });
+    const api = mock({ runs: [{ ...run, event: 'workflow_dispatch', head_sha: pr.head.sha, head_branch: pr.head.ref }] });
     assert.deepEqual(await dispatchReleaseWorkflows({ env, request: api.request }), []);
     assert.equal(api.calls.some(call => call.method === 'POST'), false);
   }
@@ -48,7 +48,7 @@ test('failed checks or checks against an old SHA do not suppress verification', 
     { head_sha: pr.head.sha, head_branch: pr.head.ref, status: 'completed', conclusion: 'failure' },
     { head_sha: 'b'.repeat(40), head_branch: pr.head.ref, status: 'completed', conclusion: 'success' },
   ]) {
-    const api = mock({ runs: [run] });
+    const api = mock({ runs: [{ event: 'workflow_dispatch', ...run }] });
     assert.equal((await dispatchReleaseWorkflows({ env, request: api.request })).length, 2);
   }
 });
@@ -105,4 +105,11 @@ test('release manifest starts from published alpha and uses Node prerelease upda
   assert.equal(release['bump-patch-for-minor-pre-major'], true);
   assert.equal(release['include-component-in-tag'], false);
   assert.equal(release['changelog-path'], 'CHANGELOG.md');
+});
+
+test('successful or queued PR records cannot substitute for explicitly dispatched checks', async () => {
+  for (const event of ['pull_request', 'push', undefined]) for (const status of ['completed', 'queued']) {
+    const api = mock({ runs: [{ event, head_sha: pr.head.sha, head_branch: pr.head.ref, status, conclusion: 'success' }] });
+    assert.deepEqual(await dispatchReleaseWorkflows({ env, request: api.request }), ['ci.yml', 'docs.yml']);
+  }
 });

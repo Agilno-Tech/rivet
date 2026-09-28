@@ -6,7 +6,7 @@ This describes the current alpha runtime, including the active-harness workflow 
 
 Run `rivet --help` for command syntax. `rivet init --project=<path>` previews project policy; `--write` creates reviewed `.rivet` configuration. `rivet preflight --project=<path>` reports orchestration readiness; `--mode=host` checks host repository, tool, and script readiness without requiring a private goal or unused provider credentials. `rivet doctor --project=<path>` reports general project readiness.
 
-Node.js 22 or 24 runs Rivet itself. The application can use another language and does not need a `package.json`. Existing Node project configuration uses schema version 1, where each logical command is one three-token package-manager invocation, or schema version 2 for structured package-script steps:
+Node.js 22 or 24 runs Rivet itself. The application can use any language with project-configured verification commands. Existing Node project configuration uses schema version 1, where each logical command is one three-token package-manager invocation, or schema version 2 for structured package-script steps:
 
 ```yaml
 schemaVersion: 2
@@ -159,3 +159,89 @@ The host needs permission to invoke Rivet, edit the exact reserved checkout, wri
 `--request-text` requires Markdown with a `# Title` and a nonempty `## Acceptance Criteria` bullet list. The active harness converts the user's request into this format. It must preserve the requested scope rather than inventing criteria.
 
 `--decomposition-json` contains exactly `schemaVersion: 1`, `kind: "agilno.feature-decomposition"`, and `workItems`. Each of 1–16 work items has `objective`, `ownedPaths`, and `acceptanceCriterionIndexes`. Indexes start at one and must cover every request criterion. Owned paths list files to change, not files merely read. Roles, commands, budgets, and approval gates come from project policy and are not decomposition fields. The installed Rivet skill includes a complete example.
+
+## Task decisions and review evidence
+
+Use the task's decision record for design choices, assumptions and trade-offs that affect acceptance. Record the options considered, the reason for the selected option and supporting evidence. Material changes to scope or architecture need human approval; recording a decision does not expand the approved task.
+
+```sh
+rivet task decisions
+rivet task decide --input=./review/decision.json
+rivet task approve-decision --decision=<decision-id>
+```
+
+For example, record a bounded implementation choice without creating a file:
+
+```sh
+rivet task decide --input-json='{"id":"health-response","tier":1,"title":"Health response format","options":[{"id":"json","description":"Return a JSON object using the existing API convention"},{"id":"text","description":"Return plain text"}],"choice":"json","rationale":"The approved endpoint task follows the existing JSON API convention."}'
+```
+
+Choose the tier honestly; it does not grant additional task authority:
+
+| Tier | Recorded behavior |
+| --- | --- |
+| 0 | Reuses a matching choice from the approved plan. Requires `approvedPlanDecisionId` referencing that existing decision. |
+| 1 | Records an implementation choice within existing authority, without a new human approval. |
+| 2 | Remains pending until explicit human approval. |
+| 3 | Escalates the decision for human resolution; it also remains pending until explicit human approval. |
+
+Use either `--input=<project-local-json-file>` (up to 128 KiB) or `--input-json=<serialized-json>` (up to 64 KiB), never both. Inline JSON avoids creating an untracked file on the clean source checkout. File examples above assume an already ignored private input directory; creating an ordinary untracked `review/` directory can make the source checkout dirty and block workflow checks. Keep private context and credentials out of inputs. `approve-decision` requires an interactive human confirmation; an agent must not pipe an answer or approve its own exception. Use `--run=<id>` when the task cannot be selected unambiguously.
+
+Review the plan before execution and the accepted changes before delivery:
+
+```sh
+rivet task review --phase=plan
+rivet task review --phase=final
+rivet task review --input=./review/report.json
+```
+
+Without `--input`, the command exports the review context for the selected phase. With `--input` or `--input-json`, it records a structured reviewer judgment against the matching task, request, plan and commit/diff identity. Re-export context after those inputs change. A review for different source or a different plan does not approve the current task. Rivet does not automatically send source to another model or launch an independent reviewer. Use your approved reviewer or harness, inspect the report, then submit it. The same mutually exclusive file/inline input limits apply; prefer inline input when a file would dirty the approved source checkout.
+
+Configure review requirements in `.rivet/quality.yaml` and commit the policy before proposing a task:
+
+```yaml
+review:
+  required: true
+  maxRounds: 3
+  strictCoverage: true
+  reviewers:
+    - id: security-reviewer
+      paths: ["src/auth/**"]
+      required: true
+```
+
+The exported context includes `reportTemplates` and reviewer path assignments in `review.reviewerPaths`. Start with the template for the assigned reviewer and preserve its exact task, request, plan, commit and diff identities. Templates deliberately begin with `status: FAIL`, `blocking: true`, empty coverage and a finding stating that review has not happened.
+
+Complete the review before submitting: replace the reviewer actor placeholder with the actual independent reviewer identity; record reviewed files, executed commands and the review time; and map each acceptance criterion by its one-based `criterionIndex` to assigned `planNodeIds`, reviewed paths and test/manual evidence with a reference and summary. Record missing requirements, unrequested work and other problems as findings. Use `PASS` only after the required coverage is complete and no blocking finding remains. Editing the template to say `PASS` without performing the review does not produce valid evidence.
+
+Review is opt-in: `required` defaults to `false`. The default review-round limit is three. Path rules select the required reviewer coverage; use reviewer identities that are independent of the implementation actors. A structured report supports an accountable review but does not itself prove that a separate person or model performed the work. Missing required coverage, unresolved findings or exhausted rounds require correction or human resolution, not a manufactured passing report.
+
+## Optional changed-content checks
+
+Add `contentScan` to `.rivet/quality.yaml` and commit the policy before proposing a task to scan changed committed content during verification. The scanner uses the accepted Git content, not a worker's description of its edits.
+
+```yaml
+contentScan:
+  secrets: true
+  unicode: warn
+  maxFiles: 1000
+  maxBytes: 2097152
+  allowlist: []
+```
+
+The built-in secret checks look for private-key markers and high-confidence GitHub, npm and AWS credential patterns. Findings include the file, line and rule, without matched values or source snippets. Detection is limited to those patterns; passing this scan does not prove the absence of secrets.
+
+Unicode checks flag bidirectional control characters and mixed Latin/Cyrillic/Greek identifiers in recognized code files. `warn` is the default; `required` makes those findings blocking and `off` disables Unicode checks. The identifier scan is a lexical heuristic, not a language parser. Ordinary multilingual prose, strings, mathematical text and emoji are not banned, and legitimate joiners are not blanket-rejected.
+
+Exceptions must specify one exact relative file path, one known rule and a nonempty explanation. Wildcard suppression and arbitrary regular expressions are not supported. For example, a reviewed fixture containing a private-key marker can use:
+
+```yaml
+allowlist:
+  - ruleId: private-key
+    path: test/fixtures/key-marker.txt
+    reason: Contains a marker only for a scanner regression test
+```
+
+The example is nested under `contentScan`. Do not use an exception to accept a real credential. Resource-limit failures and unreadable scan inputs require investigation rather than being treated as a pass.
+
+Projects can also opt into the known `type-suppression` rule for explicit file paths through `shortcutRules`, with a reason and optional `required: true`. This reports `@ts-ignore` and `@ts-nocheck`; it does not establish whether every shortcut or placeholder is acceptable. Use existing configured command gates for broader tools such as Gitleaks, language-specific linters and project-specific checks. Rivet does not install or launch extra scanners implicitly.
