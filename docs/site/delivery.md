@@ -2,6 +2,14 @@
 
 Rivet can prepare a delivery record from a verified active-harness run. Native GitHub.com, GitLab.com and Bitbucket Cloud executors can create a review request for an already published verified branch and separately update its title and description. GitHub/GitLab merging uses the supported policies below. Project-configured GitHub Actions deployment is also implemented. Jira/Linear delivery-summary comments and separately approved status transitions are supported after a confirmed merge. Create-only branch publication is implemented for configured GitHub.com, GitLab.com and Bitbucket Cloud HTTPS destinations. Merge Bitbucket PRs manually in Bitbucket; automatic merging is not available. Live testing remains pending.
 
+## Apply locally or prepare a review
+
+At `awaiting-final-approval`, run `rivet task approve` from your project. Choose **Apply locally** to confirm a fast-forward of the original default branch to the verified commit, or **Pull-request delivery** to prepare the record described below. This works for verified terminal tasks and tasks performed through a coding harness.
+
+Local application requires a clean original checkout at the proposal's baseline, a clean integration checkout at the tested commit, and unchanged committed Rivet configuration. It records local acceptance and marks the task completed; it does not publish a branch, create a review, merge remotely or deploy. If you need a team review, choose pull-request delivery before applying locally.
+
+If local application is interrupted, preserve both checkouts and retry `rivet task approve --run=<id>`. If a hard crash left an abandoned operation lock, first run `rivet task recover --run=<id>`. Recovery only removes unchanged local locks whose owner is provably dead and which are at least five minutes old; it does not apply changes or restart workers. An exact saved approval and already-applied commit allow Rivet to finish recording completion without another Git update. If the result is uncertain or the checkout differs, Rivet stops for inspection instead of retrying the merge.
+
 ## Prepare verified work
 
 From a configured project root or nested folder:

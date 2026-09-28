@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { loadProjectConfig } from '../config/load.js';
 import { resolveConfiguredProject } from '../cli/project-discovery.js';
 import { withTerminalInterruption } from '../cli/interrupt.js';
 import { CliError, EXIT_CODES, observeOutputErrors } from '../cli/output.js';
@@ -60,11 +62,11 @@ function reviewLines(project, task, harness, proposal) {
   for (const node of plan.nodes) {
     lines.push(`  ${node.role} (${node.id}): ${node.objective}`);
     for (const path of node.ownedPaths ?? []) lines.push(`    path: ${path}`);
-    for (const dependency of node.dependencies ?? []) lines.push(`    after: ${dependency}`);
-    for (const criterion of node.acceptanceCriteria ?? []) lines.push(`    accepts: ${criterion}`);
-    for (const scope of node.authorityScopes ?? []) lines.push(`    authority: ${scope}`);
-    for (const command of node.commandIds ?? []) lines.push(`    command: ${command}`);
-    for (const evidence of node.requiredEvidenceTypes ?? []) lines.push(`    evidence: ${evidence}`);
+    if (node.dependencies?.length) lines.push(`    after: ${node.dependencies.join(', ')}`);
+    if (node.acceptanceCriteria?.length) lines.push(`    accepts: ${node.acceptanceCriteria.join('; ')}`);
+    if (node.authorityScopes?.length) lines.push(`    authority: ${node.authorityScopes.join(', ')}`);
+    if (node.commandIds?.length) lines.push(`    commands: ${node.commandIds.join(', ')}`);
+    if (node.requiredEvidenceTypes?.length) lines.push(`    evidence: ${node.requiredEvidenceTypes.join(', ')}`);
     if (node.role === 'worker') {
       lines.push(`    executor: ${node.execution?.client ?? plan.client ?? harness.kind}`);
       const profile = node.execution ? node.execution.clientProfile : plan.clientProfile;
@@ -156,12 +158,20 @@ async function runInteractive(parsed, dependencies, signal) {
     try { await harnesses.select(kind, project.root, { signal }); }
     catch { fail(`The selected worker harness ${kind} is unavailable or incompatible. Install and authenticate it before activation.`, 'PROVIDER_UNAVAILABLE'); }
   }
+  return activateProposal(project, parsed.operands[0], selected, proposal, dependencies, signal);
+}
+
+export async function activateProposal(project, task, selected, proposal, dependencies, signal) {
+  const reviewedConfig = createHash('sha256').update(JSON.stringify(project.config)).digest('hex');
+  const feature = dependencies.feature;
+  if (!feature || typeof feature.start !== 'function' || typeof feature.watch !== 'function'
+    || typeof dependencies.confirmFeatureActivation !== 'function') fail('Feature workflow is unavailable.', 'MISSING_CONFIGURATION');
   let outputFailed = false;
   const unobserve = observeOutputErrors(dependencies.output, () => { outputFailed = true; });
   let approved = false;
   try {
     try {
-      for (const line of reviewLines(project, parsed.operands[0], selected, proposal)) dependencies.output.log(line);
+      for (const line of reviewLines(project, task, selected, proposal)) dependencies.output.log(line);
     } catch { fail('Could not display the complete plan. The task was not activated.', 'REPOSITORY_CONFLICT'); }
     if (outputFailed) fail('Could not display the complete plan. The task was not activated.', 'REPOSITORY_CONFLICT');
     if (signal.aborted) fail('Task interrupted before activation.', 'REPOSITORY_CONFLICT');
@@ -170,9 +180,12 @@ async function runInteractive(parsed, dependencies, signal) {
   } finally { unobserve?.(); }
   if (!approved) {
     dependencies.output.log('Plan not activated. The proposal remains available for review.');
+    dependencies.output.log(`Review and start it later (from the project shown above): rivet task start --run=${proposal.runId}`);
     return EXIT_CODES.SUCCESS;
   }
   if (signal.aborted) fail('Task interrupted before activation.', 'REPOSITORY_CONFLICT');
+  const currentConfig = createHash('sha256').update(JSON.stringify(await loadProjectConfig(project.root))).digest('hex');
+  if (currentConfig !== reviewedConfig) fail('Project configuration changed during review. Review the saved proposal again with rivet task start.', 'REPOSITORY_CONFLICT');
   const started = await invokeFeature(feature, 'start', {
     project: project.root, runId: proposal.runId,
     expectedVersion: proposal.version, proposalDigest: proposal.proposalDigest,
@@ -183,5 +196,6 @@ async function runInteractive(parsed, dependencies, signal) {
   dependencies.output.log(`Rivet task: ${visible(result.status)}.`);
   if (result.summary) dependencies.output.log(visible(result.summary));
   dependencies.output.log('Use rivet task status to inspect the checkout and verification evidence.');
+  if (result.status === 'awaiting-final-approval') dependencies.output.log('Review and finish the task with rivet task approve.');
   return resultCode(result);
 }

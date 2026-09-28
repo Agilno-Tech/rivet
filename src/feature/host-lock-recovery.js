@@ -13,7 +13,7 @@ import { readSnapshotWithoutLock } from '../state/snapshot-store.js';
 import { createFeatureRunStore } from './run-store.js';
 
 function invalid() {
-  const error = new Error('Host recovery requires valid saved host run and runtime state.');
+  const error = new Error('Lock recovery requires valid saved host state or a finished spawned task awaiting local acceptance.');
   error.code = 'ERR_HOST_RUN_RECOVERY_STATE';
   error.safeMessage = error.message;
   throw error;
@@ -28,8 +28,10 @@ export async function recoverHostRunLocks(project, runId) {
   async function validate() {
     await verifyResolvedStatePaths(paths);
     const run = await createFeatureRunStore(paths).readOnly();
-    if (!run || run.featurePlan.client !== 'host') invalid();
-    createFeaturePlan({ proposal: run.featurePlan, config, workRequest: run.workRequest, baselineCommit: run.featurePlan.baselineCommit, client: 'host' });
+    if (!run) invalid();
+    const spawned = run.featurePlan.client !== 'host';
+    if (spawned && !['awaiting-final-approval', 'completed'].includes(run.status)) invalid();
+    createFeaturePlan({ proposal: run.featurePlan, config, workRequest: run.workRequest, baselineCommit: run.featurePlan.baselineCommit, client: run.featurePlan.client });
     let runtime = null;
     let savedSnapshot = null;
     if (runtimePaths !== null) {
@@ -44,7 +46,14 @@ export async function recoverHostRunLocks(project, runId) {
         if (!isDeepStrictEqual(fixedGraph(runtime.graph), fixedGraph(expected))) invalid();
       }
     } else if (!['proposed', 'approved'].includes(run.status) || run.runtimeRefs.length !== 0) invalid();
-    return { runVersion: run.version, runtimeVersion: runtime?.version ?? null,
+    // A finished spawned task may have crashed while holding this lock during
+    // local confirmation/application. Recover ownership only: this does not
+    // authorize a Git update, restart a Worker, or change acceptance evidence.
+    if (spawned && (!runtime
+      || runtime.graph.nodes.find(node => node.id === 'final-delivery')?.status !== 'ready'
+      || runtime.graph.nodes.some(node => node.owner.role === 'worker'
+        && !['completed', 'archived'].includes(node.status)))) invalid();
+    return { spawned, runVersion: run.version, runtimeVersion: runtime?.version ?? null,
       fingerprint: createHash('sha256').update(JSON.stringify({ run, savedSnapshot })).digest('hex') };
   }
   const initial = await validate();
@@ -80,6 +89,8 @@ export async function recoverHostRunLocks(project, runId) {
     ...(failure ? { blockedLock } : {}),
     nextAction: failure
       ? 'Recovery stopped safely. Inspect the remaining lock owner and private state before retrying; recovered locks are listed above.'
-      : 'Read task status and continue in the owning harness. Recovery did not resume workers or change task state.',
+      : initial.spawned
+        ? 'Read rivet task status, then rivet task approve to inspect local acceptance. Recovery did not resume workers, apply changes, or change task state.'
+        : 'Read task status and continue in the owning harness. Recovery did not resume workers or change task state.',
   });
 }

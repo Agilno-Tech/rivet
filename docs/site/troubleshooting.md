@@ -83,11 +83,11 @@ rivet task recover
 rivet task status
 ```
 
-If several active host tasks exist, add `--run=<id>` using the displayed list. Outside the project, add `--project=<path>`. Harnesses can use `rivet work recover <run-id> --project=<absolute-path> --json`.
+If several eligible tasks exist, add `--run=<id>` using the displayed list. Completed tasks require an explicit `--run=<id>`. Outside the project, add `--project=<path>`. Harnesses can use `rivet work recover <run-id> --project=<absolute-path> --json`.
 
 Recovery only removes an unchanged abandoned owner on the same machine, with a provably dead process and a lock at least five minutes old. Fresh, live, foreign, malformed or already-claimed owners stay blocked. Saved run/runtime state and the current configuration must validate before recovery; missing state after execution began is blocked. An interrupted preparation can be recovered before it created a runtime snapshot. Do not edit private state or delete locks to bypass these checks.
 
-The response lists exactly which locks were recovered. A later blocked lock produces a nonzero result even if earlier locks were recovered. Task state, verification evidence and worktrees are preserved; recovery does not launch or resume a Worker. Read status afterward and continue through the owning harness. Spawned tasks are excluded because removing a host lock cannot establish that their Worker has stopped.
+The response lists exactly which locks were recovered. A later blocked lock produces a nonzero result even if earlier locks were recovered. Task state, verification evidence and worktrees are preserved; recovery does not launch or resume a Worker. Read status afterward and continue through the owning harness. Terminal tasks at final review or completed local acceptance also support lock recovery when the saved runtime proves the workers finished; retry `rivet task approve --run=<id>` afterward. Running or blocked spawned tasks remain excluded because removing a lock cannot establish that their Worker has stopped.
 
 
 ## No compatible CLI was found
@@ -116,3 +116,13 @@ rivet support --probe-harnesses --json > rivet-support.json
 These bounded local probes inspect version/help output. They do not execute a model task, authenticate an account or check external provider connectivity. Without the flag, harness capabilities are reported as not checked. Optional integration unavailability is recorded separately from required readiness failures.
 
 `support` reports whether collection completed; it does not certify that the project is ready. A successfully generated bundle can contain failed readiness checks or an incomplete diagnostic category. Use `rivet doctor` for the readiness exit status. The command writes to terminal output only; shell redirection creates the JSON file. Nothing is uploaded automatically.
+
+## The plan was not activated
+
+Closing or declining the activation prompt leaves the plan saved. Run `rivet task start` inside the project to see the exact proposal again and approve it. `rivet task resume` also offers this review for a proposed terminal task. If several tasks are active, add `--run=<id>` from the listed choices. The activation prompt has no reading timeout.
+
+## The task is awaiting final approval
+
+Run `rivet task status`, inspect the integration diff and recorded checks, then run `rivet task approve`. Choose local application or pull-request delivery. Local application needs the original clean default branch at the task's starting commit and unchanged committed Rivet configuration. Changing policy or either checkout invalidates the old approval; do not force-reset your changes to bypass this check.
+
+The `feature` and `work` command families are lower-level harness interfaces with explicit identifiers and version checks. For normal terminal use, use `run` and `task`; `rivet run` already activates and executes after your approval.
