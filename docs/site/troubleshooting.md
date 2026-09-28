@@ -8,11 +8,11 @@ If Git cannot be found or used, the error now identifies Git and explains how to
 
 ## The public install command does not resolve
 
-No Rivet package has been published from this repository yet. Use the source installation instructions. The temporary package name does not establish ownership of a public namespace.
+Use the exact package name `@agilno-tech/rivet@alpha` from the [installation guide](./installation.md). It is public on the [npm registry](https://www.npmjs.com/package/@agilno-tech/rivet); installing it does not require an npm account. If your package manager uses a private registry or an `@agilno-tech` scope override, check that configuration and your network access to `https://registry.npmjs.org/`. A `401` or `403` during installation can indicate stale credentials or registry policy.
 
 ## Installation succeeds but rivet is missing
 
-Check the global executable directory for your installer: `yarn global bin` for Yarn Classic, the `bin` directory under `npm prefix --global` for npm, or `pnpm bin --global` for pnpm. Ensure it is on PATH, then verify `rivet --help`. If pnpm reports no global directory, run `pnpm setup` and reopen your terminal. Modern Yarn does not provide `yarn global`; use npm or pnpm instead. Reinstall using the [documented source command](./installation.md) if the installed binary is missing. Package-manager success alone does not prove the CLI is available.
+Check the global executable directory for your installer: `yarn global bin` for Yarn Classic, the `bin` directory under `npm prefix --global` for npm, or `pnpm bin --global` for pnpm. Ensure it is on PATH, then verify `rivet --help`. If pnpm reports no global directory, run `pnpm setup` and reopen your terminal. Modern Yarn does not provide `yarn global`; use npm or pnpm instead. Reinstall using the [documented installation command](./installation.md) if the installed binary is missing. Package-manager success alone does not prove the CLI is available.
 
 ## Setup cannot install the harness skill
 

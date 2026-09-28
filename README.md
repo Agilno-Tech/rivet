@@ -10,13 +10,13 @@ Install Node.js 22 or 24 and Git on macOS or Linux, then choose one package mana
 
 ```sh
 # Yarn Classic 1.22
-yarn global add "https://github.com/Agilno-Tech/rivet.git#main"
+yarn global add @agilno-tech/rivet@alpha
 
 # npm
-npm install --global "https://github.com/Agilno-Tech/rivet.git#main"
+npm install --global @agilno-tech/rivet@alpha
 
 # pnpm
-pnpm add --global "https://github.com/Agilno-Tech/rivet.git#main"
+pnpm add --global @agilno-tech/rivet@alpha
 ```
 
 Use one command. Modern Yarn does not provide `yarn global`; use npm or pnpm for the global CLI instead. See [installation](https://agilno-tech.github.io/rivet/installation.html) for PATH setup.
@@ -43,7 +43,7 @@ Alternatively, ask your coding harness to read the Rivet skill and complete the 
 
 Node.js runs Rivet itself. Your application can use Python/Django, Node.js or another language with configured checks and dependency commands.
 
-**Alpha:** install from GitHub while registry distribution is being prepared. Rivet is licensed under [Apache 2.0](LICENSE). See [compatibility](https://agilno-tech.github.io/rivet/compatibility.html) for tested environments and limitations.
+**Alpha:** available on [npm as `@agilno-tech/rivet`](https://www.npmjs.com/package/@agilno-tech/rivet). Use `@alpha` to select the alpha channel. Rivet is licensed under [Apache 2.0](LICENSE). See [compatibility](https://agilno-tech.github.io/rivet/compatibility.html) for tested environments and limitations.
 
 ## Documentation
 

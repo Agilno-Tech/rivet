@@ -10,7 +10,7 @@ rivet run "Add a GET /health endpoint with a regression test"
 
 Rivet works with configured checks and dependency commands for Node.js, Python/Django, Go, Rust and other projects. Node.js is required to run Rivet itself.
 
-**Rivet is an alpha.** Install from GitHub while registry distribution is being prepared. See [supported environments and limitations](./compatibility.md) before adopting it for your team.
+**Rivet is an alpha.** Install the published [npm package](https://www.npmjs.com/package/@agilno-tech/rivet) using the [quickstart](./getting-started.md). See [supported environments and limitations](./compatibility.md) before adopting it for your team.
 
 ## Start here
 

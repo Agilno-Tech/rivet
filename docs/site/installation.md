@@ -7,15 +7,15 @@ Use Node.js 22 or 24 and Git on macOS or Linux. Choose one package manager:
 ::: code-group
 
 ```sh [Yarn Classic]
-yarn global add "https://github.com/Agilno-Tech/rivet.git#main"
+yarn global add @agilno-tech/rivet@alpha
 ```
 
 ```sh [npm]
-npm install --global "https://github.com/Agilno-Tech/rivet.git#main"
+npm install --global @agilno-tech/rivet@alpha
 ```
 
 ```sh [pnpm]
-pnpm add --global "https://github.com/Agilno-Tech/rivet.git#main"
+pnpm add --global @agilno-tech/rivet@alpha
 ```
 
 :::
@@ -26,7 +26,7 @@ rivet setup
 rivet setup --write
 ```
 
-The source branch is a moving alpha, not a versioned registry release. Replace `main` with a reviewed commit SHA for reproducible source selection. Use a user-owned installation directory rather than running the installer as root. Installing Rivet does not change your application's package manager.
+The package is published on [npm](https://www.npmjs.com/package/@agilno-tech/rivet); its executable is `rivet` with every package manager. `@alpha` selects the current alpha release. Replace `@alpha` with `@0.1.0-alpha.0` to install that exact version. Use a user-owned installation directory rather than running the installer as root. Installing Rivet does not change your application's package manager.
 
 Confirm `rivet --help` works before setup:
 
@@ -58,31 +58,9 @@ pnpm remove --global @agilno/rivet
 
 :::
 
-Then install from the new repository using the commands above and verify `rivet --help`. Removing the old global package preserves your project configuration, saved task state and worktrees. Do not run `rivet uninstall` or manually delete project files for this migration.
+Then install the registry package using the commands above and verify `rivet --help`. Removing the old global package preserves your project configuration, saved task state and worktrees. Do not run `rivet uninstall` or manually delete project files for this migration.
 
 From each project, preview `rivet setup` and run `rivet setup --write` to refresh unmodified managed instructions. Existing valid project policy is preserved; edited managed instructions require review. A project pinned through `.rivet.cjs` keeps its own runtime: updating the global CLI does not update that pin. Use the new CLI's `rivet install --project-runtime` explicitly to update it, following the project-only instructions below.
-
-## Registry installation after publication
-
-**The npm package has not been published yet.** These commands are for the planned alpha channel once publication and registry installation have been verified. Use the GitHub commands above until then.
-
-::: code-group
-
-```sh [Yarn Classic]
-yarn global add @agilno-tech/rivet@alpha
-```
-
-```sh [npm]
-npm install --global @agilno-tech/rivet@alpha
-```
-
-```sh [pnpm]
-pnpm add --global @agilno-tech/rivet@alpha
-```
-
-:::
-
-The package name is `@agilno-tech/rivet`; the executable remains `rivet` with every package manager.
 
 ## Install for one project without a global CLI
 
@@ -90,7 +68,7 @@ From the project root, create a temporary Yarn Classic installation and use it t
 
 ```sh
 rivet_bootstrap=$(mktemp -d)
-yarn global add "https://github.com/Agilno-Tech/rivet.git#main" \
+yarn global add @agilno-tech/rivet@alpha \
   --global-folder "$rivet_bootstrap/global" --prefix "$rivet_bootstrap" \
   --cache-folder "$rivet_bootstrap/cache" --ignore-scripts
 "$rivet_bootstrap/bin/rivet" install --project-runtime
@@ -98,7 +76,7 @@ node .rivet.cjs setup
 node .rivet.cjs setup --write
 ```
 
-Use a reviewed commit SHA instead of `main` for reproducible source selection. Use Node 22 or newer, Yarn Classic 1.22, and Git. The project-only runtime installer also requires npm 10 or newer, included with the supported Node distribution, to install its dependencies. Unsupported Node versions are rejected before installation changes. The initial command requires access to the GitHub source and dependency registry; it does not require a global Rivet executable.
+Replace `@alpha` with an exact published version, such as `@0.1.0-alpha.0`, for reproducible version selection. Use Node 22 or newer, Yarn Classic 1.22, and Git. The project-only runtime installer also requires npm 10 or newer, included with the supported Node distribution, to install its dependencies. Unsupported Node versions are rejected before installation changes. The initial command requires access to the npm registry; it does not require a global Rivet executable.
 
 Project installation snapshots the running Rivet package and installs its runtime and dependencies into your private `~/.cache/rivet/project-runtimes` cache. A small owned `.rivet.cjs` file pins the Rivet source. Each user keeps their platform-specific runtime and resolved dependency inventory privately. Your application's `package.json`, lockfile and dependencies are preserved. The selected minimal harness instructions use this project reference even when another Rivet version is available globally. Use `--target=claude` or `--target=codex` to install only one target; both are the default. Use `--project=<path>` only when automatic project discovery is insufficient.
 
@@ -113,7 +91,7 @@ node .rivet.cjs doctor
 
 The reference uses your current Node runtime and validates the pinned Rivet source and private dependency inventory before loading Rivet. It keeps the current working directory and needs no PATH export. The installed harness discovers the project root and uses the reference for its own commands. Review and commit the project reference, configuration and instructions before starting a workflow that requires a clean checkout. Another collaborator needs their own private runtime installation; the cache is not committed to the project.
 
-Repeat the temporary Yarn installation and `install --project-runtime` commands above from the selected approved source to update the pin. Existing pins from the former package scope remain recognized; this explicit installation upgrades them to the new package. Unchanged managed harness instructions can also be upgraded by rerunning setup. Unchanged sources reuse a verified cache. Edited or unowned project references and instructions stop replacement. Later ordinary `setup` calls preserve the pinned harness routing. Interrupted installation preserves existing application files; inspect any reported partial instruction installation before retrying.
+Repeat the temporary Yarn installation and `install --project-runtime` commands above with the selected package version to update the pin. Existing pins from the former package scope remain recognized; this explicit installation upgrades them to the new package. Unchanged managed harness instructions can also be upgraded by rerunning setup. Unchanged sources reuse a verified cache. Edited or unowned project references and instructions stop replacement. Later ordinary `setup` calls preserve the pinned harness routing. Interrupted installation preserves existing application files; inspect any reported partial instruction installation before retrying.
 
 Remove the owned project installation with:
 
@@ -134,7 +112,7 @@ sh /path/to/rivet/scripts/install.sh \
   --prefix "$HOME/.local"
 ```
 
-Use the checksum from the approved release record. A checksum supplied only beside an untrusted download does not establish authenticity. A published candidate channel is still pending; the source installation above remains available.
+Use the checksum from the approved release record. A checksum supplied only beside an untrusted download does not establish authenticity. For the normal published alpha, use the registry installation above. This tarball path is for a specific artifact supplied by a maintainer.
 
 The bootstrap requires Node 22 or newer, npm 10 or newer, Git, and tar on PATH. It copies the local tarball into a private temporary directory and checks that copy and its Rivet package identity before invoking npm. It then installs those verified bytes with lifecycle scripts disabled, verifies the installed Rivet command, and prints PATH and project setup instructions. Registry access may be needed for dependencies, which are resolved separately from the checksummed Rivet tarball.
 
@@ -194,6 +172,28 @@ pnpm remove --global @agilno-tech/rivet
 ## Advanced legacy capability packs
 
 The earlier `install --all` and interactive installers remain available. They install the optional skill collection and use their original harness paths, including `.codex/skills` for Codex. They are separate from the new minimal installation lifecycle; use matching legacy uninstall options to remove those packs.
+
+## Advanced: install from GitHub source
+
+Use this only when you need a change that has not reached the registry or a specific reviewed commit. Choose one package manager:
+
+::: code-group
+
+```sh [Yarn Classic]
+yarn global add "https://github.com/Agilno-Tech/rivet.git#main"
+```
+
+```sh [npm]
+npm install --global "https://github.com/Agilno-Tech/rivet.git#main"
+```
+
+```sh [pnpm]
+pnpm add --global "https://github.com/Agilno-Tech/rivet.git#main"
+```
+
+:::
+
+`main` changes over time. Replace it with a reviewed commit SHA for reproducible source selection. To return to a published release, repeat the registry installation command at the top of this page with the same package manager.
 
 ## Contributor checkout
 

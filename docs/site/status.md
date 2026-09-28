@@ -1,6 +1,6 @@
 # Capabilities and limitations
 
-Rivet is available as an alpha from GitHub. The registry package has not been published yet.
+Rivet is available on [npm](https://www.npmjs.com/package/@agilno-tech/rivet) as `@agilno-tech/rivet`. Follow the [installation guide](./installation.md) to install the `alpha` channel.
 
 ## Available now
 
