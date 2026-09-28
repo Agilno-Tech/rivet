@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.0-alpha.1](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.0...v0.1.0-alpha.1) (2026-09-28)
+
+
+### Features
+
+* automate alpha releases and use registry installation ([#54](https://github.com/Agilno-Tech/rivet/issues/54)) ([62fa9d8](https://github.com/Agilno-Tech/rivet/commit/62fa9d801bb8ff2b83306c1df82651ccfe4a4445))
+
+
+### Bug Fixes
+
+* dispatch checks for the generated release branch ([#55](https://github.com/Agilno-Tech/rivet/issues/55)) ([23c5739](https://github.com/Agilno-Tech/rivet/commit/23c5739ff95f65f98db786a22834539836491cad))
+
 ## 0.1.0-alpha.0 (2026-09-28)
 
 ### Implemented
