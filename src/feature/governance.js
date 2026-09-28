@@ -94,9 +94,21 @@ export async function inspectGovernance({project,run,gitClient,config,phase,chec
     criterionPlanNodeIds:run.workRequest.acceptanceCriteria.map(criterion=>run.featurePlan.nodes.filter(node=>node.role==='worker'&&node.acceptanceCriteria.includes(criterion)).map(node=>node.id)),changedPaths,
     workerActorIds:['host-agent',...run.featurePlan.nodes.filter(node=>node.role==='worker').map(node=>node.id)]};
   // Historical reports remain auditable; only reports for these exact inputs can satisfy a gate.
-  const reports=state.reviews.filter(event=>event.subject.phase===selectedPhase&&event.subject.headSha===headSha
+  const phaseReviews=state.reviews.filter(event=>event.subject.phase===selectedPhase);
+  const reports=phaseReviews.filter(event=>event.subject.headSha===headSha
     &&event.subject.diffDigest===subject.diffDigest).map(event=>event.data);
-  const review=evaluateReviewReports(policy,subject,reports);
+  const evaluated=evaluateReviewReports(policy,subject,reports);
+  // Corrections consume the task phase's budget even when their new inputs invalidate old evidence.
+  const rounds=Math.max(0,...phaseReviews.map(event=>event.data.round));
+  const otherInputRound=Math.max(0,...phaseReviews.filter(event=>event.subject.headSha!==headSha
+    ||event.subject.diffDigest!==subject.diffDigest).map(event=>event.data.round));
+  const pendingAtCap=otherInputRound<policy.maxRounds?evaluated.requiredReviewerIds.filter(reviewerId=>
+    !reports.some(report=>report.reviewerId===reviewerId&&report.round===policy.maxRounds)):[];
+  const repairableAtCap=blocker=>['missing-review','blocking-review'].includes(blocker.code)
+    ?pendingAtCap.includes(blocker.reviewerId):blocker.code==='unreviewed-path'
+      &&pendingAtCap.some(reviewerId=>evaluated.reviewerPaths[reviewerId].includes(blocker.path));
+  const review={...evaluated,rounds,humanEscalation:!evaluated.valid&&rounds>=policy.maxRounds
+    &&!evaluated.blockers.every(repairableAtCap)};
   const blockers=[...review.blockers];
   if(selectedPhase==='final'&&!target&&policy.required)blockers.push({code:'integration-not-ready'});
   for(const decision of state.decisions)if(decision.status==='pending')blockers.push({code:'decision-needs-human-approval',decisionId:decision.id});
@@ -160,8 +172,14 @@ export async function taskGovernance({project,runId,gitClient,operation,input,ph
       if(operation==='review'){
         const keys=['phase','runId','requestDigest','planDigest','baseSha','headSha','diffDigest'];
         const identity=Object.fromEntries(keys.map(key=>[key,observed.subject[key]]));
-        const reportTemplates=observed.review.humanEscalation?[]:observed.review.requiredReviewerIds.map(reviewerId=>({
-          ...identity,reviewerId,actorId:'replace-with-reviewer-identity',round:observed.review.rounds+1,
+        const atCap=observed.review.rounds>=observed.policy.maxRounds;
+        const otherInputRound=Math.max(0,...state.reviews.filter(event=>event.subject.phase===observed.subject.phase
+          &&(event.subject.headSha!==observed.subject.headSha||event.subject.diffDigest!==observed.subject.diffDigest)).map(event=>event.data.round));
+        const templateReviewers=atCap&&observed.review.valid?[]:atCap?observed.review.requiredReviewerIds.filter(reviewerId=>
+          otherInputRound<observed.policy.maxRounds&&!observed.review.reports.some(report=>report.reviewerId===reviewerId&&report.round===observed.policy.maxRounds))
+          :observed.review.requiredReviewerIds;
+        const reportTemplates=templateReviewers.map(reviewerId=>({
+          ...identity,reviewerId,actorId:'replace-with-reviewer-identity',round:atCap?observed.policy.maxRounds:observed.review.rounds+1,
           status:'FAIL',blocking:true,coverage:[],findings:[{kind:'general',summary:'Review has not been performed yet.',blocking:true}],
           filesReviewed:[],commandsExecuted:[],checkedAt:now(),
         }));
@@ -170,7 +188,11 @@ export async function taskGovernance({project,runId,gitClient,operation,input,ph
       }
       const report=evaluateReviewReports(observed.policy,observed.subject,[input]).reports[0];
       if(containsSecretMaterial(JSON.stringify(report)))fail('Review evidence contains credential-like material. Remove it before recording the report.');
-      const prior=state.reviews.filter(event=>event.subject.phase===observed.subject.phase&&event.subject.headSha===observed.subject.headSha&&event.subject.diffDigest===observed.subject.diffDigest).map(event=>event.data);
+      const phaseReviews=state.reviews.filter(event=>event.subject.phase===observed.subject.phase);
+      const matchesCurrent=event=>event.subject.headSha===observed.subject.headSha&&event.subject.diffDigest===observed.subject.diffDigest;
+      const prior=phaseReviews.filter(matchesCurrent).map(event=>event.data);
+      const previousInputRound=Math.max(0,...phaseReviews.filter(event=>!matchesCurrent(event)).map(event=>event.data.round));
+      if(report.round<=previousInputRound)fail('A revised review subject must advance the phase review round.');
       if(prior.some(value=>value.reviewerId===report.reviewerId&&value.round===report.round))fail('This reviewer round is already recorded.');
       evaluateReviewReports(observed.policy,observed.subject,[...prior,report]);
       await append(state,run,{type:'review.recorded',subject:observed.subject,policy:observed.policy,data:report});

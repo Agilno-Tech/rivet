@@ -115,7 +115,7 @@ test('passing configured scan records once and optional review needs no model or
  await requireGovernance(input);assert.equal((await f.snapshot()).version,1);
 });
 test('focused final reviewers replay durably and stale integration identity cannot satisfy a new head',async t=>{
- const policy={required:true,reviewers:[{id:'code',paths:['src/**'],required:true},{id:'docs',paths:['docs/**'],required:true}]};
+ const policy={required:true,maxRounds:2,reviewers:[{id:'code',paths:['src/**'],required:true},{id:'docs',paths:['docs/**'],required:true}]};
  const f=await fixture(t,{review:policy}),checkout=await commitContent(f);
  const accepted=createAcceptedIntegrationStore(await acceptedIntegrationPaths(f.paths));
  await accepted.write({schemaVersion:1,runId:f.run.runId,baselineCommit:f.run.featurePlan.baselineCommit,commitSha:checkout.commitSha,runtimeVersion:1,path:checkout.path,branch:checkout.branch});
@@ -129,6 +129,23 @@ test('focused final reviewers replay durably and stale integration identity cann
  await accepted.write({schemaVersion:1,runId:f.run.runId,baselineCommit:f.run.featurePlan.baselineCommit,commitSha:second.commitSha,runtimeVersion:2,path:second.path,branch:second.branch});
  const changed=await f.inspect({phase:'final'});assert.equal(changed.ready,false);assert.equal(changed.review.reports.length,0);
  assert.equal((await f.snapshot()).version,2);
+ const exported=await f.call('review',{phase:'final'});
+ assert.equal(exported.review.rounds,1);assert.equal(exported.review.humanEscalation,false);
+ assert.ok(exported.reportTemplates.every(value=>value.round===2));
+ for(const [reviewerId,path] of [['code','src/health.js'],['docs','docs/health.md']]){
+  const value=report(changed.subject,{reviewerId,round:2,filesReviewed:[path],coverage:report(changed.subject).coverage.map(item=>({...item,paths:[path]}))});
+  await assert.rejects(f.call('review-submit',{phase:'final',input:{...value,round:1}}),/advance.*round/);
+  await f.call('review-submit',{phase:'final',input:value});
+  if(reviewerId==='code'){
+   const waiting=await f.call('review',{phase:'final'});
+   assert.equal(waiting.review.humanEscalation,false);
+   assert.deepEqual(waiting.reportTemplates.map(({reviewerId,round})=>({reviewerId,round})),[{reviewerId:'docs',round:2}]);
+  }
+ }
+ const completed=await f.call('review',{phase:'final'});
+ assert.equal(completed.ready,true);assert.equal(completed.review.rounds,2);
+ assert.equal(completed.review.humanEscalation,false);assert.deepEqual(completed.reportTemplates,[]);
+ assert.equal((await f.snapshot()).version,4);
 });
 test('required final review without an accepted integration reports a blocker without creating evidence',async t=>{
  const f=await fixture(t,{review:{required:true}}),result=await f.inspect({phase:'final'});
@@ -226,4 +243,18 @@ test('untracked review or scan policies reject a new proposal before resolving a
   await assert.rejects(workflow.propose({project:f.root,source:{kind:'inline',value:'# Other endpoint\n\n## Acceptance criteria\n\n- Add another endpoint.\n'},client:'codex'}),/Commit the quality policy/);
   assert.equal(planningCalls,0);
  }
+});
+test('a changed accepted head cannot reset the same phase review-round budget',async t=>{
+ const f=await fixture(t,{review:{required:true,maxRounds:1}}),first=await commitContent(f);
+ const accepted=createAcceptedIntegrationStore(await acceptedIntegrationPaths(f.paths));
+ const accept=checkout=>accepted.write({schemaVersion:1,runId:f.run.runId,baselineCommit:f.run.featurePlan.baselineCommit,commitSha:checkout.commitSha,runtimeVersion:1,path:checkout.path,branch:checkout.branch});
+ await accept(first);const initial=await f.call('review',{phase:'final'});
+ await f.call('review-submit',{phase:'final',input:report(initial.subject,{status:'FAIL',blocking:true,findings:[{kind:'missing',summary:'Health behavior needs correction',blocking:true}]})});
+ const second=await commitContent(f,'export const health = "corrected";\n');await accept(second);
+ const revised=await f.call('review',{phase:'final'});
+ assert.equal(revised.review.reports.length,0,'Old-head evidence must not satisfy the corrected head');
+ assert.equal(revised.review.rounds,1);assert.deepEqual(revised.reportTemplates,[]);
+ await assert.rejects(f.call('review-submit',{phase:'final',input:report(revised.subject,{round:1})}),/round|limit|escalat/i);
+ assert.equal((await f.snapshot()).version,1,'Rejected reset must not append evidence');
+ const status=await f.inspect({phase:'final'});assert.equal(status.ready,false);assert.equal(status.review.humanEscalation,true);
 });
