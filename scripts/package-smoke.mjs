@@ -34,12 +34,14 @@ function firstUse(label, source, expectedPackage) {
   // Explicit install-links also protects environments whose npm config defaults to false.
   npm(['install', '--global', '--prefix', prefix, '--install-links', '--ignore-scripts',
     '--no-audit', '--no-fund', '--registry=https://registry.npmjs.org', source]);
-  const installed = join(prefix, 'lib', 'node_modules', '@agilno', 'rivet');
+  const installed = join(prefix, 'lib', 'node_modules', '@agilno-tech', 'rivet');
   assert(existsSync(installed), `${label}: installed package must not be a dangling link`);
   assert.equal(lstatSync(installed).isSymbolicLink(), false, `${label}: package must be materialized`);
   assert.notEqual(realpathSync(installed), realpathSync(root));
   const installedPackage = JSON.parse(readFileSync(join(installed, 'package.json'), 'utf8'));
-  if (expectedPackage) for (const [key, value] of Object.entries(expectedPackage)) assert.equal(installedPackage[key], value, `Installed ${key} differs from release manifest`);
+  if (expectedPackage) for (const [key, value] of Object.entries(expectedPackage)) assert.equal(key === 'private' ? installedPackage[key] === true : installedPackage[key], value, `Installed ${key} differs from release manifest`);
+  assert.match(readFileSync(join(installed, 'LICENSE'), 'utf8'), /Apache License/);
+  assert.match(readFileSync(join(installed, 'NOTICE'), 'utf8'), /Rivet/);
   const bin = join(prefix, 'bin', 'rivet');
   assert.equal(realpathSync(bin), realpathSync(join(installed, 'bin', 'cli.js')));
   const cliEnv = { PATH: `${join(prefix, 'bin')}${delimiter}${env.PATH}` };

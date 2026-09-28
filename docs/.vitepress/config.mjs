@@ -7,8 +7,8 @@ export default defineConfig({
   srcDir: 'site',
   cleanUrls: false,
   themeConfig: {
-    socialLinks: [{ icon: 'github', link: 'https://github.com/FraneAgilno/rivet' }],
-    editLink: { pattern: 'https://github.com/FraneAgilno/rivet/edit/main/docs/site/:path' },
+    socialLinks: [{ icon: 'github', link: 'https://github.com/Agilno-Tech/rivet' }],
+    editLink: { pattern: 'https://github.com/Agilno-Tech/rivet/edit/main/docs/site/:path' },
     search: { provider: 'local' },
     nav: [
       { text: 'Get started', link: '/getting-started' },

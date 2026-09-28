@@ -17,7 +17,7 @@ const MAX_MANIFEST_BYTES = 16 * 1024;
 const MAX_PACKAGE_BYTES = 64 * 1024;
 const MAX_SKILL_BYTES = 512 * 1024;
 const SHA256 = /^[a-f0-9]{64}$/;
-const PACKAGE_NAME = '@agilno/rivet';
+const PACKAGE_NAME = '@agilno-tech/rivet';
 
 function conflict(message, cause) {
   return new CliError(message, 'REPOSITORY_CONFLICT', cause ? { cause } : {});
@@ -179,7 +179,7 @@ function validateManifest(value, expectedTarget) {
     || value.schemaVersion !== MANIFEST_SCHEMA_VERSION
     || !value.package
     || typeof value.package !== 'object'
-    || value.package.name !== PACKAGE_NAME
+    || ![PACKAGE_NAME, '@agilno/rivet'].includes(value.package.name)
     || typeof value.package.version !== 'string'
     || value.package.version.length < 1
     || value.package.version.length > 128
@@ -269,6 +269,7 @@ function inspectTarget(location, operation, source, fs) {
     action = 'repair';
   } else if (skillFile.hash === recordedHash) {
     action = skillFile.hash === source.skillHash
+      && manifest.package.name === source.package.name
       && manifest.package.version === source.package.version
       ? 'unchanged'
       : 'update';

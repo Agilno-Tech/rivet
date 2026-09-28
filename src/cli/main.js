@@ -584,7 +584,7 @@ export async function main(argv, overrides = {}) {
       dependencies.output.error(`Next: ${failureGuidance(code, command)}`);
       if (saved?.path) {
         dependencies.output.error(`Diagnostic report: ${saved.path}`);
-        dependencies.output.error('Review the file, then attach it with reproduction steps at https://github.com/FraneAgilno/rivet/issues/new. Nothing was uploaded.');
+        dependencies.output.error('Review the file, then attach it with reproduction steps at https://github.com/Agilno-Tech/rivet/issues/new. Nothing was uploaded.');
       } else if (dependencies.reportFailure) dependencies.output.error('A diagnostic report could not be saved. You can try rivet support --save from your project.');
     } catch { /* broken output does not change the command result */ }
   }

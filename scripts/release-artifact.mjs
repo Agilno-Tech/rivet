@@ -4,7 +4,7 @@ import { lstat, mkdir, mkdtemp, open, realpath, readdir, rm, writeFile, link } f
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const PACKAGE_NAME = '@agilno/rivet';
+const PACKAGE_NAME = '@agilno-tech/rivet';
 const VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*$/;
 const SHA = /^[a-f0-9]{40}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
@@ -17,7 +17,7 @@ export class ReleaseArtifactError extends Error {
 function requireValue(condition, reason = 'invalid-input') { if (!condition) throw new ReleaseArtifactError(reason); }
 function hash(bytes) { return createHash('sha256').update(bytes).digest('hex'); }
 function tagVersion(tag) { requireValue(typeof tag === 'string' && tag.startsWith('v') && VERSION.test(tag.slice(1)), 'invalid-prerelease-tag'); return tag.slice(1); }
-function filename(version) { return `agilno-rivet-${version}.tgz`; }
+function filename(version) { return `agilno-tech-rivet-${version}.tgz`; }
 function identity(stat) { return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`; }
 async function regularFile(path, limit, allowEmpty = false) {
   const before = await lstat(path, { bigint: true });
@@ -75,20 +75,21 @@ async function inspectSource(sourceRoot, tag, expectedSourceSha, env) {
   const packageBytes = await regularFile(join(sourceRoot, 'package.json'), 1024 * 1024);
   const lockBytes = await regularFile(join(sourceRoot, 'package-lock.json'), 4 * 1024 * 1024);
   const pkg = parseJson(packageBytes), lock = parseJson(lockBytes);
-  requireValue(pkg.name === PACKAGE_NAME && pkg.private === true && pkg.license === 'UNLICENSED', 'package-identity-mismatch');
+  requireValue(pkg.name === PACKAGE_NAME && (pkg.private === undefined || pkg.private === false) && pkg.license === 'Apache-2.0', 'package-identity-mismatch');
   requireValue(pkg.version === tagVersion(tag), 'package-version-mismatch');
+  requireValue(pkg.publishConfig?.access === 'public' && pkg.publishConfig?.tag === 'alpha' && pkg.publishConfig?.registry === 'https://registry.npmjs.org/', 'publish-configuration-mismatch');
   // npm 10 can still run prepare despite --ignore-scripts during pack. The
   // candidate has no packaging hooks; reject their addition before calling npm.
   requireValue(!['prepack', 'prepare', 'postpack'].some(name => Object.hasOwn(pkg.scripts ?? {}, name)), 'pack-lifecycle-hooks-unsupported');
   requireValue(lock.name === pkg.name && lock.version === pkg.version && lock.packages?.['']?.name === pkg.name && lock.packages[''].version === pkg.version, 'lockfile-identity-mismatch');
-  return { package: { name: pkg.name, version: pkg.version, private: true, license: pkg.license }, packageSha256: hash(packageBytes), lockfileSha256: hash(lockBytes) };
+  return { package: { name: pkg.name, version: pkg.version, private: false, license: pkg.license }, packageSha256: hash(packageBytes), lockfileSha256: hash(lockBytes) };
 }
 function checksumText(manifest, manifestBytes) { return `${manifest.artifact.sha256}  ${manifest.artifact.filename}\n${hash(manifestBytes)}  ${MANIFEST}\n`; }
 function validateManifest(value) {
   exactKeys(value, ['schemaVersion', 'package', 'source', 'artifact', 'packageSha256', 'lockfileSha256', 'build', 'qualification']);
   requireValue(value.schemaVersion === 1, 'invalid-manifest');
   exactKeys(value.package, ['name', 'version', 'private', 'license']);
-  requireValue(value.package.name === PACKAGE_NAME && value.package.private === true && value.package.license === 'UNLICENSED', 'package-identity-mismatch');
+  requireValue(value.package.name === PACKAGE_NAME && value.package.private === false && value.package.license === 'Apache-2.0', 'package-identity-mismatch');
   exactKeys(value.source, ['commit', 'tag']);
   requireValue(SHA.test(value.source.commit) && tagVersion(value.source.tag) === value.package.version, 'source-identity-mismatch');
   exactKeys(value.artifact, ['filename', 'sha256', 'bytes']);

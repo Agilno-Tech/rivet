@@ -6,11 +6,20 @@ Review a plan, work in an isolated Git checkout, run your project's checks, and 
 
 ## Get started
 
-Install Node.js 22 or 24, Yarn Classic 1.22 and Git on macOS or Linux, then:
+Install Node.js 22 or 24 and Git on macOS or Linux, then choose one package manager:
 
 ```sh
-yarn global add "https://github.com/FraneAgilno/rivet.git#main"
+# Yarn Classic 1.22
+yarn global add "https://github.com/Agilno-Tech/rivet.git#main"
+
+# npm
+npm install --global "https://github.com/Agilno-Tech/rivet.git#main"
+
+# pnpm
+pnpm add --global "https://github.com/Agilno-Tech/rivet.git#main"
 ```
+
+Use one command. Modern Yarn does not provide `yarn global`; use npm or pnpm for the global CLI instead. See [installation](https://agilno-tech.github.io/rivet/installation.html) for PATH setup.
 
 From your project root:
 
@@ -34,17 +43,17 @@ Alternatively, ask your coding harness to read the Rivet skill and complete the 
 
 Node.js runs Rivet itself. Your application can use Python/Django, Node.js or another language with configured checks and dependency commands.
 
-**Alpha:** install from GitHub while registry distribution is being prepared. The package is currently `UNLICENSED`. See [compatibility](https://franeagilno.github.io/rivet/compatibility.html) for tested environments and limitations.
+**Alpha:** install from GitHub while registry distribution is being prepared. Rivet is licensed under [Apache 2.0](LICENSE). See [compatibility](https://agilno-tech.github.io/rivet/compatibility.html) for tested environments and limitations.
 
 ## Documentation
 
-- [Quickstart](https://franeagilno.github.io/rivet/getting-started.html)
-- [Configuration and commands](https://franeagilno.github.io/rivet/runtime-reference.html)
-- [Integrations](https://franeagilno.github.io/rivet/integrations.html)
-- [Review and delivery](https://franeagilno.github.io/rivet/delivery.html)
-- [Troubleshooting](https://franeagilno.github.io/rivet/troubleshooting.html)
+- [Quickstart](https://agilno-tech.github.io/rivet/getting-started.html)
+- [Configuration and commands](https://agilno-tech.github.io/rivet/runtime-reference.html)
+- [Integrations](https://agilno-tech.github.io/rivet/integrations.html)
+- [Review and delivery](https://agilno-tech.github.io/rivet/delivery.html)
+- [Troubleshooting](https://agilno-tech.github.io/rivet/troubleshooting.html)
 - [Contributing](CONTRIBUTING.md)
 
 Human-readable failures show a private diagnostic report path when available. Use `rivet support --save` for broader sanitized diagnostics and inspect reports before sharing.
 
-Found a problem or have an improvement? [Open an issue or pull request](https://github.com/FraneAgilno/rivet). Rivet is developed by Agilno.
+Found a problem or have an improvement? [Open an issue or pull request](https://github.com/Agilno-Tech/rivet). Rivet is developed by Agilno.

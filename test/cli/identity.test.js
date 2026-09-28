@@ -10,9 +10,12 @@ import { runCli } from '../helpers/run-cli.js';
 
 test('Rivet owns its package, executable and project configuration', async () => {
   const pkg = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'));
-  assert.equal(pkg.name, '@agilno/rivet');
+  assert.equal(pkg.name, '@agilno-tech/rivet');
   assert.deepEqual(Object.keys(pkg.bin), ['rivet']);
-  assert.equal(pkg.private, true, 'unpublished namespace must not be published accidentally');
+  assert.equal(pkg.private, undefined);
+  assert.equal(pkg.license, 'Apache-2.0');
+  assert.deepEqual(pkg.publishConfig, {access:'public',tag:'alpha',registry:'https://registry.npmjs.org/'});
+  assert.equal(pkg.repository.url, 'git+https://github.com/Agilno-Tech/rivet.git');
   assert.equal(CONFIG_DIRECTORY, '.rivet');
   assert.equal(Object.values(pkg.dependencies).some(version => /^(?:file:|link:|workspace:)/.test(version)), false);
 });
@@ -48,4 +51,17 @@ test('install and uninstall preserve a same-named skill owned by another framewo
   assert.match(await readFile(join(root, '.claude', 'skills', 'rivet-design', 'SKILL.md'), 'utf8'), /name: rivet-design/);
   (await runCli(['uninstall', '--all', '--target=claude'], { cwd: root })).assertSuccess();
   assert.equal(await readFile(original, 'utf8'), 'existing project skill');
+});
+
+
+test('alpha installations check their own update channel', async () => {
+  const { checkForUpdate } = await import('../../src/commands/install.js');
+  const lines = [];
+  const metadata = {name:'@agilno-tech/rivet',version:'0.1.0-alpha.0',publishConfig:{tag:'alpha'}};
+  await checkForUpdate({packageRoot:'/fixture',fs:{readFileSync:()=>JSON.stringify(metadata)},
+    fetch:async url=>{assert.equal(url,'https://registry.npmjs.org/%40agilno-tech%2Frivet');return new Response(JSON.stringify({'dist-tags':{latest:'1.0.0',alpha:'0.1.0-alpha.1'}}));},
+    output:{log:line=>lines.push(line)}});
+  assert.match(lines.join('\n'), /0\.1\.0-alpha\.0 → 0\.1\.0-alpha\.1/);
+  assert.match(lines.join('\n'), /@agilno-tech\/rivet@alpha/);
+  assert.doesNotMatch(lines.join('\n'), /@latest|1\.0\.0/);
 });

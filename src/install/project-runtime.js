@@ -24,7 +24,7 @@ function regular(file, fs, maximum = 16 * 1024 * 1024) {
 }
 function sourceSnapshot(packageRoot, fs) {
   const metadataBytes = regular(join(packageRoot, 'package.json'), fs, 65536), pkg = JSON.parse(metadataBytes);
-  if (pkg.name !== '@agilno/rivet' || typeof pkg.version !== 'string' || !Array.isArray(pkg.files)
+  if (pkg.name !== '@agilno-tech/rivet' || typeof pkg.version !== 'string' || !Array.isArray(pkg.files)
     || !['bin/cli.js', './bin/cli.js'].includes(pkg.bin?.rivet)
     || ['prepare', 'prepack', 'postpack'].some(key => Object.hasOwn(pkg.scripts ?? {}, key))) fail('The running Rivet package cannot be safely pinned.');
   const files = new Map([['package.json', { bytes: metadataBytes, mode: 0o644 }]]); let total = metadataBytes.length;

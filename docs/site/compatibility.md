@@ -10,6 +10,8 @@ Rivet is an alpha. Use this page to check your environment and understand where 
 | Native Windows | Spawned CLI execution is unsupported. |
 | WSL | Not yet tested as a complete environment. |
 | Yarn Classic 1.22 | Source and tarball installation tested on macOS. Modern Yarn does not provide `yarn global`. |
+| npm | Installed-package lifecycle tested in CI; source installation is also documented. |
+| pnpm | Global installation commands are documented; see the release evidence for tested versions. |
 | Project-only runtime | Installed-runtime checks cover setup and local verification without a global Rivet command. |
 | Registry package | Not published yet. Use [source installation](./installation.md). |
 

@@ -9,7 +9,7 @@ const git=(cwd,args)=>execFileSync('git',args,{cwd,encoding:'utf8',env:{PATH:pro
 async function fixture(t) {
  const parent=await realpath(await mkdtemp(join(tmpdir(),'rivet-release-test-')));t.after(()=>rm(parent,{recursive:true,force:true}));
  const sourceRoot=join(parent,'source');await mkdir(sourceRoot);
- const pkg={name:'@agilno/rivet',version:'0.1.0-alpha.0',private:true,license:'UNLICENSED',bin:{rivet:'bin/cli.js'},files:['bin/']};
+ const pkg={name:'@agilno-tech/rivet',version:'0.1.0-alpha.0',license:'Apache-2.0',publishConfig:{access:'public',tag:'alpha',registry:'https://registry.npmjs.org/'},bin:{rivet:'bin/cli.js'},files:['bin/']};
  await mkdir(join(sourceRoot,'bin'));await writeFile(join(sourceRoot,'bin','cli.js'),'#!/usr/bin/env node\nconsole.log("fixture");\n',{mode:0o755});
  await writeFile(join(sourceRoot,'package.json'),JSON.stringify(pkg));await writeFile(join(sourceRoot,'package-lock.json'),JSON.stringify({name:pkg.name,version:pkg.version,lockfileVersion:3,packages:{'':pkg}}));
  git(sourceRoot,['init','-q','--initial-branch=main']);git(sourceRoot,['config','user.name','Fixture']);git(sourceRoot,['config','user.email','fixture@example.invalid']);git(sourceRoot,['add','.']);git(sourceRoot,['commit','-qm','fixture']);git(sourceRoot,['tag','v0.1.0-alpha.0']);
@@ -17,7 +17,7 @@ async function fixture(t) {
 }
 test('packs one immutable prerelease artifact with source/version bindings and verifiable checksums',async t=>{
  const input=await fixture(t);const result=await createReleaseArtifact(input);
- assert.equal(result.package.name,'@agilno/rivet');assert.equal(result.package.private,true);assert.equal(result.package.license,'UNLICENSED');assert.equal(result.source.commit,input.expectedSourceSha);
+ assert.equal(result.package.name,'@agilno-tech/rivet');assert.equal(result.package.private,false);assert.equal(result.package.license,'Apache-2.0');assert.equal(result.source.commit,input.expectedSourceSha);
  assert.equal(result.qualification.publishedChannel,'not-tested');assert.equal(result.qualification.independentPilot,'not-evaluated');
  assert.equal((await verifyReleaseArtifact({directory:input.outputDirectory,expectedSourceSha:input.expectedSourceSha,tag:input.tag})).artifact.sha256,result.artifact.sha256);
  const bytes=await readFile(join(input.outputDirectory,result.artifact.filename));await assert.rejects(()=>createReleaseArtifact(input));assert.deepEqual(await readFile(join(input.outputDirectory,result.artifact.filename)),bytes);
@@ -49,9 +49,9 @@ test('ignored dependencies and generated content cannot enter the exact commit s
  assert.ok(!listing.includes('ignored.secret'));assert.ok(!listing.includes('node_modules'));
 });
 test('package identity/license changes and mismatched lock metadata are rejected',async t=>{
- for(const change of ['license','private','lock']) {
+ for(const change of ['license','private','access','tag','registry','lock']) {
   const input=await fixture(t);const path=join(input.sourceRoot,change==='lock'?'package-lock.json':'package.json');const data=JSON.parse(await readFile(path,'utf8'));
-  if(change==='license')data.license='MIT';else if(change==='private')data.private=false;else data.version='0.1.0-alpha.1';
+  if(change==='license')data.license='MIT';else if(change==='private')data.private=true;else if(change==='access')data.publishConfig.access='restricted';else if(change==='tag')data.publishConfig.tag='latest';else if(change==='registry')data.publishConfig.registry='https://example.invalid/';else data.version='0.1.0-alpha.1';
   await writeFile(path,JSON.stringify(data));git(input.sourceRoot,['add','.']);git(input.sourceRoot,['commit','-qm','changed metadata']);git(input.sourceRoot,['tag','-f',input.tag]);input.expectedSourceSha=git(input.sourceRoot,['rev-parse','HEAD']);
   await assert.rejects(()=>createReleaseArtifact(input));
  }

@@ -1,6 +1,6 @@
 # Release candidate checklist
 
-Rivet currently keeps package name `@agilno/rivet`, `private: true` and `UNLICENSED`. There is no npm publication. Public source availability does not establish an open-source license grant. Any change to distribution terms requires the owner's decision.
+Rivet uses package name `@agilno-tech/rivet`, Apache License 2.0 and initial version `0.1.0-alpha.0`. Package metadata permits public publication under the `alpha` tag. The npm package has not been published yet; changing metadata does not publish it.
 
 This runbook describes the evidence required for a candidate. The manual candidate workflow builds a draft prerelease and checks the exact artifact on Linux/macOS with Node 22/24. Actual published-channel qualification remains pending; current installation instructions are in [Get started](../site/getting-started.md).
 
@@ -27,12 +27,12 @@ From GitHub Actions, run **Rivet candidate artifact** on the default branch and 
 
 All four installation jobs download that same tarball and check its expected checksum, source and version. They record runtime and resolved dependency versions plus actual setup/readiness/local-check outcomes. Only after every job passes does the workflow create a **draft prerelease** containing:
 
-- `agilno-rivet-<version>.tgz`
+- `agilno-tech-rivet-<version>.tgz`
 - `release-manifest.json`
 - `SHA256SUMS`
 - Installation evidence for each tested OS/Node combination
 
-Only the final draft job has repository write permission. Existing releases/assets are never replaced by this workflow. A failed or partially uploaded draft needs investigation; rerunning does not overwrite it. Publication, audience selection and licensing remain explicit owner decisions. A draft is not a public installation channel.
+Only the final draft job has repository write permission. Existing releases/assets are never replaced by this workflow. A failed or partially uploaded draft needs investigation; rerunning does not overwrite it. Publication and audience selection remain explicit owner decisions. A draft is not a public installation channel.
 
 For a local rehearsal, use a clean tagged checkout and a new output directory outside the repository:
 
@@ -76,14 +76,27 @@ The first versioned release has no previous published baseline. Mark release-to-
 
 ## Preparing registry publication
 
-The existing candidate workflow creates GitHub draft assets only. Registry publication needs a separate reviewed change:
+The existing candidate workflow creates GitHub draft assets only. npm publication is a separate, explicitly authorized manual step:
 
-1. Confirm publishing access to the intended npm scope. Keep `@agilno/rivet` only if its owner grants that access.
-2. Select distribution terms. Preserve the current `UNLICENSED` setting until the owner decides; a public registry does not grant an open-source license by itself.
-3. Keep the initial version below 1.0, for example the existing `0.1.0-alpha.0`. Publish it under an explicit `alpha` distribution tag, so installation requires choosing the alpha channel.
-4. Update package metadata, including registry access, repository, homepage and issue URLs. Remove the publication block only as part of this release change. Update `scripts/release-artifact.mjs`, manifest validation and their tests together: they currently require a private, unlicensed candidate.
-5. Build and verify one exact tarball, then configure a reviewed publication workflow. npm trusted publishing supports GitHub Actions with short-lived OIDC credentials; it requires a supported npm CLI in the release job. End-user installation can continue using Yarn.
-6. Publish the verified candidate with public access and the explicit alpha tag. Verify installation from the actual registry before replacing source-install instructions with a registry command.
+1. Confirm your npm account has publishing access to the `agilno-tech` organization, and enable the account authentication required by npm. Keep credentials and one-time codes out of Git and issue reports.
+2. Confirm the reviewed package has name `@agilno-tech/rivet`, license `Apache-2.0`, the complete `LICENSE` file, and public `publishConfig` using the `alpha` tag and npm registry. Release validation checks these fields. The package must not be private.
+3. Build and verify one immutable candidate tarball using the procedure above. Keep version `0.1.0-alpha.0` only if that version has never been published; subsequent candidates need a new version. Review the manifest, checksum, package contents and installation evidence.
+4. Authenticate locally, then dry-run publication of that exact tested tarball. Do not publish from the working directory or repack after testing:
+
+   ```sh
+   npm login --registry=https://registry.npmjs.org/
+   npm publish /absolute/candidate/agilno-tech-rivet-0.1.0-alpha.0.tgz --access public --tag alpha --registry=https://registry.npmjs.org/ --dry-run
+   ```
+
+5. After checking the dry-run and approving publication, publish the same bytes:
+
+   ```sh
+   npm publish /absolute/candidate/agilno-tech-rivet-0.1.0-alpha.0.tgz --access public --tag alpha --registry=https://registry.npmjs.org/
+   ```
+
+6. Verify the registry package metadata and alpha tag, download its tarball, compare its SHA-256 with the tested artifact, and rerun installation checks against those downloaded bytes. Test fresh registry installation with each documented package manager. Only then replace the source-install quickstart with registry commands and announce availability.
+
+The explicit `alpha` tag keeps this release off the `latest` channel. The executable remains `rivet`. npm is used here as the registry publishing client; users can install with Yarn Classic, npm or pnpm. A future automated publisher should use a separately reviewed npm trusted-publishing workflow with short-lived OIDC credentials.
 
 A future repository move need not change the npm package name. Keep npm ownership/access, update repository and support URLs, and replace the trusted-publisher binding with one for the new repository/workflow before publishing there. A different npm scope or package name is a different package identity, so choose that separately from the GitHub location.
 

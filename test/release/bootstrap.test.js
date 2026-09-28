@@ -12,7 +12,7 @@ async function fixture(t){
  const runtime=join(root,'runtime manager'),temporary=join(root,'temporary'),prefix=join(root,"prefix's files");await mkdir(runtime);await mkdir(temporary);
  await symlink(process.execPath,join(runtime,'node'));
  const artifact=join(root,"release's artifact.tgz"), source=join(root,'archive source');await mkdir(join(source,'package'),{recursive:true});
- await writeFile(join(source,'package','package.json'),JSON.stringify({name:'@agilno/rivet',version:'0.1.0-alpha.0',bin:{rivet:'bin/cli.js'}}));
+ await writeFile(join(source,'package','package.json'),JSON.stringify({name:'@agilno-tech/rivet',version:'0.1.0-alpha.0',bin:{rivet:'bin/cli.js'}}));
  execFileSync('/usr/bin/tar',['-czf',artifact,'-C',source,'package']);
  const digest=createHash('sha256').update(await readFile(artifact)).digest('hex');
  const calls=join(root,'calls.jsonl');
@@ -35,7 +35,7 @@ test('bootstrap passes exact verified temp artifact and ignore-scripts; failed n
 });
 test('bootstrap installs a real local tarball through runtime-manager PATH and verifies the public entry without running lifecycle hooks',async t=>{
  const f=await fixture(t);const source=join(f.root,'package source');await mkdir(join(source,'bin'),{recursive:true});
- await writeFile(join(source,'package.json'),JSON.stringify({name:'@agilno/rivet',version:'0.1.0-alpha.0',bin:{rivet:'bin/cli.js'},scripts:{postinstall:'node -e "process.exit(89)"'}}));
+ await writeFile(join(source,'package.json'),JSON.stringify({name:'@agilno-tech/rivet',version:'0.1.0-alpha.0',bin:{rivet:'bin/cli.js'},scripts:{postinstall:'node -e "process.exit(89)"'}}));
  await writeFile(join(source,'bin/cli.js'),'#!/usr/bin/env node\nconsole.log("rivet fixture usage");\n',{mode:0o755});
  const isolated={...f.env,npm_config_userconfig:join(f.root,'npmrc'),npm_config_globalconfig:join(f.root,'global-npmrc'),npm_config_cache:join(f.root,'cache'),npm_config_offline:'true',npm_config_update_notifier:'false'};
  const [pack]=JSON.parse(execFileSync('npm',['pack','--ignore-scripts','--json','--pack-destination',f.root],{cwd:source,env:isolated,encoding:'utf8'}));
@@ -77,8 +77,8 @@ test('bootstrap interruption stops npm descendants before reporting exit and rem
 });
 
 test('wrong-package tarball cannot be validated by a preexisting Rivet installation and never reaches npm install',async t=>{
- const f=await fixture(t);const installed=join(f.prefix,'lib/node_modules/@agilno/rivet');await mkdir(join(installed,'bin'),{recursive:true});await mkdir(join(f.prefix,'bin'),{recursive:true});
- await writeFile(join(installed,'package.json'),JSON.stringify({name:'@agilno/rivet',version:'0.1.0-alpha.0',bin:{rivet:'bin/cli.js'}}));await writeFile(join(installed,'bin/cli.js'),'#!/usr/bin/env node\nconsole.log("rivet");\n',{mode:0o755});await symlink(join(installed,'bin/cli.js'),join(f.prefix,'bin/rivet'));
+ const f=await fixture(t);const installed=join(f.prefix,'lib/node_modules/@agilno-tech/rivet');await mkdir(join(installed,'bin'),{recursive:true});await mkdir(join(f.prefix,'bin'),{recursive:true});
+ await writeFile(join(installed,'package.json'),JSON.stringify({name:'@agilno-tech/rivet',version:'0.1.0-alpha.0',bin:{rivet:'bin/cli.js'}}));await writeFile(join(installed,'bin/cli.js'),'#!/usr/bin/env node\nconsole.log("rivet");\n',{mode:0o755});await symlink(join(installed,'bin/cli.js'),join(f.prefix,'bin/rivet'));
  const source=join(f.root,'other source');await mkdir(join(source,'package'),{recursive:true});await writeFile(join(source,'package/package.json'),JSON.stringify({name:'other-package',version:'1.0.0',bin:{rivet:'bin/cli.js'}}));execFileSync('/usr/bin/tar',['-czf',f.artifact,'-C',source,'package']);
  await writeFile(join(f.runtime,'npm'),`#!/usr/bin/env node\nconst fs=require('node:fs');fs.appendFileSync(process.env.BOOTSTRAP_CALLS,process.argv[2]+'\\n');if(process.argv[2]==='--version')console.log('10.9.0');\n`,{mode:0o755});
  const result=f.run(createHash('sha256').update(await readFile(f.artifact)).digest('hex'));assert.notEqual(result.status,0);assert.match(result.stderr,/package identity/i);
@@ -90,7 +90,7 @@ test('duplicate package metadata is rejected before npm; installed version must 
   const f=await fixture(t);
   await writeFile(join(f.runtime,'npm'),`#!/usr/bin/env node\nrequire('node:fs').appendFileSync(process.env.BOOTSTRAP_CALLS,process.argv[2]+'\\n');if(process.argv[2]==='--version')console.log('10.9.0');\n`,{mode:0o755});
   if(mode==='duplicate')execFileSync('/usr/bin/tar',['-czf',f.artifact,'-C',join(f.root,'archive source'),'package/package.json','package/package.json']);
-  else{const installed=join(f.prefix,'lib/node_modules/@agilno/rivet');await mkdir(installed,{recursive:true});await writeFile(join(installed,'package.json'),JSON.stringify({name:'@agilno/rivet',version:'0.0.1',bin:{rivet:'bin/cli.js'}}));}
+  else{const installed=join(f.prefix,'lib/node_modules/@agilno-tech/rivet');await mkdir(installed,{recursive:true});await writeFile(join(installed,'package.json'),JSON.stringify({name:'@agilno-tech/rivet',version:'0.0.1',bin:{rivet:'bin/cli.js'}}));}
   const result=f.run(createHash('sha256').update(await readFile(f.artifact)).digest('hex'));assert.notEqual(result.status,0);
   assert.match(result.stderr,mode==='duplicate'?/duplicate package metadata/:/identity differs/);
   if(mode==='duplicate')assert.equal(await readFile(f.calls).then(()=>true,()=>false),false);
@@ -99,7 +99,7 @@ test('duplicate package metadata is rejected before npm; installed version must 
 
 test('malformed release versions are rejected before npm is invoked',async t=>{
  for(const version of ['0.1.0-alpha..1','0.1.0-01']){
-  const f=await fixture(t);await writeFile(join(f.root,'archive source/package/package.json'),JSON.stringify({name:'@agilno/rivet',version,bin:{rivet:'bin/cli.js'}}));execFileSync('/usr/bin/tar',['-czf',f.artifact,'-C',join(f.root,'archive source'),'package']);
+  const f=await fixture(t);await writeFile(join(f.root,'archive source/package/package.json'),JSON.stringify({name:'@agilno-tech/rivet',version,bin:{rivet:'bin/cli.js'}}));execFileSync('/usr/bin/tar',['-czf',f.artifact,'-C',join(f.root,'archive source'),'package']);
   await writeFile(join(f.runtime,'npm'),'#!/bin/sh\nprintf called > "$BOOTSTRAP_CALLS"\nexit 1\n',{mode:0o755});
   const result=f.run(createHash('sha256').update(await readFile(f.artifact)).digest('hex'));assert.notEqual(result.status,0);assert.equal(await readFile(f.calls).then(()=>true,()=>false),false);
  }

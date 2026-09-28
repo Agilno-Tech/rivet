@@ -6,4 +6,4 @@ Review the plan before execution. When Rivet reaches `awaiting-final-approval`, 
 
 If setup or execution fails, follow [troubleshooting](./troubleshooting.md). When reporting a bug, include your operating system, Rivet and harness versions, the command and the error, with private information removed.
 
-For a structured contributor test, see the [onboarding study](https://github.com/FraneAgilno/rivet/blob/main/docs/maintainers/first-task-trial.md).
+For a structured contributor test, see the [onboarding study](https://github.com/Agilno-Tech/rivet/blob/main/docs/maintainers/first-task-trial.md).

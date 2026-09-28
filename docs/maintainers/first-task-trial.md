@@ -4,7 +4,7 @@ This trial checks onboarding with a developer who has not implemented Rivet. Ope
 
 ## Before starting
 
-Use a disposable repository with a remote, Node.js 22 or 24, Yarn Classic 1.22, Git, and an authenticated interactive Claude Code or Codex session. Record the OS, harness version, Rivet commit/artifact and start time. The observer gives the participant only the [quickstart](../site/getting-started.md) and the task below. Do not provide private shell fixes, undocumented exports or prepared Rivet state.
+Use a disposable repository with a remote, Node.js 22 or 24, a supported package manager (Yarn Classic, npm or pnpm), Git, and an authenticated interactive Claude Code or Codex session. Record the OS, harness version, Rivet commit/artifact and start time. The observer gives the participant only the [quickstart](../site/getting-started.md) and the task below. Do not provide private shell fixes, undocumented exports or prepared Rivet state.
 
 ## Task
 
@@ -33,7 +33,7 @@ Tested on macOS arm64 with Node 22.22.0, npm 10.9.4 and Codex CLI 0.155.0-alpha.
 | Step | Observed result |
 | --- | --- |
 | Original documented GitHub install | Failed first use: npm reported success, but the package linked to a removed temporary clone and `rivet` was unavailable. |
-| Fresh install with `--install-links` | Installed command ran successfully. This was the previous npm installation path; the current quickstart uses Yarn Classic. |
+| Fresh install with `--install-links` | Installed command ran successfully. This was the previous npm installation path; the current quickstart offers Yarn Classic, npm and pnpm. |
 | Setup preview and application | Both harness skills and project policy were installed. Reviewed setup was committed; host preflight passed. |
 | First terminal proposal | Left unactivated when the observer missed the approval prompt. |
 | Second terminal proposal and execution | Observer reviewed and approved the two-file task. Real Codex execution reached `awaiting-final-approval`; build and tests passed. |

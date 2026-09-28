@@ -146,6 +146,6 @@ jobs:
 
           Candidate checks: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
 
-          Package remains private and UNLICENSED. No npm publication is performed. Publishing this draft requires a separate owner decision. Live harness/integration qualification, independent pilots and actual published-channel installation must be evaluated separately. See the compatibility and release runbooks before distribution.
+          Package: @agilno-tech/rivet, licensed under Apache-2.0 and configured for public alpha publication. This workflow prepares a draft only; it does not publish to npm. Registry publication and installation verification are separate steps. Live harness/integration qualification, independent pilots and actual published-channel installation must be evaluated separately. See the compatibility and release runbooks before distribution.
           NOTES
           gh release create "$CANDIDATE_TAG" "$RUNNER_TEMP"/rivet-candidate/* "$RUNNER_TEMP"/install-evidence-*.json --repo "$GITHUB_REPOSITORY" --verify-tag --draft --prerelease --title "Rivet $CANDIDATE_TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
