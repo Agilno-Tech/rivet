@@ -1,7 +1,8 @@
 import { pathToFileURL } from 'node:url';
 
 const repository = 'Agilno-Tech/rivet';
-const releaseBranch = 'release-please--branches--main';
+// Release Please includes the package component in PR branches even when tags omit it.
+const releaseBranch = 'release-please--branches--main--components--rivet';
 const activeStatuses = new Set(['queued', 'in_progress', 'waiting', 'pending', 'requested']);
 
 function trustedPullRequest(pr) {
