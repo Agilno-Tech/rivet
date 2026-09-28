@@ -155,7 +155,7 @@ jobs:
       always() && !cancelled() && needs.candidate.result == 'success' && needs.installed-artifact.result == 'success' &&
       ((github.event_name == 'workflow_dispatch' && inputs.publish) || needs.release-please.outputs.release_created == 'true')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     environment: npm
     permissions:
       contents: write

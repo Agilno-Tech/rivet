@@ -34,6 +34,10 @@ Run **Release Rivet** manually on `main`:
 
 The tag must match the package version and point to a commit in `main` history. Never move a published tag or reuse a version for changed bytes. Publication checks the registry first: an existing version is accepted only when its tarball matches the candidate exactly. An uncertain publish result is reconciled through registry reads rather than a second write. A new publication cannot move the alpha channel backwards.
 
+npm can accept a publication before its metadata and tarball are visible from all registry endpoints. Verification allows ten minutes of propagation time, polling every 15 seconds for both metadata and matching package bytes. A temporary 404 waits; permission errors and mismatched bytes stop immediately. The workflow never repeats the publish command within that attempt, including when an existing version's tarball is still propagating.
+
+If npm reports successful publication but the job ends with `publish-not-confirmed`, wait for registry propagation and inspect availability before retrying the failed job. Do not bump the version or manually publish it again just because verification timed out. A retry first checks the existing version and only accepts the exact tested package bytes. The publishing job has a 25-minute limit that also covers bounded registry requests, installed-package checks and evidence upload.
+
 The first publication also assigned npm's `latest` tag to `0.1.0-alpha.0`. Subsequent automation explicitly publishes to `alpha`; it does not manage `latest`. Documented installation uses `@alpha` explicitly.
 
 Each candidate records the source commit, package version, tarball checksum, build runtime and dependency lockfile digest. Release assets include the tarball, `release-manifest.json`, `SHA256SUMS`, and installation evidence. Packaging rejects lifecycle hooks and packs a private snapshot verified against exact commit blobs, with Git replacement objects disabled. Ignored/untracked files are excluded; symlink and submodule entries are unsupported.
