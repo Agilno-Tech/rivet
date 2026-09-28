@@ -1,0 +1,18 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "13f109e9d99e0591a7e0c255df50fd9ba1670cea",
+  "packages": {
+    ".": {
+      "release-type": "node",
+      "package-name": "@agilno-tech/rivet",
+      "include-component-in-tag": false,
+      "include-v-in-tag": true,
+      "versioning": "prerelease",
+      "prerelease": true,
+      "prerelease-type": "alpha",
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": true,
+      "changelog-path": "CHANGELOG.md"
+    }
+  }
+}

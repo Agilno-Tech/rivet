@@ -1,0 +1,256 @@
+name: Release Rivet
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing alpha tag to verify or publish; leave empty to prepare a release PR
+        type: string
+        required: false
+      publish:
+        description: Publish the tested candidate to npm (false creates a draft only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rivet-release
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    if: github.repository == 'Agilno-Tech/rivet' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || !inputs.tag)
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          target-branch: main
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+      # GITHUB_TOKEN-created PRs and tags do not start ordinary event workflows.
+      # Explicit dispatch avoids requiring a stored personal access token.
+      - name: Verify release PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_PR: ${{ steps.release.outputs.pr }}
+        run: node scripts/release-pr-dispatch.mjs
+
+  candidate:
+    needs: release-please
+    if: >-
+      always() && !cancelled() && github.repository == 'Agilno-Tech/rivet' && github.ref == 'refs/heads/main' &&
+      ((github.event_name == 'workflow_dispatch' && inputs.tag != '' && needs.release-please.result == 'skipped') ||
+      (needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+      tag: ${{ steps.source.outputs.tag }}
+      artifact-sha256: ${{ steps.pack.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate existing candidate tag
+        id: source
+        env:
+          CANDIDATE_TAG: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
+          RELEASE_SHA: ${{ needs.release-please.outputs.sha }}
+        run: |
+          node --input-type=module -e 'if (!/^v0\.\d+\.\d+-alpha\.\d+$/.test(process.env.CANDIDATE_TAG)) process.exit(1)'
+          candidate_sha=$(git rev-parse --verify "refs/tags/$CANDIDATE_TAG^{commit}")
+          git merge-base --is-ancestor "$candidate_sha" "$GITHUB_SHA"
+          if [ -n "$RELEASE_SHA" ]; then test "$candidate_sha" = "$RELEASE_SHA"; fi
+          git checkout --detach "$candidate_sha"
+          printf 'sha=%s\ntag=%s\n' "$candidate_sha" "$CANDIDATE_TAG" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run docs:build
+      - run: npm run evals -- --mode=fixture
+      - name: Check generated distribution
+        run: git diff --exit-code -- dist
+      - name: Pack the candidate once
+        id: pack
+        env:
+          CANDIDATE_TAG: ${{ steps.source.outputs.tag }}
+          CANDIDATE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          node scripts/release-artifact.mjs build --source="$GITHUB_WORKSPACE" --out="$RUNNER_TEMP/rivet-candidate" --tag="$CANDIDATE_TAG" --sha="$CANDIDATE_SHA"
+          node --input-type=module <<'NODE'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const manifest = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/rivet-candidate/release-manifest.json`));
+          appendFileSync(process.env.GITHUB_OUTPUT, `sha256=${manifest.artifact.sha256}\n`);
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-candidate
+          path: ${{ runner.temp }}/rivet-candidate/
+          if-no-files-found: error
+          retention-days: 30
+
+  installed-artifact:
+    needs: candidate
+    if: always() && !cancelled() && needs.candidate.result == 'success'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.candidate.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-candidate
+          path: ${{ runner.temp }}/rivet-candidate
+      - name: Verify and install the exact candidate bytes
+        env:
+          CANDIDATE_TAG: ${{ needs.candidate.outputs.tag }}
+          CANDIDATE_SHA: ${{ needs.candidate.outputs.sha }}
+          CANDIDATE_CHECKSUM: ${{ needs.candidate.outputs.artifact-sha256 }}
+        run: |
+          node scripts/package-smoke.mjs --artifact-dir="$RUNNER_TEMP/rivet-candidate" --tag="$CANDIDATE_TAG" --source-sha="$CANDIDATE_SHA" --artifact-sha256="$CANDIDATE_CHECKSUM" --report="$RUNNER_TEMP/install-evidence.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: install-evidence-${{ matrix.os }}-node${{ matrix.node }}
+          path: ${{ runner.temp }}/install-evidence.json
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: [release-please, candidate, installed-artifact]
+    if: >-
+      always() && !cancelled() && needs.candidate.result == 'success' && needs.installed-artifact.result == 'success' &&
+      ((github.event_name == 'workflow_dispatch' && inputs.publish) || needs.release-please.outputs.release_created == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: npm
+    permissions:
+      contents: write
+      id-token: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Require an npm CLI with trusted publishing support
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          const [major, minor, patch] = execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim().split('.').map(Number);
+          if (!(major > 11 || (major === 11 && (minor > 5 || (minor === 5 && patch >= 1))))) throw new Error('npm 11.5.1 or newer is required for trusted publishing.');
+          NODE
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-candidate
+          path: ${{ runner.temp }}/rivet-candidate
+      - name: Publish and download the exact candidate through npm OIDC
+        env:
+          CANDIDATE_TAG: ${{ needs.candidate.outputs.tag }}
+          CANDIDATE_SHA: ${{ needs.candidate.outputs.sha }}
+          CANDIDATE_CHECKSUM: ${{ needs.candidate.outputs.artifact-sha256 }}
+        run: |
+          test "$(git rev-parse --verify "refs/tags/$CANDIDATE_TAG^{commit}")" = "$CANDIDATE_SHA"
+          git merge-base --is-ancestor "$CANDIDATE_SHA" "$GITHUB_SHA"
+          node scripts/publish-release.mjs --directory="$RUNNER_TEMP/rivet-candidate" --tag="$CANDIDATE_TAG" --sha="$CANDIDATE_SHA" --artifact-sha256="$CANDIDATE_CHECKSUM" --download-directory="$RUNNER_TEMP/rivet-registry"
+      - name: Install and exercise bytes downloaded from the public registry
+        env:
+          CANDIDATE_TAG: ${{ needs.candidate.outputs.tag }}
+          CANDIDATE_SHA: ${{ needs.candidate.outputs.sha }}
+          CANDIDATE_CHECKSUM: ${{ needs.candidate.outputs.artifact-sha256 }}
+        run: |
+          node scripts/package-smoke.mjs --artifact-dir="$RUNNER_TEMP/rivet-registry" --tag="$CANDIDATE_TAG" --source-sha="$CANDIDATE_SHA" --artifact-sha256="$CANDIDATE_CHECKSUM" --report="$RUNNER_TEMP/registry-install-evidence.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: registry-install-evidence
+          path: ${{ runner.temp }}/registry-install-evidence.json
+          if-no-files-found: warn
+          retention-days: 30
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: install-evidence-*
+          path: ${{ runner.temp }}/rivet-install-evidence
+      - name: Attach immutable package and installation evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ needs.candidate.outputs.tag }}
+          CANDIDATE_SHA: ${{ needs.candidate.outputs.sha }}
+          CANDIDATE_CHECKSUM: ${{ needs.candidate.outputs.artifact-sha256 }}
+          RELEASE_MODE: publish
+        run: node scripts/release-assets.mjs
+
+      - name: Publish current documentation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run docs.yml --repo "$GITHUB_REPOSITORY" --ref main -f publish=true
+
+  draft:
+    needs: [candidate, installed-artifact]
+    if: >-
+      always() && !cancelled() && github.event_name == 'workflow_dispatch' && inputs.tag != '' && !inputs.publish &&
+      needs.candidate.result == 'success' && needs.installed-artifact.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-candidate
+          path: ${{ runner.temp }}/rivet-candidate
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: install-evidence-*
+          path: ${{ runner.temp }}/rivet-install-evidence
+      - name: Attach immutable package and installation evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ needs.candidate.outputs.tag }}
+          CANDIDATE_SHA: ${{ needs.candidate.outputs.sha }}
+          CANDIDATE_CHECKSUM: ${{ needs.candidate.outputs.artifact-sha256 }}
+          RELEASE_MODE: draft
+        run: node scripts/release-assets.mjs

@@ -1,46 +1,48 @@
-# Release candidate checklist
+# Publishing alpha releases
 
-Rivet uses package name `@agilno-tech/rivet`, Apache License 2.0 and initial version `0.1.0-alpha.0`. Package metadata permits public publication under the `alpha` tag. The npm package has not been published yet; changing metadata does not publish it.
+Rivet is published as `@agilno-tech/rivet` under Apache License 2.0. The first registry release is `0.1.0-alpha.0`. Users install `@agilno-tech/rivet@alpha` with Yarn Classic, npm or pnpm; see [installation](../site/installation.md).
 
-This runbook describes the evidence required for a candidate. The manual candidate workflow builds a draft prerelease and checks the exact artifact on Linux/macOS with Node 22/24. Actual published-channel qualification remains pending; current installation instructions are in [Get started](../site/getting-started.md).
+## Automatic version updates and publication
 
-## Record the candidate
+1. Merge reviewed changes into `main` using conventional commit titles, such as `fix: improve setup` or `feat: add a provider`.
+2. **Release Rivet** (`publish.yml`) uses Release Please to create or update a release PR. During this alpha series, it advances the alpha counter, starting with `0.1.0-alpha.1`, and updates the package version, lockfile and changelog.
+3. Review the release PR and its checks before merging it. Bot-created PRs do not trigger ordinary GitHub event workflows, so the release workflow explicitly dispatches CI and documentation checks for the release branch.
+4. Merging the release PR creates the matching Git tag and GitHub prerelease. The same workflow builds and tests that source, builds documentation, runs fixture evaluations and packs one artifact.
+5. Linux and macOS jobs on Node 22 and 24 install that exact artifact. All four jobs must pass before npm publication.
+6. The publication job uses the `npm` GitHub environment and npm trusted publishing. It publishes the tested tarball with the `alpha` tag, downloads the registry bytes, verifies the recorded checksum and runs installed-package checks again. It uploads release evidence and dispatches Pages publication.
 
-Before a versioned prerelease, record:
+A GitHub prerelease may appear before npm publication finishes. Confirm the publication job succeeded before announcing availability. Check results separately from live Claude/Codex, integration and independent-user qualification.
 
-- Exact source commit and reviewed version change.
-- Prerelease tag matching the package version, pointing to that commit.
-- Tarball filename, SHA-256 checksum and release manifest.
-- Build operating system, architecture, Node and npm versions, and dependency lockfile digest.
-- Links to CI, artifact installation checks, Pages deployment and user-trial evidence.
-- Implemented capabilities and remaining qualification from the [compatibility matrix](../site/compatibility.md).
-- Named support/triage owner and escalation route, agreed before inviting the pilot.
-- Explicit publication decision and intended pilot audience.
+Release Please is bootstrapped at commit `13f109e9d99e0591a7e0c255df50fd9ba1670cea`, the source of the manually published first alpha. The release manifest records that baseline. Changing release channels or moving to a stable version requires a reviewed configuration change.
 
-Do not move an existing tag or replace an asset under the same version. A changed candidate needs a new version and evidence.
+## One-time repository and npm setup
 
-## Build a draft candidate
+- In GitHub Actions settings, allow Actions to create pull requests. Workflow permissions remain read-only by default; individual jobs request their required permissions.
+- Create the GitHub environment `npm`, restricted to `main`. Additional required reviewers can be configured when the team wants a separate publishing approval.
+- In the npm package settings, add a GitHub Actions trusted publisher with organization `Agilno-Tech`, repository `rivet`, workflow filename `publish.yml`, environment `npm`, and direct `npm publish` allowed.
+- Use GitHub-hosted runners with Node 24 and npm 11.5.1 or newer. The publishing job requires `id-token: write`; no long-lived npm token is needed.
 
-Review and merge the candidate first. Create an immutable prerelease tag matching `package.json`, such as `v0.1.0-alpha.0`, on the intended reviewed commit. The tag must already exist and its commit must belong to the default branch history. The workflow never creates or moves tags.
+See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/). A future repository move can retain the package name, but requires updating repository URLs and the trusted-publisher binding before publishing from the new location.
 
-From GitHub Actions, run **Rivet candidate artifact** on the default branch and supply that tag. It runs build/tests, docs and fixture evaluations, checks generated distribution consistency, then packs once. Packaging rejects lifecycle hooks and packs a private snapshot verified against the exact commit blobs, with Git replacement objects disabled. Ignored/untracked files are excluded; symlink and submodule entries are currently unsupported. The artifact contains Rivet's existing built files; npm publication is not performed.
+## Retry or build a draft candidate
 
-All four installation jobs download that same tarball and check its expected checksum, source and version. They record runtime and resolved dependency versions plus actual setup/readiness/local-check outcomes. Only after every job passes does the workflow create a **draft prerelease** containing:
+Run **Release Rivet** manually on `main`:
 
-- `agilno-tech-rivet-<version>.tgz`
-- `release-manifest.json`
-- `SHA256SUMS`
-- Installation evidence for each tested OS/Node combination
+- Leave the tag empty to retry release PR preparation and dispatch missing release PR checks.
+- Supply an existing alpha tag and leave publication disabled to build and qualify a draft candidate.
+- Supply the tag and enable publication to retry a failed publication after investigating its cause.
 
-Only the final draft job has repository write permission. Existing releases/assets are never replaced by this workflow. A failed or partially uploaded draft needs investigation; rerunning does not overwrite it. Publication and audience selection remain explicit owner decisions. A draft is not a public installation channel.
+The tag must match the package version and point to a commit in `main` history. Never move a published tag or reuse a version for changed bytes. Publication checks the registry first: an existing version is accepted only when its tarball matches the candidate exactly. An uncertain publish result is reconciled through registry reads rather than a second write. A new publication cannot move the alpha channel backwards.
+
+The first publication also assigned npm's `latest` tag to `0.1.0-alpha.0`. Subsequent automation explicitly publishes to `alpha`; it does not manage `latest`. Documented installation uses `@alpha` explicitly.
+
+Each candidate records the source commit, package version, tarball checksum, build runtime and dependency lockfile digest. Release assets include the tarball, `release-manifest.json`, `SHA256SUMS`, and installation evidence. Packaging rejects lifecycle hooks and packs a private snapshot verified against exact commit blobs, with Git replacement objects disabled. Ignored/untracked files are excluded; symlink and submodule entries are unsupported.
 
 For a local rehearsal, use a clean tagged checkout and a new output directory outside the repository:
 
 ```sh
-node scripts/release-artifact.mjs build --source=/absolute/rivet --out=/absolute/new-candidate --tag=v0.1.0-alpha.0 --sha=<full-source-commit>
+node scripts/release-artifact.mjs build --source=/absolute/rivet --out=/absolute/new-candidate --tag=v0.1.0-alpha.1 --sha=<full-source-commit>
 ```
-
-This is maintainer tooling. Ordinary users should follow the published installation instructions.
 
 ## Verify the exact artifact
 
@@ -73,31 +75,3 @@ Keep the previous qualified artifact and checksum available. Before switching ve
 Do not delete configuration, private task records, worktrees or user edits to make an older version run. If the older release cannot read newer state safely, stop and use the documented recovery path for that candidate. Do not infer downgrade support from an unchanged schema number.
 
 The first versioned release has no previous published baseline. Mark release-to-release rollback rehearsal unavailable until a baseline exists, while still verifying preservation and reinstall behavior. Unpublishing or deleting a release is not a substitute for recovering users who already installed it.
-
-## Preparing registry publication
-
-The existing candidate workflow creates GitHub draft assets only. npm publication is a separate, explicitly authorized manual step:
-
-1. Confirm your npm account has publishing access to the `agilno-tech` organization, and enable the account authentication required by npm. Keep credentials and one-time codes out of Git and issue reports.
-2. Confirm the reviewed package has name `@agilno-tech/rivet`, license `Apache-2.0`, the complete `LICENSE` file, and public `publishConfig` using the `alpha` tag and npm registry. Release validation checks these fields. The package must not be private.
-3. Build and verify one immutable candidate tarball using the procedure above. Keep version `0.1.0-alpha.0` only if that version has never been published; subsequent candidates need a new version. Review the manifest, checksum, package contents and installation evidence.
-4. Authenticate locally, then dry-run publication of that exact tested tarball. Do not publish from the working directory or repack after testing:
-
-   ```sh
-   npm login --registry=https://registry.npmjs.org/
-   npm publish /absolute/candidate/agilno-tech-rivet-0.1.0-alpha.0.tgz --access public --tag alpha --registry=https://registry.npmjs.org/ --dry-run
-   ```
-
-5. After checking the dry-run and approving publication, publish the same bytes:
-
-   ```sh
-   npm publish /absolute/candidate/agilno-tech-rivet-0.1.0-alpha.0.tgz --access public --tag alpha --registry=https://registry.npmjs.org/
-   ```
-
-6. Verify the registry package metadata and alpha tag, download its tarball, compare its SHA-256 with the tested artifact, and rerun installation checks against those downloaded bytes. Test fresh registry installation with each documented package manager. Only then replace the source-install quickstart with registry commands and announce availability.
-
-The explicit `alpha` tag keeps this release off the `latest` channel. The executable remains `rivet`. npm is used here as the registry publishing client; users can install with Yarn Classic, npm or pnpm. A future automated publisher should use a separately reviewed npm trusted-publishing workflow with short-lived OIDC credentials.
-
-A future repository move need not change the npm package name. Keep npm ownership/access, update repository and support URLs, and replace the trusted-publisher binding with one for the new repository/workflow before publishing there. A different npm scope or package name is a different package identity, so choose that separately from the GitHub location.
-
-References: [scoped public packages](https://docs.npmjs.com/creating-and-publishing-scoped-public-packages/), [distribution tags](https://docs.npmjs.com/adding-dist-tags-to-packages/), [trusted publishing](https://docs.npmjs.com/trusted-publishers/) and [package metadata](https://docs.npmjs.com/cli/v11/configuring-npm/package-json/).

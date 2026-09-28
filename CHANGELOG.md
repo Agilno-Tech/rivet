@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0-alpha.0 (candidate, not published)
+## 0.1.0-alpha.0 (2026-09-28)
 
 ### Implemented
 
@@ -16,6 +16,6 @@
 
 ### Qualification and remaining work
 
-The candidate is not a completed pilot or a production-readiness claim. Full host/desktop workflows, independent first-user trials, authenticated integration and delivery scenarios, broader live model profiles, and actual published-channel installation require separate evidence. Shared Obsidian memory is post-MVP and remains unimplemented. Remaining work is tracked in the published status documentation.
+This alpha release is not a completed pilot or a production-readiness claim. Full host/desktop workflows, independent first-user trials, authenticated integration and delivery scenarios, broader live model profiles and broader installation environments require separate evidence. Shared Obsidian memory is post-MVP and remains unimplemented. Remaining work is tracked in the published status documentation.
 
-Package name is `@agilno-tech/rivet`, licensed under Apache-2.0 and configured for public publication with the `alpha` tag. No npm release is published by the candidate workflow. See [release guidance](https://agilno-tech.github.io/rivet/release.html) and the [compatibility matrix](https://agilno-tech.github.io/rivet/compatibility.html).
+Published on [npm](https://www.npmjs.com/package/@agilno-tech/rivet/v/0.1.0-alpha.0) as `@agilno-tech/rivet@0.1.0-alpha.0`, licensed under Apache-2.0, with the `alpha` tag. The first release was published manually; the candidate workflow builds and tests artifacts. See [release guidance](https://agilno-tech.github.io/rivet/release.html) and the [compatibility matrix](https://agilno-tech.github.io/rivet/compatibility.html).

@@ -4,20 +4,20 @@ Rivet needs **Node.js 22 or 24 and Git** on macOS or Linux. Your application can
 
 ## 1. Install Rivet
 
-The alpha is currently installed from GitHub. Choose Yarn Classic, npm or pnpm:
+Install the published alpha package. Choose Yarn Classic, npm or pnpm:
 
 ::: code-group
 
 ```sh [Yarn Classic]
-yarn global add "https://github.com/Agilno-Tech/rivet.git#main"
+yarn global add @agilno-tech/rivet@alpha
 ```
 
 ```sh [npm]
-npm install --global "https://github.com/Agilno-Tech/rivet.git#main"
+npm install --global @agilno-tech/rivet@alpha
 ```
 
 ```sh [pnpm]
-pnpm add --global "https://github.com/Agilno-Tech/rivet.git#main"
+pnpm add --global @agilno-tech/rivet@alpha
 ```
 
 :::
@@ -28,7 +28,7 @@ rivet --help
 
 Modern Yarn does not provide `yarn global`; use npm or pnpm for the global CLI instead.
 
-For a pinned source revision, PATH help or a project-only installation, see [installation](./installation.md).
+For a pinned version, PATH help or a project-only installation, see [installation](./installation.md).
 
 ## 2. Connect your project
 

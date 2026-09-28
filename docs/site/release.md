@@ -1,27 +1,27 @@
 # Versions and updates
 
-Rivet is currently an alpha, with package version `0.1.0-alpha.0`. A public registry package has not been published yet. Use the [GitHub installation instructions](./installation.md).
+Rivet is published on [npm](https://www.npmjs.com/package/@agilno-tech/rivet) as `@agilno-tech/rivet`. Use the `alpha` channel for the current alpha release. The first published version is `0.1.0-alpha.0`.
 
 ## Moving from `@agilno/rivet`
 
 If the old `@agilno/rivet` package is installed globally, remove it with the package manager that installed it before installing the new package. Both use the `rivet` executable. Follow the [one-time package migration](./installation.md#upgrade-from-the-previous-package-name); project configuration, task state and worktrees are preserved. Project runtime pins require a separate explicit update.
 
-## Update a source installation
+## Update the alpha package
 
 Repeat the installation command with the package manager you originally used:
 
 ::: code-group
 
 ```sh [Yarn Classic]
-yarn global add "https://github.com/Agilno-Tech/rivet.git#main"
+yarn global add @agilno-tech/rivet@alpha
 ```
 
 ```sh [npm]
-npm install --global "https://github.com/Agilno-Tech/rivet.git#main"
+npm install --global @agilno-tech/rivet@alpha
 ```
 
 ```sh [pnpm]
-pnpm add --global "https://github.com/Agilno-Tech/rivet.git#main"
+pnpm add --global @agilno-tech/rivet@alpha
 ```
 
 :::
@@ -34,7 +34,7 @@ rivet doctor
 rivet task status
 ```
 
-The `main` branch changes over time. Use a reviewed commit SHA instead of `main` when you need to select the same source revision across a team. Project-only and verified-tarball installations have separate [installation instructions](./installation.md).
+The `alpha` tag can move to a newer release. Replace `@alpha` with an exact published version, such as `@0.1.0-alpha.0`, when your team needs the same version. Project-only, verified-tarball and advanced source installations have separate [installation instructions](./installation.md).
 
 Review active tasks and keep your project configuration, private task state and worktrees before updating. Do not delete unfinished work to resolve an upgrade problem. Older versions may not understand newer task state; downgrades are not guaranteed.
 
