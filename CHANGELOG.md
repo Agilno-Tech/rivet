@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.0-alpha.2](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.1...v0.1.0-alpha.2) (2026-09-28)
+
+
+### Features
+
+* task decisions and configurable review evidence ([#60](https://github.com/Agilno-Tech/rivet/issues/60)) ([a314138](https://github.com/Agilno-Tech/rivet/commit/a3141388beca5edb827fa75bd5f32e39dadfc4f7))
+
+
+### Bug Fixes
+
+* keep latest release current and upgrade action runtimes ([#59](https://github.com/Agilno-Tech/rivet/issues/59)) ([ce41fc1](https://github.com/Agilno-Tech/rivet/commit/ce41fc1e0c1eabd4f3230f8b443ab63078418be8))
+* wait for npm registry propagation before verification ([#57](https://github.com/Agilno-Tech/rivet/issues/57)) ([9c79217](https://github.com/Agilno-Tech/rivet/commit/9c7921702a3674f1acab370b482f631734444b1e))
+
 ## [0.1.0-alpha.1](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.0...v0.1.0-alpha.1) (2026-09-28)
 
 
