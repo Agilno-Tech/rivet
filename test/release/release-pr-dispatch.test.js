@@ -7,7 +7,7 @@ const env = { GITHUB_REPOSITORY: 'Agilno-Tech/rivet', GITHUB_REF: 'refs/heads/ma
 const pr = {
   number: 12, state: 'open', user: { login: 'github-actions[bot]' },
   base: { ref: 'main', repo: { full_name: 'Agilno-Tech/rivet' } },
-  head: { ref: 'release-please--branches--main', sha: 'a'.repeat(40), repo: { full_name: 'Agilno-Tech/rivet' } },
+  head: { ref: 'release-please--branches--main--components--rivet', sha: 'a'.repeat(40), repo: { full_name: 'Agilno-Tech/rivet' } },
   labels: [{ name: 'autorelease: pending' }],
 };
 function mock({ pullRequest = pr, runs = [], beforeDispatch = pullRequest } = {}) {
