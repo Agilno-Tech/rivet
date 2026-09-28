@@ -14,7 +14,7 @@ test('Rivet owns its package, executable and project configuration', async () =>
   assert.deepEqual(Object.keys(pkg.bin), ['rivet']);
   assert.equal(pkg.private, undefined);
   assert.equal(pkg.license, 'Apache-2.0');
-  assert.deepEqual(pkg.publishConfig, {access:'public',tag:'alpha',registry:'https://registry.npmjs.org/'});
+  assert.deepEqual(pkg.publishConfig, {access:'public',tag:'latest',registry:'https://registry.npmjs.org/'});
   assert.equal(pkg.repository.url, 'git+https://github.com/Agilno-Tech/rivet.git');
   assert.equal(CONFIG_DIRECTORY, '.rivet');
   assert.equal(Object.values(pkg.dependencies).some(version => /^(?:file:|link:|workspace:)/.test(version)), false);
@@ -64,4 +64,15 @@ test('alpha installations check their own update channel', async () => {
   assert.match(lines.join('\n'), /0\.1\.0-alpha\.0 → 0\.1\.0-alpha\.1/);
   assert.match(lines.join('\n'), /@agilno-tech\/rivet@alpha/);
   assert.doesNotMatch(lines.join('\n'), /@latest|1\.0\.0/);
+});
+
+test('current alpha packages follow latest without changing their prerelease identity', async () => {
+ const {checkForUpdate}=await import('../../src/commands/install.js');
+ const lines=[];
+ const metadata={name:'@agilno-tech/rivet',version:'0.1.0-alpha.1',publishConfig:{tag:'latest'}};
+ await checkForUpdate({packageRoot:'/fixture',fs:{readFileSync:()=>JSON.stringify(metadata)},
+  fetch:async()=>new Response(JSON.stringify({'dist-tags':{latest:'0.1.0-alpha.2',alpha:'0.1.0-alpha.1'}})),
+  output:{log:line=>lines.push(line)}});
+ assert.match(lines.join('\n'),/0\.1\.0-alpha\.1 → 0\.1\.0-alpha\.2/);
+ assert.match(lines.join('\n'),/@agilno-tech\/rivet@latest/);
 });

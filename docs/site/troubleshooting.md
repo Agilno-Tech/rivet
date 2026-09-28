@@ -8,7 +8,7 @@ If Git cannot be found or used, the error now identifies Git and explains how to
 
 ## The public install command does not resolve
 
-Use the exact package name `@agilno-tech/rivet@alpha` from the [installation guide](./installation.md). It is public on the [npm registry](https://www.npmjs.com/package/@agilno-tech/rivet); installing it does not require an npm account. If your package manager uses a private registry or an `@agilno-tech` scope override, check that configuration and your network access to `https://registry.npmjs.org/`. A `401` or `403` during installation can indicate stale credentials or registry policy.
+Use the exact package name `@agilno-tech/rivet` from the [installation guide](./installation.md). It is public on the [npm registry](https://www.npmjs.com/package/@agilno-tech/rivet); installing it does not require an npm account. If your package manager uses a private registry or an `@agilno-tech` scope override, check that configuration and your network access to `https://registry.npmjs.org/`. A `401` or `403` during installation can indicate stale credentials or registry policy.
 
 ## Installation succeeds but rivet is missing
 
