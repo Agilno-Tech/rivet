@@ -1,3 +1,4 @@
+import { requireGovernance } from './governance.js';
 import {assertSelectedProtocolRefs, selectedProtocolStatus} from '../protocols/project.js';
 import {createProtocolPresentation} from '../protocols/presentation.js';
 import { createHash } from 'node:crypto';
@@ -517,6 +518,7 @@ export function createFeatureExecutor(input) {
     if (repository.root !== project || repository.detached || repository.dirty
       || repository.branch !== config.project.repository.defaultBranch
       || repository.headSha !== run.featurePlan.baselineCommit) fail();
+    await requireGovernance({project,run,gitClient:configured.gitClient,config,phase:'plan'});
     // Only select adapters after the saved approval and current role configuration
     // are validated. Probe before creating integration or worker checkouts.
     const selectedClients = new Map();
@@ -743,6 +745,7 @@ export function createFeatureExecutor(input) {
       }
       const maximumTicks = run.featurePlan.nodes.length * 4 + 8;
       for (let tick = 0; tick < maximumTicks; tick += 1) {
+        await requireGovernance({project,run,gitClient:configured.gitClient,phase:'plan'});
         const outcome = await runtime.tick(instance, { expectedVersion: state.version, maxActiveNodes: 1, signal });
         state = await inspectFeatureRuntime(instance);
         if (['blocked', 'failed', 'budget-exhausted', 'cancelled'].includes(outcome.terminal)) {
@@ -803,6 +806,7 @@ export function createFeatureExecutor(input) {
         gates: await configuredFeatureGates(config, configured.resolveCommandExecutable, integration.path),
         environment: configured.environment,
       }, { gitClient: configured.gitClient, now: nowMs, signal });
+      if(quality.status==='pass') await requireGovernance({project,run,gitClient:configured.gitClient,config,phase:'final',checkout:{path:integration.path,branch:integration.branch,commitSha:identity.commitSha}});
     } catch (error) {
       failure = typeof error?.safeMessage === 'string' ? error.safeMessage : 'Configured quality gates could not complete safely.';
     }

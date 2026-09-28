@@ -113,3 +113,37 @@ test('feature branches run CI through pull requests only, with obsolete runs can
  assert.equal(docs.concurrency['cancel-in-progress'],'${{ !inputs.publish }}');
  assert.equal(docs.jobs.deploy.concurrency['cancel-in-progress'],false);
 });
+
+test('only canonical internal release bot PR events skip duplicate jobs', async () => {
+  const trusted = {
+    event_name: 'pull_request', repository: 'Agilno-Tech/rivet',
+    event: { pull_request: {
+      user: { login: 'github-actions[bot]' },
+      head: { ref: 'release-please--branches--main--components--rivet', repo: { full_name: 'Agilno-Tech/rivet' } },
+      base: { ref: 'main', repo: { full_name: 'Agilno-Tech/rivet' } },
+    } },
+  };
+  for (const [path, job] of [['ci.yml', 'check'], ['docs.yml', 'build']]) {
+    const parsed = parse(await readFile(new URL(`../../.github/workflows/${path}`, import.meta.url), 'utf8'));
+    const expression = parsed.jobs[job].if;
+    assert.match(expression, /^\$\{\{ !\(/);
+    // Execute the repository-owned, JavaScript-compatible boolean expression,
+    // so changing any trust predicate changes the behavior exercised here.
+    const evaluate = new Function('github', `return (${expression.slice(3, -2)});`);
+    assert.equal(evaluate(trusted), false, path);
+    for (const change of [
+      value => { value.event_name = 'workflow_dispatch'; delete value.event.pull_request; },
+      value => { value.event_name = 'push'; delete value.event.pull_request; },
+      value => { value.repository = 'fork/rivet'; },
+      value => { value.event.pull_request.user.login = 'maintainer'; },
+      value => { value.event.pull_request.head.repo.full_name = 'fork/rivet'; },
+      value => { value.event.pull_request.base.repo.full_name = 'fork/rivet'; },
+      value => { value.event.pull_request.base.ref = 'other'; },
+      value => { value.event.pull_request.head.ref = 'codex/feature'; },
+      value => { value.event.pull_request.head.ref += '-lookalike'; },
+    ]) {
+      const candidate = structuredClone(trusted); change(candidate);
+      assert.equal(evaluate(candidate), true, `${path}: ordinary/dispatch event must verify`);
+    }
+  }
+});

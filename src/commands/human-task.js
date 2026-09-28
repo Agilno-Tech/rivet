@@ -1,3 +1,4 @@
+import { taskGovernanceCommand } from './task-governance.js';
 import { taskState } from '../cli/task-presentation.js';
 import { finishTask } from './task-completion.js';
 import { resolveConfiguredProject } from '../cli/project-discovery.js';
@@ -172,13 +173,15 @@ function renderWorkerCheckouts(status, output) {
 
 
 export async function humanTaskCommand(parsed, dependencies) {
-  if (parsed.command !== 'task' || !['status', 'start', 'approve', 'resume', 'deps', 'recover'].includes(parsed.subcommand)
-    || parsed.operands.length !== 0 || Object.keys(parsed.flags).some(key => !['project', 'run', 'details'].includes(key))) {
+  if (parsed.command !== 'task' || !['status', 'start', 'approve', 'resume', 'deps', 'recover', 'decisions', 'decide', 'approve-decision', 'review'].includes(parsed.subcommand)
+    || parsed.operands.length !== 0 || Object.keys(parsed.flags).some(key => !['project', 'run', 'details', 'input', 'input-json', 'phase', 'decision'].includes(key))) {
     fail('Use rivet task status|start|approve|resume|deps|recover [--project=<path>] [--run=<id>].');
   }
   const project = await resolveConfiguredProject(dependencies.cwd(), parsed.flags.project, { env: dependencies.env });
   const record = await selectedRun(project.root, parsed.flags.run, parsed.subcommand, dependencies);
   if (!record) {dependencies.output.log('Task selection cancelled. No task action was taken.');return EXIT_CODES.SUCCESS;}
+  if (['decisions','decide','approve-decision','review'].includes(parsed.subcommand)) return taskGovernanceCommand(parsed,dependencies,project,record);
+  if (['input','input-json','phase','decision'].some(key=>parsed.flags[key]!==undefined)) fail('Evidence options require a decision or review command.');
   if (parsed.subcommand === 'approve') return finishTask(project, record, dependencies);
   if (parsed.subcommand === 'recover') {
     if (record.featurePlan.client !== 'host' && !['awaiting-final-approval','completed'].includes(record.status)) fail('Lock recovery is only available for host tasks or terminal tasks at final review; it never restarts a worker.', 'REPOSITORY_CONFLICT');
@@ -203,6 +206,11 @@ export async function humanTaskCommand(parsed, dependencies) {
       dependencies.output.log(`Worker harnesses: ${[...new Set(record.featurePlan.nodes.filter(node => node.role === 'worker').map(node => node.execution?.client ?? record.featurePlan.client))].join(', ')}`);
     } else dependencies.output.log(`Harness: ${record.featurePlan.client}`);
     dependencies.output.log(`Next: ${record.status === 'completed' ? 'Task completed. Inspect its recorded evidence and any separate delivery status.' : record.status === 'proposed' && record.featurePlan.client !== 'host' ? `rivet task start --run=${record.runId}` : record.status === 'awaiting-final-approval' && status.deliveryReady ? `rivet task approve --run=${record.runId}` : visible(status.nextAction)}`);
+    if (status.governance?.decisions.length) {
+      dependencies.output.log(`Decisions: ${status.governance.decisions.length}; use rivet task decisions to read the journal.`);
+    }
+    for (const blocker of status.governance?.blockers ?? []) dependencies.output.log(`Review: ${visible(blocker.code)}${blocker.reviewerId ? ` (${visible(blocker.reviewerId)})` : ''}`);
+    if (status.governance?.review.humanEscalation) dependencies.output.log('Review round limit reached. Ask a human to assess the findings and prepare a corrective task.');
     if (status.verification) {
       dependencies.output.log(`Verification: ${status.verification.status} at ${status.verification.commitSha}`);
       for (const path of status.verification.changedPaths) dependencies.output.log(`Changed: ${visible(path)}`);

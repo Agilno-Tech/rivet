@@ -48,7 +48,7 @@ export async function dispatchReleaseWorkflows({ env = process.env, request } = 
   for (const pr of prs) {
     for (const workflow of ['ci.yml', 'docs.yml']) {
       const runs = await request('GET', `actions/workflows/${workflow}/runs?head_sha=${pr.head.sha}&per_page=100`);
-      const alreadyVerified = runs.workflow_runs.some(run => run.head_sha === pr.head.sha
+      const alreadyVerified = runs.workflow_runs.some(run => run.event === 'workflow_dispatch' && run.head_sha === pr.head.sha
         && run.head_branch === releaseBranch
         && (activeStatuses.has(run.status) || run.conclusion === 'success'));
       if (alreadyVerified) continue;

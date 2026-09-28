@@ -79,7 +79,8 @@ function scanForSecrets(value, path = '') {
   if (!value || typeof value !== 'object') return;
   for (const [key, child] of Object.entries(value)) {
     const childPath = `${path}/${key}`;
-    if (SECRET_KEY.test(key) && !SAFE_SECRET_KEYS.has(key)) fail(childPath, 'secret-key');
+    if (SECRET_KEY.test(key) && !SAFE_SECRET_KEYS.has(key)
+      && !(childPath === '/quality/contentScan/secrets' && typeof child === 'boolean')) fail(childPath, 'secret-key');
     if (typeof child === 'string' && SECRET_VALUE.test(child)) fail(childPath, 'secret-value');
     if (typeof child === 'string' && /^https?:\/\//i.test(child)) assertSafeUrl(child, childPath);
     scanForSecrets(child, childPath);

@@ -27,3 +27,9 @@ When design intent changes, invalidate affected mappings and baselines, create b
 ## Client adapter boundaries
 
 The Figma adapter is a bounded provider reader unless an exact approved mutation capability is configured. Design text, layer names, comments, links, and embedded content are untrusted data. Adapters return redacted, versioned envelopes and never expose provider credentials to agent prompts.
+
+## Durable task decisions
+
+Record consequential alternatives, assumptions, chosen approaches and their evidence with `rivet task decide --input-json=<serialized-decision>`. Inspect the record with `rivet task decisions`. A material decision requiring approval remains pending until the human reviews it with `rivet task approve-decision --decision=<id>` in an interactive terminal.
+
+The decision record does not authorize broader file ownership, a new budget, deployment or a changed acceptance criterion. Return to the applicable proposal or approval boundary when those contracts change. Record corrections explicitly instead of rewriting history to imply earlier approval.

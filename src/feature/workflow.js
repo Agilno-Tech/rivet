@@ -1,3 +1,4 @@
+import { assertGovernancePolicy, requireGovernance } from './governance.js';
 import {assertSelectedProtocolRefs, selectedProtocolStatus} from '../protocols/project.js';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 
@@ -212,6 +213,8 @@ export function createFeatureWorkflow(input) {
       new Set(['project', 'source']),
     );
     const { observed, config } = await repository(request.project);
+    if(config.quality.review!==undefined||config.quality.contentScan!==undefined)
+      await assertGovernancePolicy({project:request.project,baselineCommit:observed.headSha,gitClient,config});
     const selectedClient = request.client ?? 'claude';
     if (!CLIENTS.has(selectedClient)) fail('invalid-input');
     const source = capture(request.source, new Set(['kind', 'value']));
@@ -286,13 +289,14 @@ export function createFeatureWorkflow(input) {
       baselineCommit: record.featurePlan.baselineCommit, client: record.featurePlan.client });
   }
 
-  async function start(raw) {
+  async function startLocked(raw) {
     const request = capture(raw, new Set(['project', 'runId', 'expectedVersion', 'proposalDigest']));
     const { store, record } = await readRun(request.project, request.runId);
     if (record.status !== 'proposed' || record.version !== expectedVersion(request.expectedVersion)) fail('state-conflict');
     if (typeof request.proposalDigest !== 'string' || !DIGEST.test(request.proposalDigest)
       || request.proposalDigest !== record.proposalDigest) fail('proposal-mismatch');
     await validateSavedPlan(request.project, record);
+    await requireGovernance({project:request.project,run:record,gitClient,config:await loadConfig(request.project),phase:'plan'});
     const at = now();
     const updated = await store.update({
       status: 'approved', updatedAt: at,
@@ -303,6 +307,13 @@ export function createFeatureWorkflow(input) {
       runtimeRefs: record.runtimeRefs, evidenceRefs: [...record.evidenceRefs, 'approval:activation'],
     }, { expectedVersion: record.version });
     return lifecycleView(updated);
+  }
+
+  async function start(raw) {
+    const request = capture(raw, new Set(['project', 'runId', 'expectedVersion', 'proposalDigest']));
+    const paths = await resolveFeatureRunPaths(absolute(request.project), exactRunId(request.runId));
+    const lock = await acquireHostRunLock(paths);
+    try { return await startLocked(raw); } finally { await lock.release(); }
   }
 
   async function status(raw) {

@@ -32,7 +32,7 @@ const DEFAULT_FILE_SYSTEM = Object.freeze({
   statSync,
 });
 
-function parseYaml(source, filename) {
+export function parseYaml(source, filename) {
   let documents;
   try {
     documents = parseAllDocuments(source, {

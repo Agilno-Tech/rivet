@@ -119,7 +119,7 @@ export function candidate(input) {
   exact(
     value,
     ['runId', 'repository', 'sourceBranch', 'targetBranch', 'localVerification'],
-    ['reviewNumber']
+    ['reviewNumber', 'decisionSummary']
   );
   id(value.runId);
   ref(value.sourceBranch);
@@ -132,11 +132,22 @@ export function candidate(input) {
     'evidenceDigest',
     'verifiedAt',
     'status',
-  ]);
+  ], ['governanceDigest', 'decisionSummaryDigest']);
   ensure(proof.runId === value.runId && proof.status === 'passed');
   sha(proof.headSha);
   digest(proof.evidenceDigest);
   timestamp(proof.verifiedAt);
+  if (proof.governanceDigest !== undefined) digest(proof.governanceDigest);
+  ensure((value.decisionSummary === undefined) === (proof.decisionSummaryDigest === undefined));
+  if (value.decisionSummary !== undefined) {
+    const summary = value.decisionSummary;
+    ensure(typeof summary === 'string' && summary.startsWith('## Decisions\n\n')
+      && Buffer.byteLength(summary) <= 32000 && summary.length > 16
+      && !/[\u0000-\u0009\u000b-\u001f\u007f<>[\]`@]/.test(summary), 'invalid-decision-summary');
+    digest(proof.decisionSummaryDigest);
+    ensure(proof.governanceDigest !== undefined && hash(summary) === proof.decisionSummaryDigest, 'decision-summary-mismatch');
+  }
+
   ensure(
     value.reviewNumber === undefined || (Number.isSafeInteger(value.reviewNumber) && value.reviewNumber > 0)
   );

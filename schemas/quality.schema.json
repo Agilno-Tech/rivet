@@ -4,46 +4,314 @@
   "title": "Agilno tracked quality policy",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "providerRefs", "completionProfileRefs", "commandGates", "expectations", "evidence"],
+  "required": [
+    "schemaVersion",
+    "providerRefs",
+    "completionProfileRefs",
+    "commandGates",
+    "expectations",
+    "evidence"
+  ],
   "properties": {
-    "schemaVersion": { "type": "integer", "const": 1 },
-    "providerRefs": { "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
-    "completionProfileRefs": { "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
-    "commandGates": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "$ref": "#/$defs/commandGate" } },
+    "contentScan": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "secrets": {
+          "type": "boolean"
+        },
+        "unicode": {
+          "enum": [
+            "warn",
+            "required",
+            "off"
+          ]
+        },
+        "maxFiles": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2097152
+        },
+        "allowlist": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "ruleId",
+              "path",
+              "reason"
+            ],
+            "properties": {
+              "ruleId": {
+                "enum": [
+                  "private-key",
+                  "github-token",
+                  "npm-token",
+                  "aws-access-key",
+                  "unicode-bidi",
+                  "unicode-mixed-identifier",
+                  "type-suppression"
+                ]
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024,
+                "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*[/]$)[^\\\\*?\\[\\]{}\\u0000-\\u001f\\u007f]+$"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500,
+                "pattern": "\\S"
+              }
+            }
+          }
+        },
+        "shortcutRules": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "ruleId",
+              "paths",
+              "reason"
+            ],
+            "properties": {
+              "ruleId": {
+                "const": "type-suppression"
+              },
+              "paths": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024,
+                  "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*[/]$)[^\\\\*?\\[\\]{}\\u0000-\\u001f\\u007f]+$"
+                }
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500,
+                "pattern": "\\S"
+              },
+              "required": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    },
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "providerRefs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/id"
+      }
+    },
+    "completionProfileRefs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/id"
+      }
+    },
+    "commandGates": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "$ref": "#/$defs/commandGate"
+      }
+    },
     "expectations": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["storybook", "playwright", "accessibility", "security", "visual"],
+      "required": [
+        "storybook",
+        "playwright",
+        "accessibility",
+        "security",
+        "visual"
+      ],
       "properties": {
-        "storybook": { "enum": ["optional", "required"] },
-        "playwright": { "enum": ["optional", "required"] },
-        "accessibility": { "enum": ["none", "wcag-a", "wcag-aa"] },
-        "security": { "enum": ["required", "not-applicable-with-approval"] },
-        "visual": { "enum": ["none", "automated", "human-baseline"] }
+        "storybook": {
+          "enum": [
+            "optional",
+            "required"
+          ]
+        },
+        "playwright": {
+          "enum": [
+            "optional",
+            "required"
+          ]
+        },
+        "accessibility": {
+          "enum": [
+            "none",
+            "wcag-a",
+            "wcag-aa"
+          ]
+        },
+        "security": {
+          "enum": [
+            "required",
+            "not-applicable-with-approval"
+          ]
+        },
+        "visual": {
+          "enum": [
+            "none",
+            "automated",
+            "human-baseline"
+          ]
+        }
       }
     },
     "evidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["requiredTypes", "requireHumanBaseline", "requireHumanFinal"],
+      "required": [
+        "requiredTypes",
+        "requireHumanBaseline",
+        "requireHumanFinal"
+      ],
       "properties": {
-        "requiredTypes": { "type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": { "$ref": "#/$defs/evidenceType" } },
-        "requireHumanBaseline": { "type": "boolean" },
-        "requireHumanFinal": { "type": "boolean", "const": true }
+        "requiredTypes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/evidenceType"
+          }
+        },
+        "requireHumanBaseline": {
+          "type": "boolean"
+        },
+        "requireHumanFinal": {
+          "type": "boolean",
+          "const": true
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "maxRounds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "strictCoverage": {
+          "type": "boolean"
+        },
+        "reviewers": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "paths",
+              "required"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/id"
+              },
+              "paths": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 128,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 512
+                }
+              },
+              "required": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
       }
     }
   },
   "$defs": {
-    "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" },
-    "evidenceType": { "enum": ["commit", "test", "journey", "screenshot", "report", "review", "human-approval", "external-update"] },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+    },
+    "evidenceType": {
+      "enum": [
+        "commit",
+        "test",
+        "journey",
+        "screenshot",
+        "report",
+        "review",
+        "human-approval",
+        "external-update"
+      ]
+    },
     "commandGate": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "command", "required"],
+      "required": [
+        "id",
+        "command",
+        "required"
+      ],
       "properties": {
-        "id": { "$ref": "#/$defs/id" },
-        "command": { "enum": ["build", "test", "lint", "typecheck", "dev", "check"] },
-        "required": { "type": "boolean" }
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "command": {
+          "enum": [
+            "build",
+            "test",
+            "lint",
+            "typecheck",
+            "dev",
+            "check"
+          ]
+        },
+        "required": {
+          "type": "boolean"
+        }
       }
     }
   }

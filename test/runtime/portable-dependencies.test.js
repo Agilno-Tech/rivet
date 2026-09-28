@@ -6,7 +6,8 @@ import {join} from 'node:path';
 import YAML from 'yaml';
 import {loadProjectConfig} from '../../src/config/load.js';
 import {createFeaturePlanner} from '../../src/feature/planner.js';
-import {featurePlanDigest} from '../../src/feature/plan-contract.js';
+import {createFeatureRunStore} from '../../src/feature/run-store.js';
+import {resolveFeatureRunPaths} from '../../src/state/paths.js';
 import {createFeatureExecutor} from '../../src/feature/runtime-bridge.js';
 import {createWorkRequest} from '../../src/work-request/contract.js';
 import {promisify} from 'node:util';
@@ -115,8 +116,11 @@ test('spawned portable workflow separately approves and prepares Worker and acce
  const baselineCommit=(await f.gitClient.inspectRepository(root)).headSha,config=await loadProjectConfig(root),now='2029-01-01T00:00:00.000Z';
  const request=createWorkRequest({source:{kind:'inline',ref:'inline'},title:'Portable fixture',description:'Write result.',acceptanceCriteria:['Result exists'],contextRefs:[],capturedAt:now});
  const planner=createFeaturePlanner({planningClient:{propose:async()=>({schemaVersion:1,kind:'agilno.feature-decomposition',workItems:[{objective:'Write result',ownedPaths:['result.txt'],acceptanceCriterionIndexes:[1]}]})}});
- const featurePlan=await planner.propose({config,workRequest:request,baselineCommit,client:'codex'}),digest=featurePlanDigest(featurePlan);
- const run={runId:'portable-deps-run',status:'running',workRequest:request,featurePlan,proposalDigest:digest,activation:{approverId:'human-cli-operator',approvedAt:now,requestDigest:request.digest,proposalDigest:digest}};
+ const featurePlan=await planner.propose({config,workRequest:request,baselineCommit,client:'codex'});
+ const store=createFeatureRunStore(await resolveFeatureRunPaths(root,'portable-deps-run'));
+ const proposed=await store.create({workRequest:request,featurePlan,createdAt:now});
+ const approved=await store.update({status:'approved',updatedAt:now,activation:{approverId:'human-cli-operator',approvedAt:now,requestDigest:request.digest,proposalDigest:proposed.proposalDigest},runtimeRefs:[],evidenceRefs:['approval:activation']},{expectedVersion:proposed.version});
+ const run=await store.update({status:'running',updatedAt:now,runtimeRefs:approved.runtimeRefs,evidenceRefs:approved.evidenceRefs},{expectedVersion:approved.version});
  const approvals=[],launches=[];
  const executor=createFeatureExecutor({gitClient:f.gitClient,now:()=>now,environment:{PATH:process.env.PATH},resolveCommandExecutable:f.options.resolveCommandExecutable,clientFor:kind=>({provider:kind,launch:async contract=>{
   await access(join(contract.worktree.path,'.rivet-deps/venv/bin/python'));launches.push(contract.worktree.path);

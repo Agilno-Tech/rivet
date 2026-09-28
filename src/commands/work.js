@@ -40,7 +40,7 @@ function sameFile(left, right) {
   return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.nlink === right.nlink;
 }
 
-function readJson(project, path, fs, label) {
+export function readJson(project, path, fs, label) {
   const target = absolute(path, `${label} path`);
   const contained = relative(project, target);
   if (!contained || contained === '..' || contained.startsWith(`..${sep}`) || isAbsolute(contained)) {

@@ -13,7 +13,7 @@ Use `rivet --help --advanced` to see the complete installed command reference. F
 
 ## Connect the application project
 
-Node.js 22 or 24 runs Rivet; the application can use Python, Django, Go, Rust, Node.js, or another language. Do not add a dummy `package.json` or npm scripts to make a non-Node project pass setup. Preview with `rivet setup --project=<path>` and review the proposed checks before `--write`. Setup proposes conventional checks for root Django `manage.py`, Python metadata identifying pytest, Go modules, and Cargo projects.
+Node.js 22 or 24 runs Rivet; the application can use Python, Django, Go, Rust, Node.js, or another language. Use the application’s native configuration and verification commands. Preview with `rivet setup --project=<path>` and review the proposed checks before `--write`. Setup proposes conventional checks for root Django `manage.py`, Python metadata identifying pytest, Go modules, and Cargo projects.
 
 If no checks are detected, determine the project's real verification command from its documentation and configuration. Interactive `rivet setup --write` can ask the user for that command. In a harness or noninteractive session, supply exact arguments, for example `--checks-json='{"test":["python3","-m","pytest"]}'`, with `--project=<path>` and, after review, `--write`. Do not invent a successful placeholder check. Schema 3 uses command groups with `steps` containing `cwd` and `argv`; quality policy must require at least one `test` or `check`, while `build` is optional. Arguments run directly without shell expansion or chaining. Existing valid project policy is preserved by setup; edit its project and quality files together when changing checks.
 
@@ -88,3 +88,11 @@ For Jira/Linear with harness-connected tools, inspect `rivet integrations list/c
 
 
 For troubleshooting, human-readable failures print a private diagnostic report path when saving succeeds. `rivet support --save` collects broader sanitized diagnostics. JSON automation keeps its existing response contract and does not save automatic failure reports; `support --save --json` is explicit. Ask the user to review a report before attaching it to an issue. Never upload reports, raw terminal logs, private state or source code without authorization.
+
+## Decisions, review and evidence
+
+Record material decisions and alternatives through `rivet task decide --input-json=<serialized-decision>` and inspect them with `rivet task decisions`. A pending human decision requires the user's interactive `rivet task approve-decision --decision=<id>`; do not simulate approval. Decisions never expand the sealed task authority. Inline JSON is bounded to 64 KiB. Alternatively use `--input` with an existing project-contained private/ignored JSON file up to 128 KiB; never combine the options or create ordinary untracked input files that dirty the approved baseline.
+
+Export current plan or final review context using `rivet task review --phase=plan|final`. Arrange the required independent review through the approved harness or team process, then submit the structured report using `rivet task review --input-json=<serialized-report>`. Rivet validates recorded review identity and configured coverage; it does not automatically launch or authenticate a separate reviewer. Re-review when the task, plan or accepted changes differ. Do not invent findings, reviewer identities or a passing judgment to bypass a required review or round limit.
+
+Preserve the provenance of every numerical claim: command or measurement method, source commit, environment, time, units and artifact. Distinguish observations from estimates and provider telemetry from model-reported usage. Demonstrate detection with safe known-bad fixtures and positive controls when practical. Include affected public documentation in the same pull request. Treat scan findings and unavailable evidence as work to resolve; do not broadly suppress rules or report unavailable context-window telemetry as measured fact.

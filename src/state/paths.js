@@ -206,6 +206,16 @@ export async function resolveExistingStatePaths(projectRoot, instance, options =
   }));
 }
 
+export function governancePaths(featurePaths) {
+  assertResolvedStatePaths(featurePaths);
+  if (featurePaths.runDir !== featurePaths.instanceDir) throw new TypeError('Invalid feature run paths');
+  return registerPaths(Object.freeze({
+    ...featurePaths,
+    snapshotPath: join(featurePaths.runDir, 'governance.json'),
+    lockPath: join(featurePaths.runDir, 'governance.lock'),
+  }));
+}
+
 export function verificationReportPaths(featurePaths) {
   assertResolvedStatePaths(featurePaths);
   if (featurePaths.runDir !== featurePaths.instanceDir) throw new TypeError('Invalid feature run paths');

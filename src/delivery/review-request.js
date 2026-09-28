@@ -4,15 +4,16 @@ import { parseRepositoryRemote } from '../repositories/identity.js';
 import { createTrustedDeliveryExecutor } from './service.js';
 import { digest, ensure, exact, factsDigest, hash, plain, sha, timestamp, validateCandidate } from './contract.js';
 
+const REVIEW_MARKER_BYTES = Buffer.byteLength('\n\n<!-- rivet-review-operation:' + '0'.repeat(64) + ' -->');
 export function reviewRequestPayload(candidate) {
   validateCandidate(candidate);
-  return plain({
-    title: `Rivet: ${candidate.runId}`,
-    body: ['Rivet verified delivery candidate', '', `Run: ${candidate.runId}`,
-      `Source branch: ${candidate.sourceBranch}`, `Target branch: ${candidate.targetBranch}`,
-      `Verified commit: ${candidate.headSha}`, `Verification evidence: ${candidate.localVerification.evidenceDigest}`,
-      '', 'Review the changes and repository checks before making a separate merge decision.'].join('\n'),
-  });
+  const body = ['Rivet verified delivery candidate', '', `Run: ${candidate.runId}`,
+    `Source branch: ${candidate.sourceBranch}`, `Target branch: ${candidate.targetBranch}`,
+    `Verified commit: ${candidate.headSha}`, `Verification evidence: ${candidate.localVerification.evidenceDigest}`,
+    ...(candidate.decisionSummary === undefined ? [] : ['', candidate.decisionSummary]),
+    '', 'Review the changes and repository checks before making a separate merge decision.'].join('\n');
+  ensure(Buffer.byteLength(body) + REVIEW_MARKER_BYTES <= 32000, 'review-content-too-large');
+  return plain({ title: `Rivet: ${candidate.runId}`, body });
 }
 
 export function reviewRequestContent(operation) {
@@ -20,9 +21,12 @@ export function reviewRequestContent(operation) {
   digest(operation.digest);
   const payload = plain(operation.payload);
   exact(payload, ['title', 'body']);
+  if (operation.candidate?.decisionSummary !== undefined) {
+    ensure(hash(payload) === hash(reviewRequestPayload(operation.candidate)), 'decision-summary-mismatch');
+  }
   ensure(typeof payload.title === 'string' && payload.title.trim() === payload.title && payload.title.length >= 1
     && payload.title.length <= 256 && !/[\u0000-\u001f\u007f]/.test(payload.title));
-  ensure(typeof payload.body === 'string' && payload.body.length >= 1 && payload.body.length <= 32000
+  ensure(typeof payload.body === 'string' && payload.body.length >= 1 && Buffer.byteLength(payload.body) + REVIEW_MARKER_BYTES <= 32000
     && !/[\u0000-\u0008\u000b-\u001f\u007f]/.test(payload.body)
     && !payload.body.includes('rivet-review-operation:'));
   return plain({ title: payload.title, body: `${payload.body}\n\n<!-- rivet-review-operation:${operation.digest} -->` });

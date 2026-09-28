@@ -36,32 +36,6 @@ Confirm `rivet --help` works before setup:
 
 See the package managers' [Yarn global](https://classic.yarnpkg.com/lang/en/docs/cli/global/), [npm install](https://docs.npmjs.com/cli/v11/commands/npm-install/) and [pnpm setup](https://pnpm.io/cli/setup) documentation.
 
-## Upgrade from the previous package name
-
-If you already installed `@agilno/rivet` globally, remove that old CLI package with the same package manager before installing `@agilno-tech/rivet`. Both packages provide the `rivet` executable, so installing the new package alongside the old one can fail with an executable conflict such as npm's `EEXIST`.
-
-Only run the matching command if you have the old package installed:
-
-::: code-group
-
-```sh [Yarn Classic]
-yarn global remove @agilno/rivet
-```
-
-```sh [npm]
-npm uninstall --global @agilno/rivet
-```
-
-```sh [pnpm]
-pnpm remove --global @agilno/rivet
-```
-
-:::
-
-Then install the registry package using the commands above and verify `rivet --help`. Removing the old global package preserves your project configuration, saved task state and worktrees. Do not run `rivet uninstall` or manually delete project files for this migration.
-
-From each project, preview `rivet setup` and run `rivet setup --write` to refresh unmodified managed instructions. Existing valid project policy is preserved; edited managed instructions require review. A project pinned through `.rivet.cjs` keeps its own runtime: updating the global CLI does not update that pin. Use the new CLI's `rivet install --project-runtime` explicitly to update it, following the project-only instructions below.
-
 ## Install for one project without a global CLI
 
 From the project root, create a temporary Yarn Classic installation and use it to pin Rivet for this project:
@@ -91,7 +65,7 @@ node .rivet.cjs doctor
 
 The reference uses your current Node runtime and validates the pinned Rivet source and private dependency inventory before loading Rivet. It keeps the current working directory and needs no PATH export. The installed harness discovers the project root and uses the reference for its own commands. Review and commit the project reference, configuration and instructions before starting a workflow that requires a clean checkout. Another collaborator needs their own private runtime installation; the cache is not committed to the project.
 
-Repeat the temporary Yarn installation and `install --project-runtime` commands above with the selected package version to update the pin. Existing pins from the former package scope remain recognized; this explicit installation upgrades them to the new package. Unchanged managed harness instructions can also be upgraded by rerunning setup. Unchanged sources reuse a verified cache. Edited or unowned project references and instructions stop replacement. Later ordinary `setup` calls preserve the pinned harness routing. Interrupted installation preserves existing application files; inspect any reported partial instruction installation before retrying.
+Repeat the temporary Yarn installation and `install --project-runtime` commands above with the selected package version to update the pin. Unchanged managed harness instructions can also be upgraded by rerunning setup. Unchanged sources reuse a verified cache. Edited or unowned project references and instructions stop replacement. Later ordinary `setup` calls preserve the pinned harness routing. Interrupted installation preserves existing application files; inspect any reported partial instruction installation before retrying.
 
 Remove the owned project installation with:
 
@@ -211,4 +185,4 @@ Use `--json` with setup and minimal install/uninstall for machine-readable resul
 
 ## Application language
 
-Node.js is required to run Rivet itself. The application repository does not need Node, npm scripts or a `package.json`. See [Python, Django and other project languages](./getting-started.md#_2-connect-your-project) for language-neutral setup and custom verification commands.
+Node.js is required to run Rivet itself. Your application uses its own language, framework and verification commands. See [Python, Django and other project languages](./getting-started.md#_2-connect-your-project) for language-neutral setup and custom verification commands.

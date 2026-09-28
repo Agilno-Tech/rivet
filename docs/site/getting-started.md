@@ -1,6 +1,6 @@
 # Get started
 
-Rivet needs **Node.js 22 or 24 and Git** on macOS or Linux. Your application can use any language; it does not need a `package.json`.
+Rivet needs **Node.js 22 or 24 and Git** on macOS or Linux. Your application can use any language or framework.
 
 ## 1. Install Rivet
 
