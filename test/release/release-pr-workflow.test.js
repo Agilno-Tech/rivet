@@ -36,6 +36,7 @@ test('publishing requires verified candidate, complete installation matrix and n
   assert.match(jobs.publish.if, /needs.installed-artifact.result == 'success'/);
   assert.match(jobs.publish.if, /inputs.publish/);
   assert.equal(jobs.publish.environment, 'npm');
+  assert.equal(jobs.publish['timeout-minutes'], 25);
   assert.equal(jobs.publish.permissions['id-token'], 'write');
   assert.equal(jobs.publish.steps.find(step => step.uses?.startsWith('actions/setup-node@')).with['node-version'], 24);
   assert.doesNotMatch(source, /secrets\.(NPM_TOKEN|NODE_AUTH_TOKEN|PAT)/);

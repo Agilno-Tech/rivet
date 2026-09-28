@@ -30,6 +30,7 @@ export async function registryArtifact(metadata,{fetchImpl=fetch}={}){
   const expected=`${REGISTRY}${NAME}/-/rivet-${metadata.version}.tgz`;
   if(metadata.dist?.tarball!==expected)fail('invalid-tarball-url');
   const response=await fetchImpl(expected,{redirect:'error',signal:AbortSignal.timeout(60000)});
+  if(response.status===404)return null;
   if(!response.ok)fail('registry-read-failed');return readResponse(response,MAX);
 }
 export async function ensurePublished(manifest,{getMetadata=registryMetadata,getBytes=registryArtifact,publish,sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}={}){
@@ -37,19 +38,27 @@ export async function ensurePublished(manifest,{getMetadata=registryMetadata,get
   const version=manifest.package.version;versionParts(version);
   const verify=async metadata=>{
     validMetadata(metadata,version);const bytes=await getBytes(metadata);
+    // Registry metadata and tarball storage can become visible at different times.
+    if(bytes===null)return null;
     if(bytes.length!==manifest.artifact.bytes||createHash('sha256').update(bytes).digest('hex')!==manifest.artifact.sha256)fail('registry-artifact-mismatch');return bytes;
   };
   const existing=await getMetadata(version);
-  if(existing)return {status:'already-published',bytes:await verify(existing)};
-  const alpha=await getMetadata('alpha');
-  if(alpha){validMetadata(alpha,'alpha');if(compare(version,alpha.version)<=0)fail('alpha-channel-ahead');}
-  if(typeof publish!=='function')fail('publisher-required');
-  // Never repeat a possibly successful write. Reconcile through registry reads.
-  try {await publish();}catch{/* npm output retains the publication error; verify before deciding success. */}
-  for(let attempt=0;attempt<6;attempt++){
-    if(attempt)await sleep(5000);
-    const published=await getMetadata(version);
-    if(published)return {status:'published',bytes:await verify(published)};
+  if(!existing){
+    const alpha=await getMetadata('alpha');
+    if(alpha){validMetadata(alpha,'alpha');if(compare(version,alpha.version)<=0)fail('alpha-channel-ahead');}
+    if(typeof publish!=='function')fail('publisher-required');
+    // Never repeat a possibly successful write. Reconcile through registry reads.
+    try {await publish();}catch{/* npm output retains the publication error; verify before deciding success. */}
+  }
+  // One immediate verification plus forty 15-second intervals: ten minutes of
+  // propagation allowance, bounded separately from each registry request timeout.
+  for(let attempt=0;attempt<41;attempt++){
+    if(attempt)await sleep(15000);
+    const published=attempt===0&&existing?existing:await getMetadata(version);
+    if(published){
+      const bytes=await verify(published);
+      if(bytes!==null)return {status:existing?'already-published':'published',bytes};
+    }
   }
   fail('publish-not-confirmed');
 }

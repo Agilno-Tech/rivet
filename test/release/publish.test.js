@@ -38,3 +38,40 @@ test('registry reads are bounded, fixed-origin, redirect-free and distinguish mi
  await assert.rejects(()=>registryArtifact({...metadata('0.1.0-alpha.1'),dist:{tarball:'https://example.invalid/private'}},{fetchImpl}),/invalid-tarball-url/);
  await assert.rejects(()=>registryArtifact(metadata('0.1.0-alpha.1'),{fetchImpl:async()=>new Response('x',{headers:{'content-length':String(65*1024*1024)}})}),/registry-response-too-large/);
 });
+test('publication tolerates metadata after 90 seconds and tarball after 180 seconds',async()=>{
+ let elapsed=0,published=0,reads=0;
+ const result=await ensurePublished(manifest,{
+  getMetadata:async version=>{if(version==='alpha')return metadata('0.1.0-alpha.0');reads++;return elapsed>=90000?metadata(version):null;},
+  getBytes:async()=>elapsed>=180000?bytes:null,
+  publish:async()=>published++,sleep:async milliseconds=>{elapsed+=milliseconds;},
+ });
+ assert.equal(result.status,'published');assert.equal(published,1);assert.equal(elapsed,180000);assert.deepEqual(result.bytes,bytes);assert.ok(reads>6);
+});
+test('bounded propagation timeout polls for ten minutes without another publish',async()=>{
+ let elapsed=0,published=0,verificationReads=0;const sleeps=[];
+ await assert.rejects(ensurePublished(manifest,{
+  getMetadata:async version=>{if(version!=='alpha'&&published)verificationReads++;return null;},
+  getBytes:async()=>assert.fail('no tarball before metadata'),publish:async()=>published++,
+  sleep:async milliseconds=>{sleeps.push(milliseconds);elapsed+=milliseconds;},
+ }),/publish-not-confirmed/);
+ assert.equal(published,1);assert.equal(verificationReads,41);assert.equal(elapsed,600000);
+ assert.equal(sleeps.length,40);assert.ok(sleeps.every(value=>value===15000));
+});
+test('existing version waits for delayed tarball without republishing',async()=>{
+ let elapsed=0,published=0;
+ const result=await ensurePublished(manifest,{
+  getMetadata:async version=>{assert.notEqual(version,'alpha');return metadata(version);},
+  getBytes:async()=>elapsed>=180000?bytes:null,publish:async()=>published++,sleep:async milliseconds=>{elapsed+=milliseconds;},
+ });
+ assert.equal(result.status,'already-published');assert.equal(published,0);assert.equal(elapsed,180000);
+});
+test('tarball 404 is temporary while permission and integrity failures stop immediately',async()=>{
+ assert.equal(await registryArtifact(metadata(manifest.package.version),{fetchImpl:async()=>new Response('missing',{status:404})}),null);
+ await assert.rejects(registryArtifact(metadata(manifest.package.version),{fetchImpl:async()=>new Response('denied',{status:403})}),/registry-read-failed/);
+ let published=0,sleeps=0;
+ await assert.rejects(ensurePublished(manifest,{
+  getMetadata:async()=>metadata(manifest.package.version),getBytes:async()=>{throw Error('registry-read-failed');},
+  publish:async()=>published++,sleep:async()=>sleeps++,
+ }),/registry-read-failed/);
+ assert.equal(published,0);assert.equal(sleeps,0);
+});
