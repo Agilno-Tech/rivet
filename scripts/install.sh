@@ -100,12 +100,12 @@ function quote(value) { return "'" + value.replaceAll("'", "'\\''") + "'"; }
   let expectedPackage;
   try { expectedPackage = JSON.parse(await command('tar', ['-xOzf', copied, 'package/package.json'])); }
   catch { stop('Artifact package metadata could not be read unambiguously.'); }
-  const validIdentity = pkg => pkg?.name === '@agilno/rivet'
+  const validIdentity = pkg => pkg?.name === '@agilno-tech/rivet'
     && typeof pkg.version === 'string' && pkg.version.length <= 128
     && /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(pkg.version)
     && pkg.bin && typeof pkg.bin === 'object' && !Array.isArray(pkg.bin)
     && Object.keys(pkg.bin).length === 1 && ['bin/cli.js', './bin/cli.js'].includes(pkg.bin.rivet);
-  if (!validIdentity(expectedPackage)) stop('Artifact package identity must be @agilno/rivet with a release version and the Rivet entry point.');
+  if (!validIdentity(expectedPackage)) stop('Artifact package identity must be @agilno-tech/rivet with a release version and the Rivet entry point.');
   const npmVersion = await command('npm', ['--version']);
   if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+].*)?$/.test(npmVersion) || Number(npmVersion.split('.')[0]) < 10) stop('Rivet bootstrap requires npm 10 or newer.');
   await command('git', ['--version']);
@@ -113,7 +113,7 @@ function quote(value) { return "'" + value.replaceAll("'", "'\\''") + "'"; }
   if (!path.isAbsolute(configuredPrefix) || /[\u0000-\u001f\u007f]/.test(configuredPrefix)) stop('npm returned an invalid global prefix.');
   console.log(`Installing verified Rivet artifact into: ${configuredPrefix}`);
   await command('npm', ['install', '--global', '--prefix', configuredPrefix, '--ignore-scripts', '--install-links', '--no-audit', '--no-fund', copied], { inherit: true });
-  const installed = path.join(configuredPrefix, 'lib', 'node_modules', '@agilno', 'rivet');
+  const installed = path.join(configuredPrefix, 'lib', 'node_modules', '@agilno-tech', 'rivet');
   if (!fs.lstatSync(installed).isDirectory() || fs.lstatSync(installed).isSymbolicLink()) stop('Installed Rivet package is not a materialized directory.');
   const pkg = JSON.parse(fs.readFileSync(path.join(installed, 'package.json'), 'utf8'));
   if (!validIdentity(pkg) || pkg.version !== expectedPackage.version || pkg.bin.rivet !== expectedPackage.bin.rivet) stop('Installed package identity differs from the verified artifact.');

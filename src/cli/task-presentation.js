@@ -17,6 +17,6 @@ export function failureGuidance(code, command) {
     case 'FAILED_GATE': return task ? 'Run rivet task status to inspect the failed checks. Fix the reported cause before continuing with rivet task resume.' : 'Run rivet doctor and resolve the reported failing check before retrying.';
     case 'PROVIDER_UNAVAILABLE': return 'Check the reported harness or provider installation, authentication and permissions, then retry.';
     case 'REPOSITORY_CONFLICT': return task ? 'Inspect rivet task status and your checkout. Preserve existing edits and follow the reported recovery step before retrying.' : 'Inspect the reported repository or saved-state conflict. Preserve existing edits before retrying.';
-    default: return 'Review the diagnostic report and attach it with reproduction steps at https://github.com/FraneAgilno/rivet/issues/new.';
+    default: return 'Review the diagnostic report and attach it with reproduction steps at https://github.com/Agilno-Tech/rivet/issues/new.';
   }
 }

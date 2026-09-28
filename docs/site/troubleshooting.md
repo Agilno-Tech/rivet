@@ -12,7 +12,7 @@ No Rivet package has been published from this repository yet. Use the source ins
 
 ## Installation succeeds but rivet is missing
 
-Run `yarn global bin` and ensure the returned directory is on your shell PATH, then verify `rivet --help`. These installation examples require Yarn Classic 1.22; modern Yarn does not provide `yarn global`. Reinstall using the [documented source command](./installation.md) if the installed binary is missing. Package-manager success alone does not prove the CLI is available.
+Check the global executable directory for your installer: `yarn global bin` for Yarn Classic, the `bin` directory under `npm prefix --global` for npm, or `pnpm bin --global` for pnpm. Ensure it is on PATH, then verify `rivet --help`. If pnpm reports no global directory, run `pnpm setup` and reopen your terminal. Modern Yarn does not provide `yarn global`; use npm or pnpm instead. Reinstall using the [documented source command](./installation.md) if the installed binary is missing. Package-manager success alone does not prove the CLI is available.
 
 ## Setup cannot install the harness skill
 
@@ -123,7 +123,7 @@ Human-readable CLI failures automatically try to save a smaller report and print
 
 Automatic reports are best effort. A storage failure does not replace the original error or exit status. JSON-mode commands retain their existing response contract and do not save automatic reports; use `support --save --json` explicitly if needed. A hard process termination or broken installation may prevent report creation.
 
-Before sharing, open the file and review it. Attach it to a [GitHub issue](https://github.com/FraneAgilno/rivet/issues/new) with the steps to reproduce, expected behavior and what happened. Add any relevant terminal error text only after reviewing it for private information. Do not attach `.env` files, credentials or private source files.
+Before sharing, open the file and review it. Attach it to a [GitHub issue](https://github.com/Agilno-Tech/rivet/issues/new) with the steps to reproduce, expected behavior and what happened. Add any relevant terminal error text only after reviewing it for private information. Do not attach `.env` files, credentials or private source files.
 
 ## The plan was not activated
 

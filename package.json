@@ -1,5 +1,5 @@
 {
-  "name": "@agilno/rivet",
+  "name": "@agilno-tech/rivet",
   "version": "0.1.0-alpha.0",
   "type": "module",
   "description": "A portable team development framework for coding harnesses and multiple LLM providers",
@@ -23,7 +23,9 @@
     "src/",
     "schemas/",
     "protocols/",
-    "templates/"
+    "templates/",
+    "LICENSE",
+    "NOTICE"
   ],
   "engines": {
     "node": ">=22"
@@ -33,12 +35,24 @@
     "ajv": "^8.20.0",
     "yaml": "^2.9.0"
   },
-  "private": true,
   "devDependencies": {
     "vitepress": "1.6.4"
   },
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "overrides": {
     "vite": "6.4.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Agilno-Tech/rivet.git"
+  },
+  "homepage": "https://agilno-tech.github.io/rivet/",
+  "bugs": {
+    "url": "https://github.com/Agilno-Tech/rivet/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha",
+    "registry": "https://registry.npmjs.org/"
   }
 }

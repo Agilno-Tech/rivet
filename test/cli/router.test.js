@@ -177,7 +177,7 @@ test('the packed archive contains and executes the complete modular CLI offline'
   const installedPackage = join(
     isolatedProject,
     'node_modules',
-    '@agilno',
+    '@agilno-tech',
     'rivet',
   );
   await mkdir(installedPackage, { recursive: true });
@@ -2166,7 +2166,7 @@ test('successful install waits for its update check before returning', async (t)
     cwd: () => projectDir,
     fs: { ...syncFilesystem, readFileSync(path, ...args) {
       const contents = syncFilesystem.readFileSync(path, ...args);
-      return String(path) === join(PACKAGE_ROOT, 'package.json') ? JSON.stringify({ name: '@agilno/rivet', version: '0.1.0', private: false }) : contents;
+      return String(path) === join(PACKAGE_ROOT, 'package.json') ? JSON.stringify({ name: '@agilno-tech/rivet', version: '0.1.0', private: false }) : contents;
     } },
     fetch: () => {
       markFetchStarted();
@@ -2195,7 +2195,7 @@ test('successful install aborts a hanging update check within its bound', async 
     cwd: () => projectDir,
     fs: { ...syncFilesystem, readFileSync(path, ...args) {
       const contents = syncFilesystem.readFileSync(path, ...args);
-      return String(path) === join(PACKAGE_ROOT, 'package.json') ? JSON.stringify({ name: '@agilno/rivet', version: '0.1.0', private: false }) : contents;
+      return String(path) === join(PACKAGE_ROOT, 'package.json') ? JSON.stringify({ name: '@agilno-tech/rivet', version: '0.1.0', private: false }) : contents;
     } },
     fetch: (_url, { signal }) => new Promise((_resolvePromise, reject) => {
       signal.addEventListener('abort', () => {
@@ -2221,7 +2221,7 @@ test('successful uninstall aborts a hanging update check within its bound', asyn
     cwd: () => projectDir,
     fs: { ...syncFilesystem, readFileSync(path, ...args) {
       const contents = syncFilesystem.readFileSync(path, ...args);
-      return String(path) === join(PACKAGE_ROOT, 'package.json') ? JSON.stringify({ name: '@agilno/rivet', version: '0.1.0', private: false }) : contents;
+      return String(path) === join(PACKAGE_ROOT, 'package.json') ? JSON.stringify({ name: '@agilno-tech/rivet', version: '0.1.0', private: false }) : contents;
     } },
     fetch: async () => ({ ok: false }),
     output: captureOutput().output,
@@ -2233,7 +2233,7 @@ test('successful uninstall aborts a hanging update check within its bound', asyn
     cwd: () => projectDir,
     fs: { ...syncFilesystem, readFileSync(path, ...args) {
       const contents = syncFilesystem.readFileSync(path, ...args);
-      return String(path) === join(PACKAGE_ROOT, 'package.json') ? JSON.stringify({ name: '@agilno/rivet', version: '0.1.0', private: false }) : contents;
+      return String(path) === join(PACKAGE_ROOT, 'package.json') ? JSON.stringify({ name: '@agilno-tech/rivet', version: '0.1.0', private: false }) : contents;
     } },
     fetch: (_url, { signal }) => new Promise((_resolvePromise, reject) => {
       signal.addEventListener('abort', () => {
@@ -2262,7 +2262,7 @@ test('oversized update metadata is not read and does not affect successful mutat
     cwd: () => projectDir,
     fs: { ...syncFilesystem, readFileSync(path, ...args) {
       const contents = syncFilesystem.readFileSync(path, ...args);
-      return String(path) === join(PACKAGE_ROOT, 'package.json') ? JSON.stringify({ name: '@agilno/rivet', version: '0.1.0', private: false }) : contents;
+      return String(path) === join(PACKAGE_ROOT, 'package.json') ? JSON.stringify({ name: '@agilno-tech/rivet', version: '0.1.0', private: false }) : contents;
     } },
     fetch: async () => ({
       ok: true,

@@ -37,7 +37,7 @@ export async function supportCommand(parsed, dependencies) {
     dependencies.output.log(`Support collection: ${result.collection.status}. Configuration: ${result.configuration.status}. Readiness: ${result.readiness.status}.`);
     if (savedReport) {
       dependencies.output.log(`Support report saved: ${savedReport.path}`);
-      dependencies.output.log('Review the file before attaching it to an issue at https://github.com/FraneAgilno/rivet/issues/new. Nothing was uploaded.');
+      dependencies.output.log('Review the file before attaching it to an issue at https://github.com/Agilno-Tech/rivet/issues/new. Nothing was uploaded.');
     } else dependencies.output.log('Save a shareable report with rivet support --save. Add --probe-harnesses to include local CLI capability checks.');
   }
   return EXIT_CODES.SUCCESS;

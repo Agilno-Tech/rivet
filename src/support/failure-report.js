@@ -28,7 +28,7 @@ const CAUSE_CODES = new Set([
   'ERR_APPLICATION_CONFIGURATION', 'ERR_STATE_VERSION_CONFLICT', 'ERR_RUNTIME_APPROVAL_REQUIRED',
   'ERR_RUNTIME_NOT_ACTIVATED', 'ERR_RUNTIME_VERSION_CONFLICT', 'ERR_RUNTIME_CLIENT_OUTPUT',
 ]);
-const ISSUE_URL = 'https://github.com/FraneAgilno/rivet/issues/new';
+const ISSUE_URL = 'https://github.com/Agilno-Tech/rivet/issues/new';
 let fingerprint;
 async function runtimeFingerprint() {
   // Only installed Rivet source files, never the user's repository or runtime state.

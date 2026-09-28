@@ -29,7 +29,7 @@ async function fixture(t, name = 'project with spaces') {
   await mkdir(join(packageRoot, 'templates', 'harness'), { recursive: true });
   await mkdir(home, { recursive: true });
   await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
-    name: '@agilno/rivet',
+    name: '@agilno-tech/rivet',
     version: '1.2.3',
   }));
   await writeFile(join(packageRoot, 'templates', 'harness', 'SKILL.md'), SKILL_TEXT);
@@ -107,7 +107,7 @@ test('minimal install writes only the namespaced skill and manifest to both targ
     assert.equal(await readFile(join(skillDir, 'SKILL.md'), 'utf8'), SKILL_TEXT);
     const manifest = JSON.parse(await readFile(join(skillDir, '.rivet-install.json'), 'utf8'));
     assert.equal(manifest.schemaVersion, 1);
-    assert.equal(manifest.package.name, '@agilno/rivet');
+    assert.equal(manifest.package.name, '@agilno-tech/rivet');
     assert.equal(manifest.package.version, '1.2.3');
     assert.deepEqual(manifest.files.map(file => file.path), ['SKILL.md']);
     assert.match(manifest.files[0].sha256, /^[a-f0-9]{64}$/);
@@ -156,7 +156,7 @@ test('rerun is idempotent and updates only an unmodified managed file', async t 
   assert.equal(await readFile(manifestPath, 'utf8'), firstManifest);
 
   await writeFile(join(state.packageRoot, 'package.json'), JSON.stringify({
-    name: '@agilno/rivet',
+    name: '@agilno-tech/rivet',
     version: '1.2.4',
   }));
   await writeFile(join(state.packageRoot, 'templates', 'harness', 'SKILL.md'), `${SKILL_TEXT}\nUpdated.\n`);
@@ -236,7 +236,7 @@ test('manifests cannot claim paths outside the managed skill directory', async t
   await writeFile(outside, 'preserve\n');
   await writeFile(manifestPath, JSON.stringify({
     schemaVersion: 1,
-    package: { name: '@agilno/rivet', version: '1.2.3' },
+    package: { name: '@agilno-tech/rivet', version: '1.2.3' },
     target: 'codex',
     files: [{ path: '../victim.md', sha256: '0'.repeat(64) }],
   }));
@@ -254,7 +254,7 @@ test('an interrupted update is recovered only when the published skill matches t
   const request = parsed('install', { project: state.project, target: 'codex' });
   await managedInstall(request, deps);
   await writeFile(join(state.packageRoot, 'package.json'), JSON.stringify({
-    name: '@agilno/rivet',
+    name: '@agilno-tech/rivet',
     version: '1.2.4',
   }));
   await writeFile(join(state.packageRoot, 'templates', 'harness', 'SKILL.md'), `${SKILL_TEXT}\nUpdated.\n`);
@@ -285,7 +285,7 @@ test('a concurrent in-place edit during update is preserved and stops publicatio
   const request = parsed('install', { project: state.project, target: 'codex' });
   await managedInstall(request, dependencies(state));
   await writeFile(join(state.packageRoot, 'package.json'), JSON.stringify({
-    name: '@agilno/rivet',
+    name: '@agilno-tech/rivet',
     version: '1.2.4',
   }));
   await writeFile(join(state.packageRoot, 'templates', 'harness', 'SKILL.md'), `${SKILL_TEXT}\nUpdated.\n`);
@@ -325,5 +325,40 @@ test('managed skill filesystem denials become safe actionable authority errors',
       assert.doesNotMatch(error.safeMessage, /private-path-and-secret/);
       return true;
     });
+  }
+});
+
+test('legacy scoped ownership upgrades to the new namespace even with identical version and skill bytes', async t => {
+  const state = await fixture(t), deps = dependencies(state);
+  await managedInstall(parsed('install', { target: 'both', project: state.project }), deps);
+  for (const directory of ['.claude', '.agents']) {
+    const file = join(state.project, directory, 'skills/rivet/.rivet-install.json');
+    const manifest = JSON.parse(await readFile(file, 'utf8'));
+    manifest.package.name = '@agilno/rivet';
+    await writeFile(file, JSON.stringify(manifest));
+  }
+  const plan = inspectManagedInstall(parsed('install', { target: 'both', project: state.project }), deps);
+  assert.deepEqual(plan.targets.map(target => target.action), ['update', 'update']);
+  await managedInstall(parsed('install', { target: 'both', project: state.project }), deps);
+  for (const directory of ['.claude', '.agents']) {
+    const manifest = JSON.parse(await readFile(join(state.project, directory, 'skills/rivet/.rivet-install.json'), 'utf8'));
+    assert.equal(manifest.package.name, '@agilno-tech/rivet');
+  }
+});
+
+test('legacy namespace migration preserves edited skills and rejects unrelated package ownership', async t => {
+  for (const name of ['@agilno/rivet', '@unrelated/rivet']) {
+    const state = await fixture(t), deps = dependencies(state);
+    await managedInstall(parsed('install', { target: 'codex', project: state.project }), deps);
+    const directory = join(state.project, '.agents/skills/rivet');
+    const file = join(directory, '.rivet-install.json');
+    const manifest = JSON.parse(await readFile(file, 'utf8'));
+    manifest.package.name = name;
+    const bytes = JSON.stringify(manifest);
+    await writeFile(file, bytes);
+    if (name === '@agilno/rivet') await writeFile(join(directory, 'SKILL.md'), 'user changes');
+    await assert.rejects(managedInstall(parsed('install', { target: 'codex', project: state.project }), deps), error => error.code === 'REPOSITORY_CONFLICT');
+    assert.equal(await readFile(file, 'utf8'), bytes);
+    assert.equal(await readFile(join(directory, 'SKILL.md'), 'utf8'), name === '@agilno/rivet' ? 'user changes' : SKILL_TEXT);
   }
 });

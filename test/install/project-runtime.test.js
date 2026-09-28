@@ -11,7 +11,7 @@ async function fixture(t){
  const project=join(root,'project with spaces'),home=join(root,'fresh home'),packageRoot=join(root,'package');
  await mkdir(project);await mkdir(home);await mkdir(join(packageRoot,'bin'),{recursive:true});await mkdir(join(packageRoot,'templates/harness'),{recursive:true});
  await writeFile(join(project,'package.json'),'{"name":"customer"}\n');await writeFile(join(project,'package-lock.json'),'customer lock\n');
- await writeFile(join(packageRoot,'package.json'),JSON.stringify({name:'@agilno/rivet',version:'1.2.3',type:'module',files:['bin','templates'],bin:{rivet:'bin/cli.js'}}));
+ await writeFile(join(packageRoot,'package.json'),JSON.stringify({name:'@agilno-tech/rivet',version:'1.2.3',type:'module',files:['bin','templates'],bin:{rivet:'bin/cli.js'}}));
  await writeFile(join(packageRoot,'bin/cli.js'),'#!/usr/bin/env node\nconsole.log("rivet fixture " + process.argv.slice(2).join(" "));\n',{mode:0o755});
  await writeFile(join(packageRoot,'templates/harness/SKILL.md'),'---\nname: rivet\ndescription: Rivet workflow\n---\n\nRun `rivet --help`.\n');
  const output=[];const env={PATH:`${dirname(process.execPath)}:/usr/bin:/bin`,HOME:home,npm_config_userconfig:join(home,'npmrc'),npm_config_globalconfig:join(home,'global-npmrc'),npm_config_cache:join(home,'npm-cache'),npm_config_offline:'true',npm_config_update_notifier:'false'};
@@ -45,7 +45,7 @@ test('runtime updates pin changed source bytes while retaining old caches and se
  f.parsed.flags.target='codex';await f.run();assert.equal(fs.existsSync(join(f.project,'.rivet.cjs')),false);
 });
 test('launcher fails closed for mutated cache files; edited skills block updates before npm',async t=>{
- const f=await fixture(t);await f.run();const runtime=join(f.home,'.cache/rivet/project-runtimes',f.output.at(-1).result.runtimeId),entry=join(runtime,'node_modules/@agilno/rivet/bin/cli.js');
+ const f=await fixture(t);await f.run();const runtime=join(f.home,'.cache/rivet/project-runtimes',f.output.at(-1).result.runtimeId),entry=join(runtime,'node_modules/@agilno-tech/rivet/bin/cli.js');
  await writeFile(entry,'console.log("MUST NOT RUN");\n');assert.throws(()=>execFileSync(process.execPath,[join(f.project,'.rivet.cjs')],{env:f.env,encoding:'utf8',stdio:'pipe'}),error=>!error.stdout.includes('MUST NOT RUN'));
  await assert.rejects(f.run());
  const other=await fixture(t);await other.run();const skill=join(other.project,'.agents/skills/rivet/SKILL.md');await writeFile(skill,'user owned edit');let called=false;other.dependencies.runtimeCommand=async()=>{called=true;};await assert.rejects(other.run());assert.equal(called,false);assert.equal(await readFile(skill,'utf8'),'user owned edit');
@@ -103,7 +103,7 @@ test('identical Rivet source has identical committed reference and skills across
 test('cache inventory cannot authorize substituted Rivet source under the original portable source digest',async t=>{
  const f=await fixture(t);await f.run();const {default:integrity}=await import('../../src/install/runtime-integrity.cjs');
  const runtime=join(f.home,'.cache/rivet/project-runtimes',f.output.at(-1).result.runtimeId);
- await writeFile(join(runtime,'node_modules/@agilno/rivet/bin/cli.js'),'console.log("substituted source");\n');
+ await writeFile(join(runtime,'node_modules/@agilno-tech/rivet/bin/cli.js'),'console.log("substituted source");\n');
  assert.throws(()=>integrity.runtimeIntegrity(runtime),/missing or changed/);
 });
 
@@ -123,4 +123,64 @@ test('unsupported Node runtime rejects before npm dispatch or installation chang
  assert.deepEqual(await readFile(join(f.project,'package.json')),manifestBefore);
  assert.deepEqual(await readFile(join(f.project,'package-lock.json')),lockBefore);
  assert.deepEqual(f.output,[]);
+});
+
+async function legacyRuntime(t) {
+ const f=await fixture(t);
+ const {createHash}=await import('node:crypto');
+ const {default:integrity}=await import('../../src/install/runtime-integrity.cjs');
+ const {launcher,runtimeSkill}=await import('../../src/install/project-reference.js');
+ const {managedInstall}=await import('../../src/install/managed.js');
+ const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
+ const pkg=JSON.parse(await readFile(join(f.packageRoot,'package.json'),'utf8'));
+ pkg.name='@agilno/rivet';await writeFile(join(f.packageRoot,'package.json'),JSON.stringify(pkg));
+ const sourceFiles=['bin/cli.js','package.json','templates/harness/SKILL.md'];
+ const sourceDigest=digest(JSON.stringify(sourceFiles.map(path=>({path,mode:fs.statSync(join(f.packageRoot,path)).mode&0o111?0o755:0o644,sha256:digest(fs.readFileSync(join(f.packageRoot,path)))}))));
+ const cache=join(fs.realpathSync(f.home),'.cache/rivet/project-runtimes');await mkdir(cache,{recursive:true});
+ const staging=join(cache,'legacy-stage');await mkdir(join(staging,'node_modules/@agilno'),{recursive:true});
+ fs.cpSync(f.packageRoot,join(staging,'node_modules/@agilno/rivet'),{recursive:true});
+ await writeFile(join(staging,'.rivet-runtime.json'),JSON.stringify({schemaVersion:1,sourceDigest,artifactDigest:'0'.repeat(64),package:{name:pkg.name,version:pkg.version},platform:process.platform,architecture:process.arch}));
+ const runtime=integrity.legacyRuntimeIntegrity(staging);await rename(staging,join(cache,runtime.id));
+ await writeFile(join(cache,`source-${sourceDigest}-${process.platform}-${process.arch}.json`),JSON.stringify({runtimeId:runtime.id}));
+ const oldLauncher=launcher(sourceDigest).replace(integrity.runtimeIntegrity.toString(),integrity.legacyRuntimeIntegrity.toString());
+ await writeFile(join(f.project,'.rivet.cjs'),oldLauncher);
+ pkg.name='@agilno-tech/rivet';await writeFile(join(f.packageRoot,'package.json'),JSON.stringify(pkg));
+ await managedInstall({command:'install',operands:[],flags:{minimal:true,target:'both'}},{...f.dependencies,managedSkillBytes:runtimeSkill(await readFile(join(f.packageRoot,'templates/harness/SKILL.md')),sourceDigest)});
+ for(const target of ['.claude','.agents']){
+  const file=join(f.project,target,'skills/rivet/.rivet-install.json'),manifest=JSON.parse(await readFile(file,'utf8'));manifest.package.name='@agilno/rivet';await writeFile(file,JSON.stringify(manifest));
+ }
+ return {...f,oldLauncher,legacyId:runtime.id,sourceDigest};
+}
+
+test('old scoped project pins remain recognized during ordinary setup and upgrade to the new scoped runtime',async t=>{
+ const f=await legacyRuntime(t),file=join(f.project,'.rivet.cjs');
+ const {reference}=await import('../../src/install/project-reference.js');
+ const {default:integrity}=await import('../../src/install/runtime-integrity.cjs');
+ assert.equal(reference(f.project,fs).id,f.sourceDigest);
+ assert.match(execFileSync(process.execPath,[file,'--help'],{env:f.env,encoding:'utf8'}),/rivet fixture/);
+ assert.equal(integrity.runtimeIntegrity(join(fs.realpathSync(f.home),'.cache/rivet/project-runtimes',f.legacyId),f.legacyId,f.sourceDigest).metadata.package.name,'@agilno/rivet');
+ const {managedInstall}=await import('../../src/install/managed.js');
+ await managedInstall({command:'install',operands:[],flags:{minimal:true,target:'both'}},f.dependencies);
+ assert.equal(await readFile(file,'utf8'),f.oldLauncher);
+ assert.match(await readFile(join(f.project,'.agents/skills/rivet/SKILL.md'),'utf8'),new RegExp(f.sourceDigest));
+ await f.run();const result=f.output.at(-1).result;
+ assert.notEqual(result.sourceDigest,f.sourceDigest);
+ assert.equal(integrity.runtimeIntegrity(result.cache,result.runtimeId,result.sourceDigest).metadata.package.name,'@agilno-tech/rivet');
+ assert.ok(fs.existsSync(join(f.home,'.cache/rivet/project-runtimes',f.legacyId)));
+ assert.match(execFileSync(process.execPath,[file,'--help'],{env:f.env,encoding:'utf8'}),/rivet fixture/);
+});
+
+test('edited legacy project references block migration before package preparation',async t=>{
+ const f=await legacyRuntime(t),file=join(f.project,'.rivet.cjs'),edited=f.oldLauncher+'\n// user modification\n';await writeFile(file,edited);
+ let dispatched=false;f.dependencies.runtimeCommand=async()=>{dispatched=true;throw new Error('must not dispatch');};
+ await assert.rejects(f.run(),error=>error.code==='REPOSITORY_CONFLICT');assert.equal(dispatched,false);assert.equal(await readFile(file,'utf8'),edited);
+});
+
+test('legacy ownership verifier retains its exact shipped source and runtime namespace allowlist stays closed',async t=>{
+ const {createHash}=await import('node:crypto');
+ const {default:integrity}=await import('../../src/install/runtime-integrity.cjs');
+ assert.equal(createHash('sha256').update(integrity.legacyRuntimeIntegrity.toString()).digest('hex'),'256091e5a3e3a7919d547bbb7ee7a8db70c2d1cdace0cac67cfdf741f264826f');
+ const f=await legacyRuntime(t),root=join(fs.realpathSync(f.home),'.cache/rivet/project-runtimes',f.legacyId),file=join(root,'.rivet-runtime.json');
+ const metadata=JSON.parse(await readFile(file,'utf8'));metadata.package.name='@unrelated/rivet';await writeFile(file,JSON.stringify(metadata));
+ assert.throws(()=>integrity.runtimeIntegrity(root),/missing or changed/);
 });

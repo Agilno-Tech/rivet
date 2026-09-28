@@ -598,7 +598,7 @@ export async function checkForUpdate(dependencies) {
   let metadata;
   try { metadata = JSON.parse(fs.readFileSync(join(packageRoot, 'package.json'), 'utf8')); }
   catch { return; }
-  // This standalone prerelease has no published namespace or update channel yet.
+  // Private builds never query a public update channel.
   if (metadata.private === true) return;
   const timeoutMs = Number.isFinite(dependencies.updateCheckTimeoutMs)
     ? Math.max(1, dependencies.updateCheckTimeoutMs)
@@ -610,16 +610,17 @@ export async function checkForUpdate(dependencies) {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(
-      `https://registry.npmjs.org/${encodeURIComponent(metadata.name ?? '@agilno/rivet')}`,
+      `https://registry.npmjs.org/${encodeURIComponent(metadata.name ?? '@agilno-tech/rivet')}`,
       { signal: controller.signal },
     );
     if (!response.ok) return;
     const data = JSON.parse(await readBoundedUpdateResponse(response, maxResponseBytes));
-    const latest = data['dist-tags']?.latest;
+    const channel = metadata.publishConfig?.tag === 'alpha' ? 'alpha' : 'latest';
+    const latest = data['dist-tags']?.[channel];
     const current = JSON.parse(fs.readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
     if (latest && latest !== current) {
       output.log(`\nUpdate available: ${current} → ${latest}`);
-      output.log('Run: npm install -g @agilno/rivet@latest');
+      output.log(`Run: npm install -g @agilno-tech/rivet@${channel}`);
     }
   } catch {
     // The install/uninstall operation must not depend on registry availability.

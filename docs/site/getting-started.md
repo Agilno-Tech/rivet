@@ -1,15 +1,32 @@
 # Get started
 
-Rivet needs **Node.js 22 or 24, Yarn Classic 1.22 and Git** on macOS or Linux. Your application can use any language; it does not need a `package.json`.
+Rivet needs **Node.js 22 or 24 and Git** on macOS or Linux. Your application can use any language; it does not need a `package.json`.
 
 ## 1. Install Rivet
 
-The alpha is currently installed from GitHub:
+The alpha is currently installed from GitHub. Choose Yarn Classic, npm or pnpm:
+
+::: code-group
+
+```sh [Yarn Classic]
+yarn global add "https://github.com/Agilno-Tech/rivet.git#main"
+```
+
+```sh [npm]
+npm install --global "https://github.com/Agilno-Tech/rivet.git#main"
+```
+
+```sh [pnpm]
+pnpm add --global "https://github.com/Agilno-Tech/rivet.git#main"
+```
+
+:::
 
 ```sh
-yarn global add "https://github.com/FraneAgilno/rivet.git#main"
 rivet --help
 ```
+
+Modern Yarn does not provide `yarn global`; use npm or pnpm for the global CLI instead.
 
 For a pinned source revision, PATH help or a project-only installation, see [installation](./installation.md).
 
@@ -51,7 +68,7 @@ rivet run "Add a GET /health endpoint with a regression test" --harness=claude
 rivet run "Add a GET /health endpoint with a regression test" --harness=codex
 ```
 
-Review the task, numbered acceptance criteria, proposed files, checks, permissions and limits before approving. Add `--details` to include full graph identifiers. The activation prompt waits while you read; closing it leaves a saved proposal. To review that proposal again, run `rivet task start` (or `rivet task resume`). Rivet works in isolated Git checkouts and asks separately before preparing their dependencies. Existing dependencies in your source checkout are not copied. Installing Rivet with Yarn does not change your project's package manager; Yarn, pnpm, npm and Bun project scripts remain supported.
+Review the task, numbered acceptance criteria, proposed files, checks, permissions and limits before approving. Add `--details` to include full graph identifiers. The activation prompt waits while you read; closing it leaves a saved proposal. To review that proposal again, run `rivet task start` (or `rivet task resume`). Rivet works in isolated Git checkouts and asks separately before preparing their dependencies. Existing dependencies in your source checkout are not copied. Installing Rivet does not change your project's package manager; Yarn, pnpm, npm and Bun project scripts remain supported.
 
 ### In Claude Code, Codex or another coding harness
 
@@ -97,7 +114,7 @@ You normally do not need a task ID or `--project`. When several tasks are active
 
 ## Report a problem
 
-Human-readable command failures show a next step and the path to a private JSON diagnostic report when it can be saved. Review that file before attaching it to a [GitHub issue](https://github.com/FraneAgilno/rivet/issues/new), along with reproduction steps and expected behavior. To collect broader sanitized diagnostics:
+Human-readable command failures show a next step and the path to a private JSON diagnostic report when it can be saved. Review that file before attaching it to a [GitHub issue](https://github.com/Agilno-Tech/rivet/issues/new), along with reproduction steps and expected behavior. To collect broader sanitized diagnostics:
 
 ```sh
 rivet support --save

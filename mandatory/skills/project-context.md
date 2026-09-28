@@ -164,7 +164,7 @@ Your CLAUDE.md will still be generated locally — Confluence sync will be skipp
 
 ## Distribution
 
-This skill follows the same distribution path as all other skills in this repo: it is packaged via the `@agilno/rivet` npm package and installed into Claude Code via `rivet install`. Once installed, it is available as `/project-context` in any Claude Code session.
+This skill follows the same distribution path as all other skills in this repo: it is packaged via the `@agilno-tech/rivet` npm package and installed into Claude Code via `rivet install`. Once installed, it is available as `/project-context` in any Claude Code session.
 
 ---
 

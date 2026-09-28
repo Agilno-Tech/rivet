@@ -83,7 +83,7 @@ Repository inspection requires `repository-read`; review inspection also require
 | Public review inspection smoke | Passed on Rivet PR #14 | Pending | Pending |
 | Authenticated sandbox and delivery qualification | Pending | Pending | Pending |
 
-Public smoke checks on 2026-09-25 read `FraneAgilno/rivet`, `atlassian/atlassian-frontend-mirror` and `gitlab-org/gitlab` without credentials. The GitHub check also inspected Rivet PR #14. These bounded reads do not establish private-repository access or complete delivery support.
+Public smoke checks on 2026-09-25 read `Agilno-Tech/rivet`, `atlassian/atlassian-frontend-mirror` and `gitlab-org/gitlab` without credentials. The GitHub check also inspected Rivet PR #14. These bounded reads do not establish private-repository access or complete delivery support.
 
 The existing lower-level GitHub adapter retains its governed operations. The common repository interface is read-only. MCP and local CLI repository execution, custom API hosts, GitHub Enterprise, Bitbucket Data Center and self-managed GitLab are not qualified through this interface.
 
