@@ -19,8 +19,11 @@ test('Rivet owns its package, executable and project configuration', async () =>
 
 test('CLI help identifies the Rivet command', async () => {
   const result = (await runCli(['--help'])).assertSuccess();
-  assert.match(result.stdout, /rivet install/);
-  assert.match(result.stdout, /^Usage:\n\s+rivet /);
+  assert.match(result.stdout, /rivet run/);
+  assert.match(result.stdout, /^Usage:/);
+  assert.match(result.stdout, /--help --advanced/);
+  const advanced=(await runCli(['--help','--advanced'])).assertSuccess();
+  assert.match(advanced.stdout, /rivet install/);
 });
 
 test('private run state uses independent Rivet directories', async t => {

@@ -101,3 +101,15 @@ printf '4.9.0\\n'
  assert.equal(result.collection.status,'complete');assert.equal(observed.code,0);assert.equal(observed.stdout.trim(),'4.9.0');
  await assert.rejects(access(marker),{code:'ENOENT'});
 });
+
+test('support --save stores the sanitized bundle and reports a path without uploading',async t=>{
+ const root=await fixture(t),output=[];
+ const dependencies={cwd:()=>root,env:{},support:{diagnose:async()=>report},output:{json:value=>output.push(value),log:value=>output.push(value),error:value=>output.push(value)}};
+ assert.equal(await main(['support','--save','--json'],dependencies),0);
+ assert.equal(output.length,1);assert.equal(output[0].ok,true);assert.equal(typeof output[0].savedReport?.path,'string');
+ const {readFile,lstat}=await import('node:fs/promises');const saved=output[0].savedReport.path;
+ t.after(()=>rm(dirname(saved),{recursive:true,force:true}));
+ assert.deepEqual(JSON.parse(await readFile(saved,'utf8')),output[0].result);
+ assert.ok(!(await readFile(saved,'utf8')).includes(seeded));assert.equal((await lstat(saved)).mode&0o777,0o600);
+ output.length=0;assert.notEqual(await main(['support','--save=false'],dependencies),0);
+});

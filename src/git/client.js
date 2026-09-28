@@ -19,6 +19,7 @@ export class GitClientError extends Error {
       'git-operation-failed': 'Git operation failed safely.',
       'git-timeout': 'Git operation timed out.',
       'git-output-invalid': 'Git returned invalid or excessive output.',
+      'review-diff-unavailable': 'The patch cannot be displayed safely within the 64 KiB review limit. Inspect the integration checkout in your editor before approval.',
       'executable-config': 'Repository Git configuration may execute local code.',
       'repository-path-unsafe': 'Repository contains a noncanonical or ambiguous path.',
       'repository-unsafe': 'Git repository identity is unsafe.',
@@ -318,11 +319,11 @@ export async function createGitClient(options = {}) {
     }
   }
 
-  async function run(cwd, args, allowedCodes = [0]) {
+  async function run(cwd, args, allowedCodes = [0], outputLimit = maxOutputBytes) {
     const current = await verifyExecutable(executable.path);
     if (current.dev !== executable.dev || current.ino !== executable.ino) fail('unsafe-executable');
     await assertNoExecutableConfig(cwd);
-    const result = await execute(executable.path, args, cwd, { timeoutMs, maxOutputBytes });
+    const result = await execute(executable.path, args, cwd, { timeoutMs, maxOutputBytes: Math.min(maxOutputBytes, outputLimit) });
     if (!allowedCodes.includes(result.code)) throw new GitClientError('git-operation-failed');
     return result;
   }
@@ -406,6 +407,22 @@ export async function createGitClient(options = {}) {
         '--diff-filter=ACDMRTUXB', fromSha, toSha, '--',
       ]);
       return diffPaths(result.output);
+    },
+
+    async reviewDiff(cwd, input) {
+      const value = captureRecord(input, new Set(['fromSha', 'toSha']), ['fromSha', 'toSha']);
+      if (!validSha(value.fromSha) || !validSha(value.toSha)) fail('invalid-input');
+      try {
+        const result = await run(absoluteInput(cwd), [
+          '--no-pager', 'diff', '--no-ext-diff', '--no-textconv', '--no-color',
+          '--no-renames', '--submodule=short', '--src-prefix=a/', '--dst-prefix=b/',
+          value.fromSha, value.toSha, '--',
+        ], [0], 64 * 1024);
+        return Object.freeze({ patch: result.output, truncated: false });
+      } catch (error) {
+        if (error?.code === 'ERR_GIT_GIT_OUTPUT_INVALID') fail('review-diff-unavailable');
+        throw error;
+      }
     },
 
     async inspectTrackedFile(cwd, commit, path) {

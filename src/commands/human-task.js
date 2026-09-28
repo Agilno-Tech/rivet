@@ -1,8 +1,8 @@
-import { applyVerifiedTask } from '../feature/local-approval.js';
-import { deliveryCommand } from './delivery.js';
+import { taskState } from '../cli/task-presentation.js';
+import { finishTask } from './task-completion.js';
 import { resolveConfiguredProject } from '../cli/project-discovery.js';
 import { withTerminalInterruption } from '../cli/interrupt.js';
-import { CliError, EXIT_CODES, observeOutputErrors } from '../cli/output.js';
+import { CliError, EXIT_CODES } from '../cli/output.js';
 import { loadProjectConfig } from '../config/load.js';
 import { createFeatureRunStore } from '../feature/run-store.js';
 import { createGitClient } from '../git/client.js';
@@ -50,7 +50,8 @@ function summary(record) {
   return `${record.runId}: ${record.status} (${record.featurePlan.client}) ${visible(criterion.slice(0, 100))}`;
 }
 
-async function selectedRun(project, wanted, operation, output) {
+async function selectedRun(project, wanted, operation, dependencies) {
+  const {output} = dependencies;
   const records = await runs(project);
   if (wanted !== undefined) {
     if (typeof wanted !== 'string' || !RUN_ID.test(wanted)) fail('Run selector is invalid.');
@@ -63,9 +64,21 @@ async function selectedRun(project, wanted, operation, output) {
   if (eligible.length === 0) fail(operation === 'recover' ? 'No host task or terminal task at final review is available for lock recovery.'
     : 'No active task exists in this project. Start one with rivet run "task".', 'REPOSITORY_CONFLICT');
   if (eligible.length > 1) {
+    if (dependencies.terminalIsInteractive?.() === true) {
+      const choice = await withTerminalInterruption(async signal => {
+        const selected = await dependencies.taskSelectionPrompt({type:'select',signal,message:'Which task would you like to continue?',choices:eligible.map(record=>({value:record.runId,label:`${visible(record.workRequest.acceptanceCriteria[0] ?? record.workRequest.title)} (${taskState(record.status)})`}))});
+        signal.throwIfAborted();
+        return selected;
+      });
+      if (choice === null || choice === undefined) return null;
+      if (!eligible.some(record=>record.runId===choice)) fail('Select one of the listed tasks.');
+      const current = (await runs(project)).find(record=>record.runId===choice);
+      if (!current) fail('The selected task is no longer available. Run rivet task status.', 'REPOSITORY_CONFLICT');
+      return current;
+    }
     output.log('Several active tasks exist:');
     for (const record of eligible) output.log(`  ${summary(record)}`);
-    fail('Choose one with --run=<id>. Rivet will not guess which task you mean.');
+    fail('Choose one with --run=<id>, or run interactively to choose from a numbered list.');
   }
   return eligible[0];
 }
@@ -157,70 +170,16 @@ function renderWorkerCheckouts(status, output) {
   }
 }
 
-async function approveTask(project, record, dependencies) {
-  if (!['awaiting-final-approval', 'completed'].includes(record.status)) fail('This task has no verified result ready for final review. Use rivet task status.', 'REPOSITORY_CONFLICT');
-  if (dependencies.terminalIsInteractive?.() !== true) fail('Run rivet task approve in an interactive terminal for final review.');
-  if (record.status !== 'completed') {
-    const status = await invokeFeature(dependencies.work, 'status', {project: project.root, runId: record.runId});
-    if (status.deliveryReady !== true) fail('Final review requires current passing checks and a clean verified checkout. Use rivet task status.', 'REPOSITORY_CONFLICT');
-    dependencies.output.log(`Verified commit: ${visible(status.checkout.acceptedCommit)}`);
-    dependencies.output.log(`Integration checkout: ${visible(status.checkout.path)}`);
-    for (const path of status.verification.changedPaths) dependencies.output.log(`Changed: ${visible(path)}`);
-    for (const check of status.verification.checks) dependencies.output.log(`Check: ${visible(check.id)} ${visible(check.status)}`);
-  }
-  return withTerminalInterruption(async signal => {
-    const choice = record.status === 'completed' ? 'local' : await dependencies.taskApprovalPrompt({
-      type: 'select', signal, message: 'How would you like to finish this task?',
-      choices: [{value:'pull-request',label:'Pull-request delivery (recommended for team review)'}, {value:'local',label:'Apply locally (update the current default branch; no push)'}],
-    });
-    if (choice === null || choice === undefined) { dependencies.output.log('Final review cancelled. No completion action was taken.'); return EXIT_CODES.SUCCESS; }
-    if (choice === 'pull-request') {
-      signal.throwIfAborted();
-      const result = await deliveryCommand({command:'delivery',subcommand:'prepare',operands:[],flags:{project:project.root,run:record.runId}}, dependencies);
-      if (result === EXIT_CODES.SUCCESS) {
-        dependencies.output.log(`Delivery prepared locally. From project ${visible(project.root)}, publish and create the review with separate approvals:`);
-        dependencies.output.log(`rivet delivery publish --run=${record.runId}`);
-        dependencies.output.log(`rivet delivery review --run=${record.runId}`);
-        dependencies.output.log('No remote write or merge has been approved by this selection.');
-      }
-      return result;
-    }
-    if (choice !== 'local') fail('Select local application or pull-request delivery.');
-    const gitClient = await createGitClient({gitExecutable: await dependencies.resolveCommandExecutable('git')});
-    let outputFailed = false;
-    const unobserve = observeOutputErrors(dependencies.output, () => { outputFailed = true; });
-    try {
-      const result = await applyVerifiedTask({project:project.root,runId:record.runId,gitClient,signal,confirm:async preview => {
-        try {
-          dependencies.output.log(`Apply to local branch: ${visible(preview.targetBranch)}`);
-          dependencies.output.log(`From: ${visible(preview.baselineCommit)}`);
-          dependencies.output.log(`To: ${visible(preview.commitSha)}`);
-          for (const path of preview.changedPaths) dependencies.output.log(`Changed: ${visible(path)}`);
-          for (const check of preview.checks) dependencies.output.log(`Check: ${visible(check.id)} ${visible(check.status)}`);
-          dependencies.output.log('This updates the original checkout using a fast-forward only. It does not push or deploy.');
-        } catch { fail('Could not display the local application preview. Nothing was approved.', 'REPOSITORY_CONFLICT'); }
-        if (outputFailed || signal.aborted) return false;
-        const approved = await dependencies.confirmTaskApplication(preview,{signal});
-        return approved === true && !outputFailed && !signal.aborted;
-      }});
-      dependencies.output.log(`Local application: ${visible(result.status)}.`);
-      if (result.nextAction) dependencies.output.log(visible(result.nextAction));
-      return EXIT_CODES.SUCCESS;
-    } catch (error) {
-      if (error instanceof CliError) throw error;
-      fail(error?.safeMessage ?? 'Local application could not complete safely. Inspect task status and preserve the checkouts.', 'REPOSITORY_CONFLICT');
-    } finally {unobserve?.();}
-  });
-}
 
 export async function humanTaskCommand(parsed, dependencies) {
   if (parsed.command !== 'task' || !['status', 'start', 'approve', 'resume', 'deps', 'recover'].includes(parsed.subcommand)
-    || parsed.operands.length !== 0 || Object.keys(parsed.flags).some(key => !['project', 'run'].includes(key))) {
+    || parsed.operands.length !== 0 || Object.keys(parsed.flags).some(key => !['project', 'run', 'details'].includes(key))) {
     fail('Use rivet task status|start|approve|resume|deps|recover [--project=<path>] [--run=<id>].');
   }
   const project = await resolveConfiguredProject(dependencies.cwd(), parsed.flags.project, { env: dependencies.env });
-  const record = await selectedRun(project.root, parsed.flags.run, parsed.subcommand, dependencies.output);
-  if (parsed.subcommand === 'approve') return approveTask(project, record, dependencies);
+  const record = await selectedRun(project.root, parsed.flags.run, parsed.subcommand, dependencies);
+  if (!record) {dependencies.output.log('Task selection cancelled. No task action was taken.');return EXIT_CODES.SUCCESS;}
+  if (parsed.subcommand === 'approve') return finishTask(project, record, dependencies);
   if (parsed.subcommand === 'recover') {
     if (record.featurePlan.client !== 'host' && !['awaiting-final-approval','completed'].includes(record.status)) fail('Lock recovery is only available for host tasks or terminal tasks at final review; it never restarts a worker.', 'REPOSITORY_CONFLICT');
     if (typeof dependencies.work?.recover !== 'function') fail('Host recovery is unavailable.', 'MISSING_CONFIGURATION');
@@ -238,7 +197,7 @@ export async function humanTaskCommand(parsed, dependencies) {
     dependencies.output.log(`Run: ${record.runId}`);
     dependencies.output.log(`Project: ${visible(project.root)} (run the next command from this project)`);
     dependencies.output.log(`Task: ${visible(record.workRequest.acceptanceCriteria[0] ?? record.workRequest.title)}`);
-    dependencies.output.log(`State: ${visible(record.status)}`);
+    dependencies.output.log(`State: ${taskState(record.status)}${parsed.flags.details ? ` (${visible(record.status)})` : ''}`);
     if (record.featurePlan.nodes.some(node => node.execution)) {
       dependencies.output.log(`Planning harness: ${record.featurePlan.client}`);
       dependencies.output.log(`Worker harnesses: ${[...new Set(record.featurePlan.nodes.filter(node => node.role === 'worker').map(node => node.execution?.client ?? record.featurePlan.client))].join(', ')}`);
@@ -279,20 +238,17 @@ export async function humanTaskCommand(parsed, dependencies) {
           if (client === record.featurePlan.client) selected = available;
         } catch { fail(`The saved harness ${client} is unavailable or incompatible. Restore it before starting.`, 'PROVIDER_UNAVAILABLE'); }
       }
-      return activateProposal(project, record.workRequest.description, selected, record, dependencies, signal);
+      return activateProposal(project, record.workRequest.description, selected, record, dependencies, signal, {details:parsed.flags.details});
     });
   }
+  if (record.status === 'awaiting-final-approval') return finishTask(project, record, dependencies);
+  if (record.status === 'completed') {dependencies.output.log('This task is completed. Inspect its recorded evidence and any separate delivery status.');return EXIT_CODES.SUCCESS;}
   if (record.featurePlan.client === 'host') {
     const status = await invokeFeature(dependencies.work, 'status', { project: project.root, runId: record.runId });
     renderWorkerCheckouts(status, dependencies.output);
     dependencies.output.log(`Run: ${record.runId}`);
     dependencies.output.log(`Host task: ${visible(status.run.status)}. ${visible(status.nextAction)}`);
     dependencies.output.log('Continue in the coding harness that owns this task; Rivet will not launch a second worker.');
-    return EXIT_CODES.SUCCESS;
-  }
-  if (record.status === 'awaiting-final-approval' || record.status === 'completed') {
-    dependencies.output.log(`Task: ${record.status}.`);
-    dependencies.output.log(`Review and finish this task: rivet task approve --run=${record.runId}`);
     return EXIT_CODES.SUCCESS;
   }
   if (record.status === 'running') {
@@ -313,9 +269,9 @@ export async function humanTaskCommand(parsed, dependencies) {
     const result = await invokeFeature(dependencies.feature, 'resume', {
       project: project.root, runId: record.runId, expectedVersion: record.version,
     }, { signal, confirmDependencyInstall: confirmIsolatedDependencyInstall(dependencies, signal) });
-    dependencies.output.log(`Task: ${visible(result.status)}.`);
+    dependencies.output.log(`Task: ${taskState(result.status)}.`);
     if (result.summary) dependencies.output.log(visible(result.summary));
-    if (result.status === 'awaiting-final-approval') dependencies.output.log(`Review and finish this task: rivet task approve --run=${record.runId}`);
+    if (result.status === 'awaiting-final-approval') return finishTask(project, {...record,status:result.status}, dependencies, {signal});
     return result.status === 'awaiting-final-approval' ? EXIT_CODES.SUCCESS
       : result.status === 'blocked' ? EXIT_CODES.FAILED_GATE : EXIT_CODES.REPOSITORY_CONFLICT;
   });

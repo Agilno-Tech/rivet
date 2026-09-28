@@ -76,9 +76,12 @@ function flags(parsed, allowed) {
 }
 
 function lifecycleInput(parsed, allowed, { mutation = false, digest = false } = {}) {
-  const options = flags(parsed, allowed);
-  if (!Array.isArray(parsed.operands) || parsed.operands.length !== 1) fail('Feature command requires one explicit private run ID.');
-  const input = { project: project(options.project), runId: runId(parsed.operands[0]) };
+  const options = flags(parsed, [...allowed, 'run']);
+  const hasRunFlag = options.run !== undefined;
+  if (!Array.isArray(parsed.operands) || parsed.operands.length !== (hasRunFlag ? 0 : 1)) {
+    fail('Use one run selector: --run or a positional run ID.');
+  }
+  const input = { project: project(options.project), runId: runId(hasRunFlag ? options.run : parsed.operands[0]) };
   if (mutation) input.expectedVersion = version(options['expected-version']);
   if (digest) {
     if (typeof options['proposal-digest'] !== 'string' || !DIGEST.test(options['proposal-digest'])) {

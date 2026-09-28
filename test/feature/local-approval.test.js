@@ -307,3 +307,17 @@ test('actual task approve pull-request choice prepares delivery without moving s
  const delivery=JSON.parse(await readFile(join(paths.runDir,'delivery.json'),'utf8'));
  assert.equal(delivery.data.candidate.headSha,f.status.verification.commitSha);
 });
+
+test('guided final review shows the exact diff and leaving preserves the source and task',async t=>{
+ const f=await verified(t);if(!f)return;
+ const lines=[];let choices=0;
+ const code=await main(['task','resume'],{cwd:()=>f.root,work:f.execution,terminalIsInteractive:()=>true,
+  taskApprovalPrompt:async()=>++choices===1?'review':'leave',
+  confirmTaskApplication:async()=>assert.fail('review is not approval'),
+  resolveCommandExecutable:async()=>'/usr/bin/git',
+  output:{log:value=>lines.push(value),error:value=>lines.push(value)}});
+ assert.equal(code,0,lines.join('\n'));assert.equal(choices,2);
+ assert.match(lines.join('\n'),/\+    return left \+ right/);
+ assert.equal((await f.gitClient.inspectRepository(f.root)).headSha,f.approved.featurePlan.baselineCommit);
+ assert.equal((await f.execution.status({project:f.root,runId:f.approved.runId})).run.status,'awaiting-final-approval');
+});

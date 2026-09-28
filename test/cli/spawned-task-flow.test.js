@@ -94,6 +94,7 @@ test('one terminal task retains failed checks and resumes verification at the ac
     cwd: () => nested,
     terminalIsInteractive: () => true,
     confirmFeatureActivation: async () => true,
+    taskApprovalPrompt: async () => 'leave',
     output: { log: value => messages.push(value), error: value => messages.push(value), json() {} },
     harnesses: {
       async discover() { return [{ kind: 'codex', executable: '/usr/bin/codex', version: 'compatible' }]; },

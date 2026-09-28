@@ -148,8 +148,9 @@ function proposalInput(parsed, dependencies) {
 }
 
 function lifecycleInput(parsed, versionFlag = null) {
-  if (parsed.operands.length !== 1) fail(`Work ${parsed.subcommand} requires one run ID.`);
-  const input = { project: absolute(parsed.flags.project, 'Work project'), runId: runId(parsed.operands[0]) };
+  const hasRunFlag = parsed.flags.run !== undefined;
+  if (parsed.operands.length !== (hasRunFlag ? 0 : 1)) fail('Use one run selector: --run or a positional run ID.');
+  const input = { project: absolute(parsed.flags.project, 'Work project'), runId: runId(hasRunFlag ? parsed.flags.run : parsed.operands[0]) };
   if (versionFlag) input[versionFlag.output] = version(parsed.flags[versionFlag.flag], `--${versionFlag.flag}`);
   return Object.freeze(input);
 }
@@ -166,6 +167,7 @@ export async function workCommand(parsed, dependencies) {
     submit: ['project', 'expected-runtime-version', 'action', 'action-json', 'result', 'result-json', 'json'],
     verify: ['project', 'expected-version', 'expected-runtime-version', 'json'],
   };
+  if (parsed.subcommand !== 'propose') allowedFlags[parsed.subcommand].push('run');
   if (Object.keys(parsed.flags).some(key => !allowedFlags[parsed.subcommand].includes(key))) {
     fail(`Work ${parsed.subcommand} options are invalid.`);
   }

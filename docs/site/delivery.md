@@ -4,7 +4,7 @@ Rivet can prepare a delivery record from a verified active-harness run. Native G
 
 ## Apply locally or prepare a review
 
-At `awaiting-final-approval`, run `rivet task approve` from your project. Choose **Apply locally** to confirm a fast-forward of the original default branch to the verified commit, or **Pull-request delivery** to prepare the record described below. This works for verified terminal tasks and tasks performed through a coding harness.
+After successful verification, `rivet run` offers final review immediately. Use **Review changes** to display the diff for the exact tested commit. To reopen this menu at `awaiting-final-approval`, run `rivet task resume` or `rivet task approve` from your project. Choose **Apply locally** to confirm a fast-forward of the original default branch to the verified commit, or **Pull-request delivery** to prepare the record described below. This works for verified terminal tasks and tasks performed through a coding harness.
 
 Local application requires a clean original checkout at the proposal's baseline, a clean integration checkout at the tested commit, and unchanged committed Rivet configuration. It records local acceptance and marks the task completed; it does not publish a branch, create a review, merge remotely or deploy. If you need a team review, choose pull-request delivery before applying locally.
 

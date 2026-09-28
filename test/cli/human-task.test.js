@@ -180,6 +180,8 @@ for (const command of ['start', 'resume']) {
     const messages = [], calls = [];
     const code = await main(['task', command, '--run=saved-task'], overrides(root, messages, {
       terminalIsInteractive: () => true,
+      taskApprovalPrompt: async () => 'leave',
+      work: {async status(){return {deliveryReady:true,checkout:{acceptedCommit:BASELINE,path:'/tmp/integration'},verification:{changedPaths:[],checks:[]}};}},
       harnesses: {async select(kind) { calls.push(`select:${kind}`); return {kind, version:'test', executable:'/bin/codex'}; }},
       confirmFeatureActivation: async value => {
         assert.equal(value.proposalDigest, record.proposalDigest);
@@ -244,7 +246,7 @@ for(const choice of [null,undefined]) test(`cancelling final choice (${choice}) 
   const code=await main(['task','approve'],overrides(root,messages,{
     terminalIsInteractive:()=>true,
     work:{async status(){return {deliveryReady:true,checkout:{acceptedCommit:BASELINE,path:'/tmp/integration'},verification:{changedPaths:['app/agenda.js'],checks:[{id:'test',status:'passed'}]}};}},
-    taskApprovalPrompt:async question=>{assert.deepEqual(question.choices.map(item=>item.value),['pull-request','local']);return choice;},
+    taskApprovalPrompt:async question=>{assert.deepEqual(question.choices.map(item=>item.value),['review','pull-request','local','leave']);return choice;},
     resolveCommandExecutable:async()=>assert.fail('no Git mutation after cancellation'),
     confirmTaskApplication:async()=>assert.fail('no confirmation after cancellation'),
   }));
@@ -285,4 +287,43 @@ test('task recover rejects unfinished terminal task even with explicit run selec
     work:{async recover(){assert.fail('unfinished terminal tasks are excluded');}},
   }));
   assert.equal(code,EXIT_CODES.REPOSITORY_CONFLICT,messages.join('\n'));assert.match(messages.join('\n'),/never restarts a worker/);
+});
+
+test('interactive task choice selects by description and binds only that run',async t=>{
+  const root=await fixture(t);await createRun(root,'one');await createRun(root,'two');const messages=[];let selected;
+  const code=await main(['task','status'],overrides(root,messages,{
+    terminalIsInteractive:()=>true,
+    taskSelectionPrompt:async question=>{assert.match(question.choices[1].label,/Complete two/);return 'two';},
+    work:{async status(input){selected=input.runId;return {nextAction:'Review.',workerCheckouts:[]};}},
+  }));
+  assert.equal(code,0,messages.join('\n'));assert.equal(selected,'two');
+});
+
+test('leaving task selection does not perform any task action',async t=>{
+  const root=await fixture(t);await createRun(root,'one');await createRun(root,'two');const messages=[];
+  assert.equal(await main(['task','resume'],overrides(root,messages,{
+    terminalIsInteractive:()=>true,taskSelectionPrompt:async()=>null,
+    work:{async status(){assert.fail('cancelled selection must not act');}},
+    feature:{async start(){assert.fail('cancelled selection must not activate');}},
+  })),0);
+});
+
+test('resume offers final approval for a verified task instead of only printing a command',async t=>{
+  const root=await fixture(t);await finalReviewRun(root,'done');const messages=[];let offered=false;
+  assert.equal(await main(['task','resume'],overrides(root,messages,{
+    terminalIsInteractive:()=>true,
+    work:{async status(){return {deliveryReady:true,checkout:{acceptedCommit:BASELINE,path:'/tmp/integration'},verification:{changedPaths:[],checks:[]}};}},
+    taskApprovalPrompt:async()=>{offered=true;return 'leave';},
+  })),0);assert.equal(offered,true);
+});
+
+test('final review output failure cannot proceed to local application',async t=>{
+  const {EventEmitter}=await import('node:events');const {createOutput}=await import('../../src/cli/output.js');
+  const root=await fixture(t);await finalReviewRun(root,'done');const stdout=new EventEmitter(),stderr=new EventEmitter();stdout.write=()=>true;stderr.write=()=>true;
+  const code=await main(['task','approve'],overrides(root,[],{
+    output:createOutput({stdout,stderr}),terminalIsInteractive:()=>true,reportFailure:false,
+    work:{async status(){return {deliveryReady:true,checkout:{acceptedCommit:BASELINE,path:'/tmp/integration'},verification:{changedPaths:[],checks:[]}};}},
+    taskApprovalPrompt:async()=>{stdout.emit('error',new Error('display failed'));return 'local';},
+    resolveCommandExecutable:async()=>assert.fail('no Git after failed review output'),
+  }));assert.equal(code,EXIT_CODES.REPOSITORY_CONFLICT);
 });

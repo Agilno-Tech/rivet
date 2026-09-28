@@ -957,7 +957,8 @@ test('rejects the retired demo command before dispatch or filesystem mutation', 
   assert.equal(syncFilesystem.existsSync(marker), false);
   assert.match(capture.readStdout(), /^Usage:/);
   assert.doesNotMatch(capture.readStdout(), /rivet demo\b/);
-  assert.equal(capture.readStderr(), '');
+  assert.match(capture.readStderr(), /Next:.*rivet --help/);
+  assert.match(capture.readStderr(), /Diagnostic report:/);
 });
 
 test('rejects positional arguments for a legacy command', () => {
@@ -1081,7 +1082,8 @@ test('empty arguments keep the legacy usage and invalid-input exit', async () =>
 
   assert.equal(exitCode, EXIT_CODES.INVALID_INPUT);
   assert.match(capture.readStdout(), /^Usage:/);
-  assert.equal(capture.readStderr(), '');
+  assert.match(capture.readStderr(), /Next:.*rivet --help/);
+  assert.match(capture.readStderr(), /Diagnostic report:/);
 });
 
 test('closed stdout terminates cleanly without an EPIPE stack or source path', async (t) => {
@@ -1191,7 +1193,7 @@ test('legacy init classifies missing governance distribution as missing configur
   assert.equal(exitCode, EXIT_CODES.MISSING_CONFIGURATION);
   assert.equal(capture.readStdout(), '');
   assert.equal(
-    capture.readStderr(),
+    capture.readStderr().split('\n')[0]+'\n',
     'ERROR: dist/governance/ not found. The package may be corrupted.\n',
   );
 });
@@ -1213,7 +1215,7 @@ test('legacy init sanitizes governance write conflicts', async (t) => {
   });
 
   assert.equal(exitCode, EXIT_CODES.REPOSITORY_CONFLICT);
-  assert.equal(capture.readStderr(), 'ERROR: Could not create the Claude governance directory.\n');
+  assert.equal(capture.readStderr().split('\n')[0]+'\n', 'ERROR: Could not create the Claude governance directory.\n');
   assert.doesNotMatch(capture.readStderr(), new RegExp(sensitiveDetail));
 });
 
@@ -1490,7 +1492,7 @@ test('missing distribution data selects the missing-configuration exit code', as
   assert.equal(exitCode, EXIT_CODES.MISSING_CONFIGURATION);
   assert.equal(capture.readStdout(), '');
   assert.equal(
-    capture.readStderr(),
+    capture.readStderr().split('\n')[0]+'\n',
     "ERROR: dist/skills/ not found. Run 'npm run build' or reinstall the package.\n",
   );
 });
@@ -1517,7 +1519,7 @@ test('repository write failures use a stable code without exposing raw details',
   });
 
   assert.equal(exitCode, EXIT_CODES.REPOSITORY_CONFLICT);
-  assert.match(capture.readStderr(), /^ERROR: Failed to install mandatory skill '.+' to codex\.\n$/);
+  assert.match(capture.readStderr(), /^ERROR: Failed to install mandatory skill '.+' to codex\.\n/);
   assert.doesNotMatch(capture.readStderr(), new RegExp(sensitiveDetail));
   assert.equal(syncFilesystem.readFileSync(unrelatedFile, 'utf8'), 'user-owned\n');
   assert.equal(syncFilesystem.existsSync(join(managedDirectory, 'SKILL.md')), true);
@@ -2108,7 +2110,7 @@ test('governance distribution read failures are sanitized missing configuration'
   });
 
   assert.equal(exitCode, EXIT_CODES.MISSING_CONFIGURATION);
-  assert.equal(capture.readStderr(), 'ERROR: Could not read governance distribution data.\n');
+  assert.equal(capture.readStderr().split('\n')[0]+'\n', 'ERROR: Could not read governance distribution data.\n');
   assert.doesNotMatch(capture.readStderr(), new RegExp(sensitiveDetail));
 });
 
@@ -2303,7 +2305,7 @@ test('unexpected command errors expose only a safe message and stable code', asy
 
   assert.equal(exitCode, EXIT_CODES.INTERNAL_ERROR);
   assert.equal(capture.readStdout(), '');
-  assert.equal(capture.readStderr(), 'ERROR: Unexpected rivet failure.\n');
+  assert.equal(capture.readStderr().split('\n')[0]+'\n', 'ERROR: Unexpected rivet failure.\n');
   assert.doesNotMatch(capture.readStderr(), new RegExp(sensitiveDetail));
   assert.doesNotMatch(capture.readStderr(), /at .*\(.+\)/);
 });
@@ -2318,5 +2320,5 @@ test('invalid handler results become a safe internal error', async () => {
 
   assert.equal(exitCode, EXIT_CODES.INTERNAL_ERROR);
   assert.equal(capture.readStdout(), '');
-  assert.equal(capture.readStderr(), 'ERROR: Unexpected rivet failure.\n');
+  assert.equal(capture.readStderr().split('\n')[0]+'\n', 'ERROR: Unexpected rivet failure.\n');
 });
