@@ -1,4 +1,6 @@
-import { confirmTaskAction } from './task-confirmation.js';
+import { saveFailureReport } from '../support/failure-report.js';
+import { failureGuidance } from './task-presentation.js';
+import { confirmTaskAction, selectTaskOption } from './task-confirmation.js';
 import * as filesystem from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -59,7 +61,33 @@ const abortSignalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype
 const addEventListener = EventTarget.prototype.addEventListener;
 const removeEventListener = EventTarget.prototype.removeEventListener;
 
-const USAGE = `Usage:
+const BASIC_USAGE = `Usage:
+Rivet: plan, build, check and review a task.
+
+Everyday commands:
+  rivet setup                     Preview project setup
+  rivet setup --write             Apply reviewed setup
+  rivet doctor                    Check project readiness
+  rivet run "task"                 Plan, execute and offer final review
+  rivet task status               Inspect work and the next step
+  rivet task resume               Continue a saved task or final review
+  rivet task start                Reopen an unapproved plan
+  rivet task approve              Review and finish verified work
+  rivet task deps                 Approve configured dependency setup
+  rivet task recover              Inspect abandoned operation locks
+  rivet support --save            Save diagnostics for a bug report
+
+Run inside your project; use --project=<path> when elsewhere.
+Choose tasks from a numbered list, or pass --run=<id> explicitly.
+Use --details with run or task for full plan/state identifiers.
+Use rivet --help --advanced for all harness, integration and delivery commands.
+`;
+
+const USAGE = `Advanced reference (use rivet --help for everyday commands):
+Feature/work lifecycle IDs may also be passed as --run=<id> or --run <id>.
+Use exactly one selector form; project/version/digest requirements remain explicit.
+
+Usage:
   rivet delivery prepare|status|refresh|reconcile|recover [--run=<id>] [--project=<path>] [--json]
   rivet delivery tracker-status [--run=<id>] [--provider=<id>] [--project=<path>] [--json]
   rivet delivery review-update --title=<text> --body=<text> [--run=<id>] [--provider=<id>] [--project=<path>]
@@ -81,7 +109,7 @@ const USAGE = `Usage:
   rivet install --all              Install all skills (project)
   rivet setup [--project=<path>|--global] [--remote=<name>] [--target=claude|codex|both] [--checks-json='<json>'] [--dependencies-json='<json>'] [--write] [--json]
                                   Project checks are exact argv arrays; unknown projects prompt with --write
-  rivet run "task" [--harness=claude|codex] [--project=<path>]
+  rivet run "task" [--harness=claude|codex] [--project=<path>] [--details]
   rivet task recover [--project=<path>] [--run=<id>]
   rivet task status [--project=<path>] [--run=<id>]
   rivet task start [--project=<path>] [--run=<id>]
@@ -124,7 +152,7 @@ const USAGE = `Usage:
   rivet init --project <path> [--checks-json='<json>'] [--dependencies-json='<json>']  Preview detected project configuration
   rivet init --project <path> --write [--overwrite] [--remote=<name>] [--checks-json='<json>'] [--dependencies-json='<json>']
   rivet doctor [--project <path>] [--json]
-  rivet support [--project=<path>] [--probe-harnesses] [--json]
+  rivet support [--project=<path>] [--probe-harnesses] [--save] [--json]
   rivet preflight [--project <path>] [--mode=host|orchestration] [--json]
   rivet verify [--json]
   rivet evidence [--json]
@@ -224,6 +252,7 @@ async function defaultSelectTrackerDestination(choices) {
 
 function resolveDependencies(overrides = {}) {
   return {
+    reportFailure: overrides.reportFailure === false ? null : overrides.reportFailure ?? saveFailureReport,
     fs: overrides.fs ?? filesystem,
     prompt: overrides.prompt ?? checkbox,
     separator: overrides.separator ?? (label => new Separator(label)),
@@ -244,7 +273,8 @@ function resolveDependencies(overrides = {}) {
     setupRemotePrompt: overrides.setupRemotePrompt,
     projectChecksPrompt: overrides.projectChecksPrompt,
     harnessChoicePrompt: overrides.harnessChoicePrompt,
-    taskApprovalPrompt: overrides.taskApprovalPrompt ?? defaultIntegrationSetupPrompt,
+    taskApprovalPrompt: overrides.taskApprovalPrompt ?? selectTaskOption,
+    taskSelectionPrompt: overrides.taskSelectionPrompt ?? selectTaskOption,
     confirmTaskApplication: overrides.confirmTaskApplication ?? defaultConfirmTaskApplication,
     terminalIsInteractive: overrides.terminalIsInteractive ?? (() => process.stdin.isTTY === true && process.stdout.isTTY === true),
     harnesses: overrides.harnesses,
@@ -463,19 +493,18 @@ async function publishStatusJson(jsonBoundary, output, exitCode, lifecycle) {
   }
 }
 
-export async function main(argv, overrides = {}) {
-  const dependencies = resolveDependencies(overrides);
+async function executeMain(argv, dependencies, failure) {
   const json = Array.isArray(argv) && argv.includes('--json');
   let statusJsonLifecycle = null;
 
   try {
-    if (Array.isArray(argv) && argv.length === 1 && ['--help', '-h', 'help'].includes(argv[0])) {
-      dependencies.output.log(USAGE);
+    if (Array.isArray(argv) && (argv.length === 1 || (argv.length === 2 && argv[1] === '--advanced')) && ['--help', '-h', 'help'].includes(argv[0])) {
+      dependencies.output.log(argv.length === 2 ? USAGE : BASIC_USAGE);
       return EXIT_CODES.SUCCESS;
     }
     const parsed = parseArgs(argv);
     if (parsed.command === null) {
-      dependencies.output.log(USAGE);
+      dependencies.output.log(BASIC_USAGE);
       return EXIT_CODES.INVALID_INPUT;
     }
 
@@ -519,13 +548,14 @@ export async function main(argv, overrides = {}) {
     }
     return exitCode;
   } catch (error) {
+    failure.causeCode = error?.cause?.code ?? error?.code;
     if (statusJsonLifecycle) {
       statusJsonLifecycle.cancel();
       await statusJsonLifecycle.close();
     }
     if (error instanceof ArgumentError) {
       if (!json && error.message.startsWith('Unknown command')) {
-        dependencies.output.log(USAGE);
+        dependencies.output.log(BASIC_USAGE);
         return EXIT_CODES.INVALID_INPUT;
       }
       return emitBoundaryError(
@@ -536,4 +566,31 @@ export async function main(argv, overrides = {}) {
     }
     return emitBoundaryError(dependencies, error, json);
   }
+}
+
+/** Automatic reports are human-terminal diagnostics; JSON contracts stay unchanged. */
+export async function main(argv, overrides = {}) {
+  const dependencies = resolveDependencies(overrides);
+  const failure = {};
+  const command = Array.isArray(argv) ? argv[0] : null;
+  const subcommand = ['task','feature','work','delivery','models','integrations','protocols','repositories','goals','orchestrate','worktrees'].includes(command) ? argv[1] : null;
+  const json = Array.isArray(argv) && argv.includes('--json');
+  async function report(exitCode) {
+    if (json || exitCode === EXIT_CODES.SUCCESS) return;
+    const code = Object.entries(EXIT_CODES).find(([,value])=>value===exitCode)?.[0] ?? 'INTERNAL_ERROR';
+    let saved = null;
+    try { saved = await dependencies.reportFailure?.({command,subcommand,code,exitCode,causeCode:failure.causeCode}); } catch { /* diagnostics must preserve the original failure */ }
+    try {
+      dependencies.output.error(`Next: ${failureGuidance(code, command)}`);
+      if (saved?.path) {
+        dependencies.output.error(`Diagnostic report: ${saved.path}`);
+        dependencies.output.error('Review the file, then attach it with reproduction steps at https://github.com/FraneAgilno/rivet/issues/new. Nothing was uploaded.');
+      } else if (dependencies.reportFailure) dependencies.output.error('A diagnostic report could not be saved. You can try rivet support --save from your project.');
+    } catch { /* broken output does not change the command result */ }
+  }
+  let exitCode;
+  try { exitCode = await executeMain(argv, dependencies, failure); }
+  catch (error) { await report(EXIT_CODES.INTERNAL_ERROR); throw error; }
+  await report(exitCode);
+  return exitCode;
 }

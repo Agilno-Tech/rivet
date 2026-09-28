@@ -52,6 +52,8 @@ function services(root, { selected = ['codex'], approve = true, status = 'awaiti
         return approve;
       },
       confirmDependencyInstall: async () => true,
+      taskApprovalPrompt: async () => 'leave',
+      work: {async status(){return {deliveryReady:true,checkout:{acceptedCommit:'c'.repeat(40),path:'/tmp/integration'},verification:{changedPaths:['src/greeting.js'],checks:[{id:'test',status:'passed'}]}};}},
       feature: {
         async propose(input) { calls.push(['propose', input]); return proposal; },
         async start(input) { calls.push(['start', input]); return { version: 4 }; },
@@ -238,4 +240,27 @@ test('unavailable explicitly selected worker cannot fall back to planner or acti
   assert.equal(await main(['run','Add a greeting module'],f.overrides),EXIT_CODES.PROVIDER_UNAVAILABLE);
   assert.ok(!f.calls.some(call=>call[0]==='start'||call[0]==='watch'));
   assert.match(f.messages.join('\n'),/worker harness claude/);
+});
+
+test('verified terminal execution offers completion in the same flow without applying on leave',async t=>{
+  const {root}=await fixture(t),s=services(root);let offered=0;
+  s.overrides.work={async status(){return {deliveryReady:true,checkout:{acceptedCommit:'c'.repeat(40),path:'/tmp/integration'},verification:{changedPaths:['src/greeting.js'],checks:[{id:'test',status:'passed'}]}};}};
+  s.overrides.taskApprovalPrompt=async question=>{offered++;assert.ok(question.choices.some(choice=>choice.value==='leave'));return 'leave';};
+  s.overrides.confirmTaskApplication=async()=>assert.fail('leaving is not approval');
+  assert.equal(await main(['run','Add a greeting module'],s.overrides),EXIT_CODES.SUCCESS);
+  assert.equal(offered,1);assert.match(s.messages.join('\n'),/ready for.*review/i);
+});
+
+test('compact plan preserves scope, checks and limits while details exposes graph identifiers',async t=>{
+  const {root}=await fixture(t),s=services(root,{approve:false});
+  s.proposal.featurePlan.nodes[0].id='internal-worker-node';
+  s.proposal.featurePlan.nodes[0].authorityScopes=['implement','verify'];
+  s.proposal.featurePlan.nodes[0].budget={timeMinutes:10,tokenLimit:200,costUsd:2,taskLimit:1};
+  assert.equal(await main(['run','Add a greeting module'],s.overrides),0);
+  const compact=s.messages.join('\n');
+  for(const pattern of [/src\/greeting.js/,/10 min/,/200 tokens/,/\$2/,/implement/,/npm run test/])assert.match(compact,pattern);
+  assert.doesNotMatch(compact,/internal-worker-node|boss \(final-delivery\)/);
+  s.messages.length=0;
+  assert.equal(await main(['run','Add a greeting module','--details'],s.overrides),0);
+  assert.match(s.messages.join('\n'),/internal-worker-node/);
 });

@@ -52,15 +52,15 @@ const STRICT_OPTIONS = {
     boolean: new Set(['json']),
     valued: new Set([
       'action', 'action-json', 'decomposition', 'decomposition-json', 'result-json', 'expected-runtime-version', 'expected-version', 'project', 'result',
-      'request', 'request-text', 'ticket', 'tracker', 'host-context-json', 'acceptance-criteria',
+      'request', 'request-text', 'ticket', 'tracker', 'host-context-json', 'acceptance-criteria', 'run',
     ]),
   },
   run: {
-    boolean: new Set(),
+    boolean: new Set(['details']),
     valued: new Set(['project', 'harness']),
   },
   task: {
-    boolean: new Set(),
+    boolean: new Set(['details']),
     valued: new Set(['project', 'run']),
   },
   setup: {
@@ -72,7 +72,7 @@ const STRICT_OPTIONS = {
     valued: new Set(['profile', 'roles', 'role', 'project']),
   },
   support: {
-    boolean: new Set(['json', 'probe-harnesses']),
+    boolean: new Set(['json', 'probe-harnesses', 'save']),
     valued: new Set(['project']),
   },
   doctor: {
@@ -82,7 +82,7 @@ const STRICT_OPTIONS = {
   feature: {
     boolean: new Set(['json']),
     valued: new Set([
-      'client', 'expected-version', 'project', 'proposal-digest', 'request', 'request-text', 'ticket', 'tracker', 'acceptance-criteria',
+      'client', 'expected-version', 'project', 'proposal-digest', 'request', 'request-text', 'ticket', 'tracker', 'acceptance-criteria', 'run',
     ]),
   },
   preflight: {
@@ -177,7 +177,7 @@ export function parseArgs(argv) {
           throw new ArgumentError(`Flag '--${name}' does not take a value`);
         }
         if (commandOptions.valued.has(name) && value === true) {
-          if (command === 'delivery' || command === 'repositories' || command === 'integrations' || command === 'setup' || command === 'protocols' || ((command === 'install' || command === 'uninstall') && name === 'project') || command === 'init' || command === 'doctor' || command === 'support' || command === 'feature' || command === 'preflight' || command === 'status') {
+          if ((['task', 'work'].includes(command) && name === 'run') || command === 'delivery' || command === 'repositories' || command === 'integrations' || command === 'setup' || command === 'protocols' || ((command === 'install' || command === 'uninstall') && name === 'project') || command === 'init' || command === 'doctor' || command === 'support' || command === 'feature' || command === 'preflight' || command === 'status') {
             const next = tokens[index + 1];
             if (typeof next === 'string' && next.length > 0 && !next.startsWith('-')) {
               value = next;
@@ -196,6 +196,13 @@ export function parseArgs(argv) {
     } else {
       positionals.push(token);
     }
+  }
+
+  if (['feature', 'work'].includes(command) && flags.run !== undefined) {
+    const lifecycle = command === 'feature'
+      ? ['start', 'status', 'resume', 'cancel'] : ['prepare', 'next', 'status', 'submit', 'verify', 'recover'];
+    if (!lifecycle.includes(positionals[0])) throw new ArgumentError('--run is only supported for an existing run.');
+    if (positionals.length !== 1) throw new ArgumentError('Use one run selector: --run or a positional run ID.');
   }
 
   validateTargetSelectors(command, flags);

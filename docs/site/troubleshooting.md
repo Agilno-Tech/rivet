@@ -100,7 +100,7 @@ If the CLI changes after discovery, retry to discover it again. A help probe can
 
 ```sh
 rivet support
-rivet support --json > rivet-support.json
+rivet support --save
 ```
 
 Run from your project or a nested folder. Use `--project=<path>` to select another directory. A missing or invalid Rivet configuration is included as a diagnostic result, so setup problems can still be reported.
@@ -110,19 +110,27 @@ The bundle contains selected diagnostic fields: Rivet and runtime versions, plat
 To include installed harness capability checks:
 
 ```sh
-rivet support --probe-harnesses --json > rivet-support.json
+rivet support --probe-harnesses --save
 ```
 
 These bounded local probes inspect version/help output. They do not execute a model task, authenticate an account or check external provider connectivity. Without the flag, harness capabilities are reported as not checked. Optional integration unavailability is recorded separately from required readiness failures.
 
-`support` reports whether collection completed; it does not certify that the project is ready. A successfully generated bundle can contain failed readiness checks or an incomplete diagnostic category. Use `rivet doctor` for the readiness exit status. The command writes to terminal output only; shell redirection creates the JSON file. Nothing is uploaded automatically.
+`support` reports whether collection completed; it does not certify that the project is ready. A successfully generated bundle can contain failed readiness checks or an incomplete diagnostic category. Use `rivet doctor` for the readiness exit status. `--save` writes a JSON report into a unique private directory in your system temporary folder and prints its path. It uses your configured system temporary directory rather than the current working directory. The directory and file use owner-only permissions. `--save --json` returns one JSON object with `savedReport.path`; existing `support --json` output remains available without saving. Saved reports also include a timestamp, the Rivet alpha version and a fingerprint of installed Rivet files, allowing maintainers to distinguish source installations with the same version. Temporary files may be removed by your operating system; copy a report you want to keep, or delete it after use. Nothing is uploaded automatically.
+
+### Automatic failure reports
+
+Human-readable CLI failures automatically try to save a smaller report and print its location. It contains the recognized command/subcommand, stable error category, known underlying error code when available, runtime versions, platform, timestamp and installed Rivet fingerprint. It excludes raw arguments, error text, stack traces, task descriptions, project paths, source code, diffs, environment values and command output. It is a diagnostic summary, not a full execution log. Run `rivet support --save` for broader setup/readiness diagnostics.
+
+Automatic reports are best effort. A storage failure does not replace the original error or exit status. JSON-mode commands retain their existing response contract and do not save automatic reports; use `support --save --json` explicitly if needed. A hard process termination or broken installation may prevent report creation.
+
+Before sharing, open the file and review it. Attach it to a [GitHub issue](https://github.com/FraneAgilno/rivet/issues/new) with the steps to reproduce, expected behavior and what happened. Add any relevant terminal error text only after reviewing it for private information. Do not attach `.env` files, credentials or private source files.
 
 ## The plan was not activated
 
-Closing or declining the activation prompt leaves the plan saved. Run `rivet task start` inside the project to see the exact proposal again and approve it. `rivet task resume` also offers this review for a proposed terminal task. If several tasks are active, add `--run=<id>` from the listed choices. The activation prompt has no reading timeout.
+Closing or declining the activation prompt leaves the plan saved. Run `rivet task start` inside the project to see the exact proposal again and approve it. `rivet task resume` also offers this review for a proposed terminal task. If several tasks are active, choose from the numbered interactive list or add `--run=<id>`. The activation prompt has no reading timeout.
 
 ## The task is awaiting final approval
 
-Run `rivet task status`, inspect the integration diff and recorded checks, then run `rivet task approve`. Choose local application or pull-request delivery. Local application needs the original clean default branch at the task's starting commit and unchanged committed Rivet configuration. Changing policy or either checkout invalidates the old approval; do not force-reset your changes to bypass this check.
+After successful execution, `rivet run` opens the final-review menu automatically. Use **Review changes** to inspect the tested diff. To return later, run `rivet task resume` or the direct shortcut `rivet task approve`. Choose local application or pull-request delivery. Local application needs the original clean default branch at the task's starting commit and unchanged committed Rivet configuration. Changing policy or either checkout invalidates the old approval; do not force-reset your changes to bypass this check.
 
 The `feature` and `work` command families are lower-level harness interfaces with explicit identifiers and version checks. For normal terminal use, use `run` and `task`; `rivet run` already activates and executes after your approval.

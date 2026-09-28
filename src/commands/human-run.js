@@ -1,3 +1,5 @@
+import { taskState } from '../cli/task-presentation.js';
+import { finishTask } from './task-completion.js';
 import { createHash } from 'node:crypto';
 import { loadProjectConfig } from '../config/load.js';
 import { resolveConfiguredProject } from '../cli/project-discovery.js';
@@ -36,10 +38,10 @@ function commandSteps(config, id) {
   const command = config.project.commands[id];
   if (!command) return ['not configured'];
   const steps = Array.isArray(command) ? [{ cwd: '.', argv: command }] : command.steps;
-  return steps.map(step => `${step.cwd}: ${step.argv.join(' ')}`);
+  return steps.map(step => `${step.cwd}: ${step.argv.map(argument=>/^[A-Za-z0-9_./:=+-]+$/.test(argument)?argument:JSON.stringify(argument)).join(' ')}`);
 }
 
-function reviewLines(project, task, harness, proposal) {
+function reviewLines(project, task, harness, proposal, details = false) {
   const request = proposal.workRequest;
   const plan = proposal.featurePlan;
   if (!request || !plan || !Array.isArray(plan.nodes) || !Array.isArray(request.acceptanceCriteria)
@@ -48,22 +50,25 @@ function reviewLines(project, task, harness, proposal) {
   }
   const lines = [
     'Review this exact Rivet plan before activation:',
-    `Summary: ${proposal.summary ?? 'Ready for review.'}`,
+    ...(details ? [`Summary: ${proposal.summary ?? 'Ready for review.'}`] : []),
     `Project: ${project.root}`,
     `Harness: ${harness.kind} (${harness.version})`,
-    `Executable: ${harness.executable}`,
+    ...(details ? [`Executable: ${harness.executable}`] : []),
     `Base commit: ${plan.baselineCommit}`,
     `Providers: ${(plan.providerRefs ?? []).join(', ') || 'none'}`,
     ...(plan.clientProfile ? [`Client limits: ${JSON.stringify(plan.clientProfile)}`] : []),
     'Request:', task,
-    'Acceptance criteria:', ...request.acceptanceCriteria.map(item => `  - ${item}`),
+    'Acceptance criteria:', ...request.acceptanceCriteria.map((item,index) => `  ${index+1}. ${item}`),
     'Work and scope:',
   ];
+  const labels = new Map();
+  let workerNumber = 0;
+  for (const node of plan.nodes) labels.set(node.id,node.role==='worker' ? `Work item ${++workerNumber}` : node.approvalGate==='activation' ? 'Plan approval' : node.approvalGate==='final-delivery' ? 'Final review' : 'Coordination');
   for (const node of plan.nodes) {
-    lines.push(`  ${node.role} (${node.id}): ${node.objective}`);
+    lines.push(details ? `  ${node.role} (${node.id}): ${node.objective}` : `  ${labels.get(node.id)}${node.role==='worker' ? `: ${node.objective}` : ''}`);
     for (const path of node.ownedPaths ?? []) lines.push(`    path: ${path}`);
-    if (node.dependencies?.length) lines.push(`    after: ${node.dependencies.join(', ')}`);
-    if (node.acceptanceCriteria?.length) lines.push(`    accepts: ${node.acceptanceCriteria.join('; ')}`);
+    if (node.dependencies?.length) lines.push(`    after: ${node.dependencies.map(id=>details?id:labels.get(id)??id).join(', ')}`);
+    if (node.acceptanceCriteria?.length) lines.push(`    accepts: ${node.acceptanceCriteria.map(criterion=>!details && request.acceptanceCriteria.includes(criterion) ? `criterion ${request.acceptanceCriteria.indexOf(criterion)+1}` : criterion).join('; ')}`);
     if (node.authorityScopes?.length) lines.push(`    authority: ${node.authorityScopes.join(', ')}`);
     if (node.commandIds?.length) lines.push(`    commands: ${node.commandIds.join(', ')}`);
     if (node.requiredEvidenceTypes?.length) lines.push(`    evidence: ${node.requiredEvidenceTypes.join(', ')}`);
@@ -72,9 +77,11 @@ function reviewLines(project, task, harness, proposal) {
       const profile = node.execution ? node.execution.clientProfile : plan.clientProfile;
       if (profile) lines.push(`    executor limits: ${JSON.stringify(profile)}`);
     }
-    if (node.budget) lines.push(`    budget: ${JSON.stringify(node.budget)}`);
+    if (node.budget) lines.push(details ? `    budget: ${JSON.stringify(node.budget)}` : `    limits: ${Object.entries(node.budget).map(([key,value])=>key==='timeMinutes'?`${value} min`:key==='tokenLimit'?`${value} tokens`:key==='costUsd'?`$${value}`:key==='taskLimit'?`${value} tasks`:`${key}: ${JSON.stringify(value)}`).join('; ')}`);
     if (node.approvalGate) lines.push(`    human gate: ${node.approvalGate}`);
   }
+  lines.push('Activation and final review share the Boss allowance; those repeated limits are not added together.');
+  if (!details) lines.push('Use --details when starting or resuming to include full graph identifiers.');
   lines.push('Required checks:');
   for (const gate of project.config.quality.commandGates.filter(item => item.required)) {
     lines.push(`  ${gate.command}:`);
@@ -96,7 +103,7 @@ function resultCode(result) {
 
 export async function humanRunCommand(parsed, dependencies) {
   if (parsed.command !== 'run' || parsed.subcommand !== null || parsed.operands.length !== 1
-    || Object.keys(parsed.flags).some(key => !['project', 'harness'].includes(key))) {
+    || Object.keys(parsed.flags).some(key => !['project', 'harness', 'details'].includes(key))) {
     fail('Use rivet run "task" [--harness=claude|codex] [--project=<path>].');
   }
   if (dependencies.terminalIsInteractive?.() !== true) {
@@ -158,10 +165,10 @@ async function runInteractive(parsed, dependencies, signal) {
     try { await harnesses.select(kind, project.root, { signal }); }
     catch { fail(`The selected worker harness ${kind} is unavailable or incompatible. Install and authenticate it before activation.`, 'PROVIDER_UNAVAILABLE'); }
   }
-  return activateProposal(project, parsed.operands[0], selected, proposal, dependencies, signal);
+  return activateProposal(project, parsed.operands[0], selected, proposal, dependencies, signal, {details:parsed.flags.details});
 }
 
-export async function activateProposal(project, task, selected, proposal, dependencies, signal) {
+export async function activateProposal(project, task, selected, proposal, dependencies, signal, {details = false} = {}) {
   const reviewedConfig = createHash('sha256').update(JSON.stringify(project.config)).digest('hex');
   const feature = dependencies.feature;
   if (!feature || typeof feature.start !== 'function' || typeof feature.watch !== 'function'
@@ -171,7 +178,7 @@ export async function activateProposal(project, task, selected, proposal, depend
   let approved = false;
   try {
     try {
-      for (const line of reviewLines(project, task, selected, proposal)) dependencies.output.log(line);
+      for (const line of reviewLines(project, task, selected, proposal, details)) dependencies.output.log(line);
     } catch { fail('Could not display the complete plan. The task was not activated.', 'REPOSITORY_CONFLICT'); }
     if (outputFailed) fail('Could not display the complete plan. The task was not activated.', 'REPOSITORY_CONFLICT');
     if (signal.aborted) fail('Task interrupted before activation.', 'REPOSITORY_CONFLICT');
@@ -193,9 +200,9 @@ export async function activateProposal(project, task, selected, proposal, depend
   const result = await invokeFeature(feature, 'watch', {
     project: project.root, runId: proposal.runId, expectedVersion: started.version,
   }, { signal, confirmDependencyInstall: confirmIsolatedDependencyInstall(dependencies, signal) });
-  dependencies.output.log(`Rivet task: ${visible(result.status)}.`);
+  dependencies.output.log(`Rivet task: ${taskState(result.status)}.`);
   if (result.summary) dependencies.output.log(visible(result.summary));
   dependencies.output.log('Use rivet task status to inspect the checkout and verification evidence.');
-  if (result.status === 'awaiting-final-approval') dependencies.output.log('Review and finish the task with rivet task approve.');
+  if (result.status === 'awaiting-final-approval') return finishTask(project, {...proposal,status:result.status}, dependencies, {signal});
   return resultCode(result);
 }

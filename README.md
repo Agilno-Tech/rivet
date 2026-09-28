@@ -28,7 +28,7 @@ rivet task status
 rivet task approve
 ```
 
-At final review, choose local application or pull-request delivery. Local application updates your clean default branch to the verified commit after confirmation; publishing remains separately approved. Use `rivet task start` to reopen a saved proposal.
+After verification, Rivet offers a menu to review the diff, apply locally, prepare pull-request delivery or leave the work for later. Local application updates your clean default branch to the verified commit after confirmation; publishing remains separately approved. Use `rivet task resume` to continue from the saved state, with numbered task selection when needed.
 
 Alternatively, ask your coding harness to read the Rivet skill and complete the task. Rivet detects the project, requests approval and keeps the verification results for review.
 
@@ -44,5 +44,7 @@ Node.js runs Rivet itself. Your application can use Python/Django, Node.js or an
 - [Review and delivery](https://franeagilno.github.io/rivet/delivery.html)
 - [Troubleshooting](https://franeagilno.github.io/rivet/troubleshooting.html)
 - [Contributing](CONTRIBUTING.md)
+
+Human-readable failures show a private diagnostic report path when available. Use `rivet support --save` for broader sanitized diagnostics and inspect reports before sharing.
 
 Found a problem or have an improvement? [Open an issue or pull request](https://github.com/FraneAgilno/rivet). Rivet is developed by Agilno.
