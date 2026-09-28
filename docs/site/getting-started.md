@@ -51,7 +51,7 @@ rivet run "Add a GET /health endpoint with a regression test" --harness=claude
 rivet run "Add a GET /health endpoint with a regression test" --harness=codex
 ```
 
-Review the proposed files, checks and budgets before approving. Rivet works in isolated Git checkouts and asks separately before preparing their dependencies. Existing dependencies in your source checkout are not copied. Installing Rivet with Yarn does not change your project's package manager; Yarn, pnpm, npm and Bun project scripts remain supported.
+Review the proposed files, checks and budgets before approving. The activation prompt waits while you read; closing it leaves a saved proposal. To review that proposal again, run `rivet task start` (or `rivet task resume`). Rivet works in isolated Git checkouts and asks separately before preparing their dependencies. Existing dependencies in your source checkout are not copied. Installing Rivet with Yarn does not change your project's package manager; Yarn, pnpm, npm and Bun project scripts remain supported.
 
 ### In Claude Code, Codex or another coding harness
 
@@ -61,13 +61,24 @@ Open your configured project, reload the harness if needed, and ask:
 
 The harness manages the detailed Rivet commands and task identifiers. Approve the required file, Git and worktree operations through its normal permission flow. See [compatibility](./compatibility.md) for tested CLI paths and current desktop limitations.
 
-## 4. Inspect the result
+## 4. Review and finish
 
 ```sh
 rivet task status
 ```
 
-Status shows the next action, checkout and verification results. At `awaiting-final-approval`, review the diff and actual check results. Local completion does not push, merge or deploy your work; [delivery](./delivery.md) requires separate approval.
+Status shows the next action, checkout and verification results. At `awaiting-final-approval`, inspect the diff in the reported integration checkout and the actual check results, then run:
+
+```sh
+rivet task approve
+```
+
+Choose how to finish:
+
+- **Apply locally:** review and confirm the exact commit. Rivet fast-forwards your original clean default branch to the tested result and records the task as completed. It does not push or deploy. The branch must still be at the task's starting commit, and the committed project policy must be unchanged.
+- **Pull-request delivery:** recommended for team review. Rivet prepares a local delivery record and shows the separately approved publish and review commands. See [delivery](./delivery.md) for repository-provider setup and the remaining steps.
+
+Cancelling keeps the verified work available for later review. If your original checkout has changed, preserve your edits and follow the reported guidance; Rivet will not force a merge. Completed tasks can be inspected with `rivet task status --run=<id>`.
 
 For interrupted terminal tasks or missing dependencies:
 
@@ -76,7 +87,7 @@ rivet task resume
 rivet task deps
 ```
 
-Resume an eligible terminal task after correcting the reported problem. For a task owned by your coding harness, continue through that harness. `task deps` prepares a clean active Worker or accepted integration checkout using its configured dependency plan. Source corrections may require a new reviewed plan. See [troubleshooting](./troubleshooting.md) for blocked tasks.
+A saved terminal proposal is reviewed before activation; you do not need to call `feature start` separately. Resume an eligible activated terminal task after correcting the reported problem. For a task owned by your coding harness, continue through that harness. `task deps` prepares a clean active Worker or accepted integration checkout using its configured dependency plan. Source corrections may require a new reviewed plan. See [troubleshooting](./troubleshooting.md) for blocked tasks.
 
 You normally do not need a task ID or `--project`. When several tasks are active, select the one listed by status with `--run=<id>`. Use `--project=<path>` when running outside the project.
 

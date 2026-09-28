@@ -473,7 +473,7 @@ export async function createGitClient(options = {}) {
         fail('repository-changed');
       }
       if (!(await client.isAncestor(before.root, value.expectedTip, value.newTip))) fail('non-fast-forward');
-      await run(before.root, ['merge', '--ff-only', '--no-edit', value.newTip]);
+      await run(before.root, ['merge', '--ff-only', '--no-edit', '--no-overwrite-ignore', value.newTip]);
       const after = await client.inspectRepository(before.root);
       if (after.branch !== value.branch || after.headSha !== value.newTip || after.dirty) fail('repository-changed');
       return after;

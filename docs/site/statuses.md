@@ -6,11 +6,12 @@ Run `rivet task status` from your project to inspect its sole active task. If se
 
 | State | Next step |
 | --- | --- |
-| `proposed` | Review the proposed scope, checks and approval request. |
+| `proposed` | Run `rivet task start` to review and activate a saved terminal proposal, or continue approval in its owning harness. |
 | `approved` | Continue through the owning harness, or use `rivet task resume` for a spawned task. |
 | `running` | Inspect the current action and checkout. A spawned task must not launch another worker until the previous process is known to have stopped. |
 | `blocked` | Follow the reported cause and recovery guidance. Source corrections can require a new reviewed proposal. |
-| `awaiting-final-approval` | Review the accepted integration diff and recorded checks before a separate delivery decision. |
+| `awaiting-final-approval` | Review the integration diff and checks, then run `rivet task approve` to choose local application or pull-request delivery. |
+| `completed` | The task has a recorded completion. Inspect it with `--run=<id>`; local acceptance does not imply remote publication or deployment. |
 
 ## Worker checkouts
 

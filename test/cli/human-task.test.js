@@ -65,7 +65,7 @@ test('task status selects the sole project-local run without an ID or project fl
   assert.equal(await main(['task', 'status'], overrides(root, messages)), EXIT_CODES.SUCCESS);
   assert.match(messages.join('\n'), /^Run: first-task$/m);
   assert.match(messages.join('\n'), /Task: Complete first-task/);
-  assert.match(messages.join('\n'), /Next: Review the proposal/);
+  assert.match(messages.join('\n'), /Next: rivet task start --run=first-task/);
 });
 
 test('task deps selects the run but refuses installation before an accepted checkout exists', async t => {
@@ -172,4 +172,117 @@ test('ambiguous automatic status and resume expose choices without choosing a co
     assert.match(messages.join('\n'),/host-one.*host-two/s);
     assert.doesNotMatch(messages.join('\n'),/^Run:/m);
   }
+});
+
+for (const command of ['start', 'resume']) {
+  test(`task ${command} reviews a saved proposal before exact activation and execution`, async t => {
+    const root = await fixture(t); const {record} = await createRun(root, 'saved-task');
+    const messages = [], calls = [];
+    const code = await main(['task', command, '--run=saved-task'], overrides(root, messages, {
+      terminalIsInteractive: () => true,
+      harnesses: {async select(kind) { calls.push(`select:${kind}`); return {kind, version:'test', executable:'/bin/codex'}; }},
+      confirmFeatureActivation: async value => {
+        assert.equal(value.proposalDigest, record.proposalDigest);
+        assert.match(messages.join('\n'), /app\/agenda.js/);
+        assert.match(messages.join('\n'), /Required checks:/);
+        calls.push('approve'); return true;
+      },
+      feature: {
+        async start(value) {assert.deepEqual(value,{project:root,runId:record.runId,expectedVersion:record.version,proposalDigest:record.proposalDigest});calls.push('start');return {version:2};},
+        async watch(value) {assert.equal(value.expectedVersion,2);calls.push('watch');return {status:'awaiting-final-approval'};},
+      },
+    }));
+    assert.equal(code, EXIT_CODES.SUCCESS, messages.join('\n'));
+    assert.deepEqual(calls.slice(-3), ['approve','start','watch']);
+  });
+}
+
+test('declining saved proposal review preserves the proposal without dispatch', async t => {
+  const root=await fixture(t);const {store}=await createRun(root,'declined-task');const messages=[];
+  const code=await main(['task','start'],overrides(root,messages,{
+    terminalIsInteractive:()=>true,
+    harnesses:{async select(kind){return {kind,version:'test',executable:'/bin/codex'};}},
+    confirmFeatureActivation:async()=>false,
+    feature:{async start(){assert.fail('must not activate');},async watch(){assert.fail('must not execute');}},
+  }));
+  assert.equal(code,EXIT_CODES.SUCCESS,messages.join('\n'));assert.equal((await store.readOnly()).status,'proposed');
+  assert.match(messages.join('\n'),/rivet task start --run=declined-task/);
+});
+
+test('task approve requires a verified result and never treats a proposal as final approval', async t => {
+  const root=await fixture(t);await createRun(root,'not-ready');const messages=[];
+  const code=await main(['task','approve'],overrides(root,messages,{terminalIsInteractive:()=>true}));
+  assert.equal(code,EXIT_CODES.REPOSITORY_CONFLICT,messages.join('\n'));
+  assert.match(messages.join('\n'),/verified result|final review/);
+});
+
+test('saved proposal cannot start after project policy changes during review',async t=>{
+  const root=await fixture(t);await createRun(root,'changed-policy');const messages=[];let started=false;
+  const code=await main(['task','start'],overrides(root,messages,{
+    terminalIsInteractive:()=>true,
+    harnesses:{async select(kind){return {kind,version:'test',executable:'/bin/codex'};}},
+    confirmFeatureActivation:async()=>{
+      const path=join(root,'.rivet','project.yaml');
+      await writeFile(path,(await readFile(path,'utf8')).replaceAll('npm','yarn'));
+      return true;
+    },
+    feature:{async start(){started=true;return {version:2};},async watch(){return {status:'awaiting-final-approval'};}},
+  }));
+  assert.equal(code,EXIT_CODES.REPOSITORY_CONFLICT,messages.join('\n'));assert.equal(started,false);
+});
+
+async function finalReviewRun(root, runId) {
+  const {store,record}=await createRun(root,runId);
+  let next=await store.update({status:'approved',updatedAt:NOW,runtimeRefs:[],evidenceRefs:[],activation:{approverId:'user',approvedAt:NOW,requestDigest:record.workRequest.digest,proposalDigest:record.proposalDigest}},{expectedVersion:1});
+  next=await store.update({status:'running',updatedAt:NOW,runtimeRefs:[],evidenceRefs:[]},{expectedVersion:next.version});
+  await store.update({status:'awaiting-final-approval',updatedAt:NOW,runtimeRefs:[],evidenceRefs:[]},{expectedVersion:next.version});
+  return store;
+}
+
+for(const choice of [null,undefined]) test(`cancelling final choice (${choice}) preserves verified work without Git actions`,async t=>{
+  const root=await fixture(t),store=await finalReviewRun(root,'final-task'),messages=[];
+  const code=await main(['task','approve'],overrides(root,messages,{
+    terminalIsInteractive:()=>true,
+    work:{async status(){return {deliveryReady:true,checkout:{acceptedCommit:BASELINE,path:'/tmp/integration'},verification:{changedPaths:['app/agenda.js'],checks:[{id:'test',status:'passed'}]}};}},
+    taskApprovalPrompt:async question=>{assert.deepEqual(question.choices.map(item=>item.value),['pull-request','local']);return choice;},
+    resolveCommandExecutable:async()=>assert.fail('no Git mutation after cancellation'),
+    confirmTaskApplication:async()=>assert.fail('no confirmation after cancellation'),
+  }));
+  assert.equal(code,EXIT_CODES.SUCCESS,messages.join('\n'));
+  assert.equal((await store.readOnly()).status,'awaiting-final-approval');
+  assert.match(messages.join('\n'),/Final review cancelled/);
+});
+
+test('final approval refuses noninteractive input before showing a completion choice',async t=>{
+  const root=await fixture(t);await finalReviewRun(root,'final-task');const messages=[];
+  const code=await main(['task','approve'],overrides(root,messages,{
+    terminalIsInteractive:()=>false,taskApprovalPrompt:async()=>assert.fail('must not prompt'),
+  }));
+  assert.equal(code,EXIT_CODES.INVALID_INPUT);assert.match(messages.join('\n'),/interactive terminal/);
+});
+
+test('final approval refuses stale verification before offering local application',async t=>{
+  const root=await fixture(t);await finalReviewRun(root,'final-task');const messages=[];
+  const code=await main(['task','approve'],overrides(root,messages,{
+    terminalIsInteractive:()=>true,work:{async status(){return {deliveryReady:false};}},
+    taskApprovalPrompt:async()=>assert.fail('must not prompt'),
+  }));
+  assert.equal(code,EXIT_CODES.REPOSITORY_CONFLICT);assert.match(messages.join('\n'),/current passing checks/);
+});
+
+test('task recover selects a finished terminal task without resuming its worker',async t=>{
+  const root=await fixture(t);await finalReviewRun(root,'finished-task');const messages=[];let recovered=false;
+  const code=await main(['task','recover'],overrides(root,messages,{
+    work:{async recover(input){assert.deepEqual(input,{project:root,runId:'finished-task'});recovered=true;return {status:'recovered',recoveredLocks:['host-operation'],nextAction:'Read task status and retry final approval.'};}},
+    feature:{async resume(){assert.fail('lock recovery must not resume a worker');}},
+  }));
+  assert.equal(code,EXIT_CODES.SUCCESS,messages.join('\n'));assert.equal(recovered,true);
+});
+
+test('task recover rejects unfinished terminal task even with explicit run selector',async t=>{
+  const root=await fixture(t);await createRun(root,'unfinished-task');const messages=[];
+  const code=await main(['task','recover','--run=unfinished-task'],overrides(root,messages,{
+    work:{async recover(){assert.fail('unfinished terminal tasks are excluded');}},
+  }));
+  assert.equal(code,EXIT_CODES.REPOSITORY_CONFLICT,messages.join('\n'));assert.match(messages.join('\n'),/never restarts a worker/);
 });

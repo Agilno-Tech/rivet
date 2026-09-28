@@ -1,3 +1,4 @@
+import { confirmTaskAction } from './task-confirmation.js';
 import * as filesystem from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -83,6 +84,8 @@ const USAGE = `Usage:
   rivet run "task" [--harness=claude|codex] [--project=<path>]
   rivet task recover [--project=<path>] [--run=<id>]
   rivet task status [--project=<path>] [--run=<id>]
+  rivet task start [--project=<path>] [--run=<id>]
+  rivet task approve [--project=<path>] [--run=<id>]
   rivet task resume [--project=<path>] [--run=<id>]
   rivet task deps [--project=<path>] [--run=<id>]
   rivet protocols add <slug> [--from=<path>] [--project=<path>] [--json]
@@ -158,22 +161,11 @@ async function defaultConfirmOverwrite() {
 }
 
 async function defaultConfirmFeatureActivation(_proposal, options = {}) {
-  if (options.signal?.aborted) return false;
-  const readline = createInterface({ input: process.stdin, output: process.stdout });
-  let timer;
-  let cancelQuestion;
-  const interrupted = new Promise(resolvePromise => { cancelQuestion = resolvePromise; });
-  const abort = () => { cancelQuestion(''); readline.close(); };
-  options.signal?.addEventListener('abort', abort, { once: true });
-  try {
-    const answer = await Promise.race([
-      readline.question('Activate this private feature run? [y/N] '),
-      new Promise(resolvePromise => { timer = setTimeout(() => resolvePromise(''), CONFIRMATION_TIMEOUT_MS); }),
-      interrupted,
-    ]);
-    return /^(?:y|yes)$/i.test(String(answer).trim());
-  } catch { return false; }
-  finally { clearTimeout(timer); options.signal?.removeEventListener('abort', abort); readline.close(); }
+  return confirmTaskAction('Start this task? [y/N] ', {signal: options.signal});
+}
+
+async function defaultConfirmTaskApplication(_preview, options = {}) {
+  return confirmTaskAction('Apply this verified commit to the local branch shown above? [y/N] ', {signal: options.signal});
 }
 
 async function defaultConfirmModelDelegation(_preview, options = {}) {
@@ -252,6 +244,8 @@ function resolveDependencies(overrides = {}) {
     setupRemotePrompt: overrides.setupRemotePrompt,
     projectChecksPrompt: overrides.projectChecksPrompt,
     harnessChoicePrompt: overrides.harnessChoicePrompt,
+    taskApprovalPrompt: overrides.taskApprovalPrompt ?? defaultIntegrationSetupPrompt,
+    confirmTaskApplication: overrides.confirmTaskApplication ?? defaultConfirmTaskApplication,
     terminalIsInteractive: overrides.terminalIsInteractive ?? (() => process.stdin.isTTY === true && process.stdout.isTTY === true),
     harnesses: overrides.harnesses,
     packageRoot: overrides.packageRoot ?? PACKAGE_ROOT,

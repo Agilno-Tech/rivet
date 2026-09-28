@@ -25,7 +25,10 @@ Review the setup preview before applying it. Resolve required checks and commit 
 ```sh
 rivet run "Add a GET /health endpoint with a regression test"
 rivet task status
+rivet task approve
 ```
+
+At final review, choose local application or pull-request delivery. Local application updates your clean default branch to the verified commit after confirmation; publishing remains separately approved. Use `rivet task start` to reopen a saved proposal.
 
 Alternatively, ask your coding harness to read the Rivet skill and complete the task. Rivet detects the project, requests approval and keeps the verification results for review.
 
