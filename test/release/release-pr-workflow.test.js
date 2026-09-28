@@ -99,3 +99,17 @@ test('repository workflows and deployment template pin verified Node 24 action r
     }
   }
 });
+
+test('feature branches run CI through pull requests only, with obsolete runs cancelled', async () => {
+ const ci=parse(await readFile(new URL('../../.github/workflows/ci.yml',import.meta.url),'utf8'));
+ assert.deepEqual(ci.on.push,{branches:['main']});
+ assert.ok(Object.hasOwn(ci.on,'pull_request'));
+ assert.ok(Object.hasOwn(ci.on,'workflow_dispatch'));
+ assert.equal(ci.concurrency['cancel-in-progress'],true);
+ assert.match(ci.concurrency.group,/github.event.pull_request.number/);
+ assert.match(ci.concurrency.group,/github.ref/);
+ const docs=parse(await readFile(new URL('../../.github/workflows/docs.yml',import.meta.url),'utf8'));
+ assert.match(docs.concurrency.group,/inputs.publish/);
+ assert.equal(docs.concurrency['cancel-in-progress'],'${{ !inputs.publish }}');
+ assert.equal(docs.jobs.deploy.concurrency['cancel-in-progress'],false);
+});

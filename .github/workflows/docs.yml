@@ -12,6 +12,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: docs-${{ github.event.pull_request.number || github.ref }}-${{ inputs.publish || false }}
+  cancel-in-progress: ${{ !inputs.publish }}
+
 jobs:
   build:
     runs-on: ubuntu-latest

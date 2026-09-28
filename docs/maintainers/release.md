@@ -11,6 +11,8 @@ Rivet is published as `@agilno-tech/rivet` under Apache License 2.0. The first r
 5. Linux and macOS jobs on Node 22 and 24 install that exact artifact. All four jobs must pass before npm publication.
 6. The publication job uses the `npm` GitHub environment and npm trusted publishing. It publishes the tested tarball directly with `npm publish --tag=latest`, downloads the registry bytes, verifies the recorded checksum and runs installed-package checks again. It uploads release evidence and dispatches Pages publication.
 
+Feature branches run the verification matrix on pull-request events, without a duplicate branch-push run. Pushes to `main` and explicit workflow dispatch remain supported. New commits cancel obsolete verification runs for the same PR; documentation publication is kept separate from cancellable previews.
+
 A GitHub prerelease may appear before npm publication finishes. Confirm the publication job succeeded before announcing availability. Check results separately from live Claude/Codex, integration and independent-user qualification.
 
 Release Please is bootstrapped at commit `13f109e9d99e0591a7e0c255df50fd9ba1670cea`, the source of the manually published first alpha. The release manifest records that baseline. Changing release channels or moving to a stable version requires a reviewed configuration change.
