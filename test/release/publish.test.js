@@ -14,16 +14,16 @@ test('existing version with different bytes stops without publishing',async()=>{
 });
 test('new publication waits for matching registry bytes and returns verified artifact',async()=>{
  let called=0,checks=0;
- const result=await ensurePublished(manifest,{getMetadata:async v=>v==='alpha'?metadata('0.1.0-alpha.0'):++checks<3?null:metadata(v),getBytes:async()=>bytes,publish:async()=>called++,sleep:async()=>{}});
+ const result=await ensurePublished(manifest,{getMetadata:async v=>v==='latest'?metadata(called?manifest.package.version:'0.1.0-alpha.0'):++checks<3?null:metadata(v),getBytes:async()=>bytes,publish:async()=>called++,sleep:async()=>{}});
  assert.equal(called,1);assert.equal(result.status,'published');
 });
 test('uncertain publish response reconciles exact registry bytes without a second publish',async()=>{
- let called=0;const result=await ensurePublished(manifest,{getMetadata:async v=>v==='alpha'?null:called?metadata(v):null,getBytes:async()=>bytes,publish:async()=>{called++;throw Error('lost response');},sleep:async()=>{}});
+ let called=0;const result=await ensurePublished(manifest,{getMetadata:async v=>called?metadata(v==='latest'?manifest.package.version:v):null,getBytes:async()=>bytes,publish:async()=>{called++;throw Error('lost response');},sleep:async()=>{}});
  assert.equal(result.status,'published');assert.equal(called,1);
 });
-test('never regresses the alpha channel or treats registry failures as permission to publish',async()=>{
+test('never regresses the latest channel or treats registry failures as permission to publish',async()=>{
  for(const version of ['0.1.0-alpha.1','0.1.0-alpha.2','0.2.0-alpha.0']){
- let called=false;await assert.rejects(()=>ensurePublished(manifest,{getMetadata:async v=>v==='alpha'?metadata(version):null,publish:async()=>called=true}),/alpha-channel-ahead/);assert.equal(called,false);
+ let called=false;await assert.rejects(()=>ensurePublished(manifest,{getMetadata:async v=>v==='latest'?metadata(version):null,publish:async()=>called=true}),/latest-channel-ahead/);assert.equal(called,false);
  }
  let called=false;await assert.rejects(()=>ensurePublished(manifest,{getMetadata:async()=>{throw Error('registry unavailable');},publish:async()=>called=true}),/registry unavailable/);assert.equal(called,false);
 });
@@ -41,7 +41,7 @@ test('registry reads are bounded, fixed-origin, redirect-free and distinguish mi
 test('publication tolerates metadata after 90 seconds and tarball after 180 seconds',async()=>{
  let elapsed=0,published=0,reads=0;
  const result=await ensurePublished(manifest,{
-  getMetadata:async version=>{if(version==='alpha')return metadata('0.1.0-alpha.0');reads++;return elapsed>=90000?metadata(version):null;},
+  getMetadata:async version=>{if(version==='latest')return metadata(published?manifest.package.version:'0.1.0-alpha.0');reads++;return elapsed>=90000?metadata(version):null;},
   getBytes:async()=>elapsed>=180000?bytes:null,
   publish:async()=>published++,sleep:async milliseconds=>{elapsed+=milliseconds;},
  });
@@ -50,7 +50,7 @@ test('publication tolerates metadata after 90 seconds and tarball after 180 seco
 test('bounded propagation timeout polls for ten minutes without another publish',async()=>{
  let elapsed=0,published=0,verificationReads=0;const sleeps=[];
  await assert.rejects(ensurePublished(manifest,{
-  getMetadata:async version=>{if(version!=='alpha'&&published)verificationReads++;return null;},
+  getMetadata:async version=>{if(version!=='latest'&&published)verificationReads++;return null;},
   getBytes:async()=>assert.fail('no tarball before metadata'),publish:async()=>published++,
   sleep:async milliseconds=>{sleeps.push(milliseconds);elapsed+=milliseconds;},
  }),/publish-not-confirmed/);
@@ -60,7 +60,7 @@ test('bounded propagation timeout polls for ten minutes without another publish'
 test('existing version waits for delayed tarball without republishing',async()=>{
  let elapsed=0,published=0;
  const result=await ensurePublished(manifest,{
-  getMetadata:async version=>{assert.notEqual(version,'alpha');return metadata(version);},
+  getMetadata:async version=>{return metadata(version==='latest'?manifest.package.version:version);},
   getBytes:async()=>elapsed>=180000?bytes:null,publish:async()=>published++,sleep:async milliseconds=>{elapsed+=milliseconds;},
  });
  assert.equal(result.status,'already-published');assert.equal(published,0);assert.equal(elapsed,180000);
@@ -74,4 +74,34 @@ test('tarball 404 is temporary while permission and integrity failures stop imme
   publish:async()=>published++,sleep:async()=>sleeps++,
  }),/registry-read-failed/);
  assert.equal(published,0);assert.equal(sleeps,0);
+});
+
+test('publication waits for latest as well as immutable bytes',async()=>{
+ let published=0,elapsed=0;
+ const result=await ensurePublished(manifest,{
+  getMetadata:async v=>v==='latest'?metadata(elapsed>=45000?manifest.package.version:'0.1.0-alpha.0'):published?metadata(v):null,
+  getBytes:async()=>bytes,publish:async()=>published++,sleep:async ms=>{elapsed+=ms;},
+ });
+ assert.equal(result.status,'published');assert.equal(result.latest,manifest.package.version);assert.equal(published,1);assert.equal(elapsed,45000);
+});
+test('existing release cannot silently succeed with a stale default tag',async()=>{
+ let writes=0;
+ await assert.rejects(ensurePublished(manifest,{
+  getMetadata:async v=>metadata(v==='latest'?'0.1.0-alpha.0':v),getBytes:async()=>bytes,
+  publish:async()=>writes++,sleep:async()=>{},
+ }),/latest-not-confirmed/);
+ assert.equal(writes,0);
+});
+test('retrying an older published release verifies bytes without rolling latest back',async()=>{
+ let writes=0;
+ const result=await ensurePublished(manifest,{
+  getMetadata:async v=>metadata(v==='latest'?'0.1.0-alpha.2':v),getBytes:async()=>bytes,
+  publish:async()=>writes++,sleep:async()=>{},
+ });
+ assert.equal(result.status,'already-published');assert.equal(result.latest,'0.1.0-alpha.2');assert.equal(writes,0);
+});
+test('latest metadata is accepted only for the expected package and valid version',async()=>{
+ const result=await registryMetadata('latest',{fetchImpl:async()=>new Response(JSON.stringify(metadata(manifest.package.version)))});
+ assert.equal(result.version,manifest.package.version);
+ await assert.rejects(registryMetadata('latest',{fetchImpl:async()=>new Response(JSON.stringify({...metadata(manifest.package.version),name:'other'}))}),/registry-identity-mismatch/);
 });

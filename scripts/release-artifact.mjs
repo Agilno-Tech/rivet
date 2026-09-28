@@ -77,7 +77,7 @@ async function inspectSource(sourceRoot, tag, expectedSourceSha, env) {
   const pkg = parseJson(packageBytes), lock = parseJson(lockBytes);
   requireValue(pkg.name === PACKAGE_NAME && (pkg.private === undefined || pkg.private === false) && pkg.license === 'Apache-2.0', 'package-identity-mismatch');
   requireValue(pkg.version === tagVersion(tag), 'package-version-mismatch');
-  requireValue(pkg.publishConfig?.access === 'public' && pkg.publishConfig?.tag === 'alpha' && pkg.publishConfig?.registry === 'https://registry.npmjs.org/', 'publish-configuration-mismatch');
+  requireValue(pkg.publishConfig?.access === 'public' && pkg.publishConfig?.tag === 'latest' && pkg.publishConfig?.registry === 'https://registry.npmjs.org/', 'publish-configuration-mismatch');
   // npm 10 can still run prepare despite --ignore-scripts during pack. The
   // candidate has no packaging hooks; reject their addition before calling npm.
   requireValue(!['prepack', 'prepare', 'postpack'].some(name => Object.hasOwn(pkg.scripts ?? {}, name)), 'pack-lifecycle-hooks-unsupported');

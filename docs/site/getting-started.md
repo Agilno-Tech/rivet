@@ -9,15 +9,15 @@ Install the published alpha package. Choose Yarn Classic, npm or pnpm:
 ::: code-group
 
 ```sh [Yarn Classic]
-yarn global add @agilno-tech/rivet@alpha
+yarn global add @agilno-tech/rivet
 ```
 
 ```sh [npm]
-npm install --global @agilno-tech/rivet@alpha
+npm install --global @agilno-tech/rivet
 ```
 
 ```sh [pnpm]
-pnpm add --global @agilno-tech/rivet@alpha
+pnpm add --global @agilno-tech/rivet
 ```
 
 :::

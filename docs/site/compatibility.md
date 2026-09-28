@@ -13,7 +13,7 @@ Rivet is an alpha. Use this page to check your environment and understand where 
 | npm | Registry installation tested on macOS; installed-package lifecycle tested in CI. |
 | pnpm | Registry global installation and CLI help tested on macOS with pnpm 11.18.0. |
 | Project-only runtime | Installed-runtime checks cover setup and local verification without a global Rivet command. |
-| Registry package | Published on [npm](https://www.npmjs.com/package/@agilno-tech/rivet) as `@agilno-tech/rivet`; use the `alpha` channel. See [installation](./installation.md). |
+| Registry package | Published on [npm](https://www.npmjs.com/package/@agilno-tech/rivet) as `@agilno-tech/rivet`; the default `latest` tag contains alpha software. See [installation](./installation.md). |
 
 Node runs Rivet, not your application. Python/Django, Node.js and other projects use their own configured checks and dependency procedures. Automatic discovery does not recognize every framework or workspace layout; review setup and provide explicit commands when necessary.
 

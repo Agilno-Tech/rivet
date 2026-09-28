@@ -1,6 +1,6 @@
 # Publishing alpha releases
 
-Rivet is published as `@agilno-tech/rivet` under Apache License 2.0. The first registry release is `0.1.0-alpha.0`. Users install `@agilno-tech/rivet@alpha` with Yarn Classic, npm or pnpm; see [installation](../site/installation.md).
+Rivet is published as `@agilno-tech/rivet` under Apache License 2.0. The first registry release is `0.1.0-alpha.0`. Users install `@agilno-tech/rivet` with Yarn Classic, npm or pnpm; see [installation](../site/installation.md).
 
 ## Automatic version updates and publication
 
@@ -9,7 +9,7 @@ Rivet is published as `@agilno-tech/rivet` under Apache License 2.0. The first r
 3. Review the release PR and its checks before merging it. Bot-created PRs do not trigger ordinary GitHub event workflows, so the release workflow explicitly dispatches CI and documentation checks for the release branch.
 4. Merging the release PR creates the matching Git tag and GitHub prerelease. The same workflow builds and tests that source, builds documentation, runs fixture evaluations and packs one artifact.
 5. Linux and macOS jobs on Node 22 and 24 install that exact artifact. All four jobs must pass before npm publication.
-6. The publication job uses the `npm` GitHub environment and npm trusted publishing. It publishes the tested tarball with the `alpha` tag, downloads the registry bytes, verifies the recorded checksum and runs installed-package checks again. It uploads release evidence and dispatches Pages publication.
+6. The publication job uses the `npm` GitHub environment and npm trusted publishing. It publishes the tested tarball directly with `npm publish --tag=latest`, downloads the registry bytes, verifies the recorded checksum and runs installed-package checks again. It uploads release evidence and dispatches Pages publication.
 
 A GitHub prerelease may appear before npm publication finishes. Confirm the publication job succeeded before announcing availability. Check results separately from live Claude/Codex, integration and independent-user qualification.
 
@@ -32,13 +32,15 @@ Run **Release Rivet** manually on `main`:
 - Supply an existing alpha tag and leave publication disabled to build and qualify a draft candidate.
 - Supply the tag and enable publication to retry a failed publication after investigating its cause.
 
-The tag must match the package version and point to a commit in `main` history. Never move a published tag or reuse a version for changed bytes. Publication checks the registry first: an existing version is accepted only when its tarball matches the candidate exactly. An uncertain publish result is reconciled through registry reads rather than a second write. A new publication cannot move the alpha channel backwards.
+The tag must match the package version and point to a commit in `main` history. Never move a published tag or reuse a version for changed bytes. Publication checks the registry first: an existing version is accepted only when its tarball matches the candidate exactly. An uncertain publish result is reconciled through registry reads rather than a second write. A new publication cannot move the `latest` channel backwards.
 
-npm can accept a publication before its metadata and tarball are visible from all registry endpoints. Verification allows ten minutes of propagation time, polling every 15 seconds for both metadata and matching package bytes. A temporary 404 waits; permission errors and mismatched bytes stop immediately. The workflow never repeats the publish command within that attempt, including when an existing version's tarball is still propagating.
+npm can accept a publication before its metadata and tarball are visible from all registry endpoints. Verification allows ten minutes of propagation time, polling every 15 seconds for metadata, matching package bytes and a `latest` tag at that version or newer. A temporary 404 waits; permission errors and mismatched bytes stop immediately. The workflow never repeats the publish command within that attempt, including when an existing version's tarball is still propagating.
 
 If npm reports successful publication but the job ends with `publish-not-confirmed`, wait for registry propagation and inspect availability before retrying the failed job. Do not bump the version or manually publish it again just because verification timed out. A retry first checks the existing version and only accepts the exact tested package bytes. The publishing job has a 25-minute limit that also covers bounded registry requests, installed-package checks and evidence upload.
 
-The first publication also assigned npm's `latest` tag to `0.1.0-alpha.0`. Subsequent automation explicitly publishes to `alpha`; it does not manage `latest`. Documented installation uses `@alpha` explicitly.
+If verification ends with `latest-not-confirmed`, the package bytes matched but the default tag has not caught up. Inspect the tag before retrying; the workflow never republishes an existing version or moves the tag backwards. A manual tag repair requires an authorized npm account because OIDC cannot run `npm dist-tag`.
+
+New releases publish directly to npm’s `latest` tag, so an unqualified installation receives the current release. Package versions remain `0.1.0-alpha.N`; using `latest` does not change their alpha quality. The legacy `alpha` tag is not updated by automation. Trusted publishing supports `npm publish`, but not a separate `npm dist-tag` update, so the workflow does not maintain an additional alias. Do not use `@alpha` to follow new releases; use the unqualified package name or an exact published version.
 
 Each candidate records the source commit, package version, tarball checksum, build runtime and dependency lockfile digest. Release assets include the tarball, `release-manifest.json`, `SHA256SUMS`, and installation evidence. Packaging rejects lifecycle hooks and packs a private snapshot verified against exact commit blobs, with Git replacement objects disabled. Ignored/untracked files are excluded; symlink and submodule entries are unsupported.
 

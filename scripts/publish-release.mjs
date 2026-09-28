@@ -18,9 +18,9 @@ async function readResponse(response,limit){
   try {for(;;){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>limit)fail('registry-response-too-large');chunks.push(value);}return Buffer.concat(chunks);}
   finally {await reader.cancel().catch(()=>{});reader.releaseLock();}
 }
-function validMetadata(value,version){if(value?.name!==NAME||typeof value.version!=='string'||(version!=='alpha'&&value.version!==version))fail('registry-identity-mismatch');versionParts(value.version);return value;}
+function validMetadata(value,version){if(value?.name!==NAME||typeof value.version!=='string'||(version!=='latest'&&value.version!==version))fail('registry-identity-mismatch');versionParts(value.version);return value;}
 export async function registryMetadata(version,{fetchImpl=fetch}={}){
-  if(version!=='alpha')versionParts(version);
+  if(version!=='latest')versionParts(version);
   const response=await fetchImpl(`${REGISTRY}${encodeURIComponent(NAME)}/${version}`,{redirect:'error',signal:AbortSignal.timeout(30000),headers:{accept:'application/json'}});
   if(response.status===404)return null;if(!response.ok)fail('registry-read-failed');
   return validMetadata(JSON.parse((await readResponse(response,1024*1024)).toString('utf8')),version);
@@ -44,23 +44,31 @@ export async function ensurePublished(manifest,{getMetadata=registryMetadata,get
   };
   const existing=await getMetadata(version);
   if(!existing){
-    const alpha=await getMetadata('alpha');
-    if(alpha){validMetadata(alpha,'alpha');if(compare(version,alpha.version)<=0)fail('alpha-channel-ahead');}
+    const latest=await getMetadata('latest');
+    if(latest){validMetadata(latest,'latest');if(compare(version,latest.version)<=0)fail('latest-channel-ahead');}
     if(typeof publish!=='function')fail('publisher-required');
     // Never repeat a possibly successful write. Reconcile through registry reads.
     try {await publish();}catch{/* npm output retains the publication error; verify before deciding success. */}
   }
   // One immediate verification plus forty 15-second intervals: ten minutes of
   // propagation allowance, bounded separately from each registry request timeout.
+  let verifiedBytes=null;
   for(let attempt=0;attempt<41;attempt++){
     if(attempt)await sleep(15000);
-    const published=attempt===0&&existing?existing:await getMetadata(version);
-    if(published){
-      const bytes=await verify(published);
-      if(bytes!==null)return {status:existing?'already-published':'published',bytes};
+    if(verifiedBytes===null){
+      const published=attempt===0&&existing?existing:await getMetadata(version);
+      if(published)verifiedBytes=await verify(published);
+    }
+    if(verifiedBytes!==null){
+      const latest=await getMetadata('latest');
+      if(latest){
+        validMetadata(latest,'latest');
+        // An older retry must not move the default channel backwards.
+        if(compare(latest.version,version)>=0)return {status:existing?'already-published':'published',bytes:verifiedBytes,latest:latest.version};
+      }
     }
   }
-  fail('publish-not-confirmed');
+  fail(verifiedBytes===null?'publish-not-confirmed':'latest-not-confirmed');
 }
 async function main(){
   const flags=process.argv.slice(2),downloadFlags=flags.filter(f=>f.startsWith('--download-directory='));
@@ -75,7 +83,7 @@ async function main(){
   const result=await ensurePublished(manifest,{publish:async()=>{
     // Recheck the selected bytes immediately before npm consumes them.
     await verifyReleaseArtifact(options);
-    execFileSync('npm',['publish',join(args.directory,manifest.artifact.filename),'--access=public','--tag=alpha','--provenance','--ignore-scripts',`--registry=${REGISTRY}`],{stdio:'inherit',timeout:180000});
+    execFileSync('npm',['publish',join(args.directory,manifest.artifact.filename),'--access=public','--tag=latest','--provenance','--ignore-scripts',`--registry=${REGISTRY}`],{stdio:'inherit',timeout:180000});
   }});
   for(const file of ['release-manifest.json','SHA256SUMS'])await copyFile(join(args.directory,file),join(directory,file),constants.COPYFILE_EXCL);
   await writeFile(join(directory,manifest.artifact.filename),result.bytes,{flag:'wx',mode:0o600});

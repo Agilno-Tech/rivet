@@ -1,6 +1,6 @@
 # Capabilities and limitations
 
-Rivet is available on [npm](https://www.npmjs.com/package/@agilno-tech/rivet) as `@agilno-tech/rivet`. Follow the [installation guide](./installation.md) to install the `alpha` channel.
+Rivet is available on [npm](https://www.npmjs.com/package/@agilno-tech/rivet) as `@agilno-tech/rivet`. Follow the [installation guide](./installation.md) to install the current release. The default `latest` tag still contains alpha software.
 
 ## Available now
 

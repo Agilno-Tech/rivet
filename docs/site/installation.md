@@ -7,15 +7,15 @@ Use Node.js 22 or 24 and Git on macOS or Linux. Choose one package manager:
 ::: code-group
 
 ```sh [Yarn Classic]
-yarn global add @agilno-tech/rivet@alpha
+yarn global add @agilno-tech/rivet
 ```
 
 ```sh [npm]
-npm install --global @agilno-tech/rivet@alpha
+npm install --global @agilno-tech/rivet
 ```
 
 ```sh [pnpm]
-pnpm add --global @agilno-tech/rivet@alpha
+pnpm add --global @agilno-tech/rivet
 ```
 
 :::
@@ -26,7 +26,7 @@ rivet setup
 rivet setup --write
 ```
 
-The package is published on [npm](https://www.npmjs.com/package/@agilno-tech/rivet); its executable is `rivet` with every package manager. `@alpha` selects the current alpha release. Replace `@alpha` with `@0.1.0-alpha.0` to install that exact version. Use a user-owned installation directory rather than running the installer as root. Installing Rivet does not change your application's package manager.
+The package is published on [npm](https://www.npmjs.com/package/@agilno-tech/rivet); its executable is `rivet` with every package manager. Installing without a version selects npm’s `latest` tag. Rivet is still alpha software, even though it uses this default tag. Append an exact published version, such as `@0.1.0-alpha.0`, to install that version. Use a user-owned installation directory rather than running the installer as root. Installing Rivet does not change your application's package manager.
 
 Confirm `rivet --help` works before setup:
 
@@ -68,7 +68,7 @@ From the project root, create a temporary Yarn Classic installation and use it t
 
 ```sh
 rivet_bootstrap=$(mktemp -d)
-yarn global add @agilno-tech/rivet@alpha \
+yarn global add @agilno-tech/rivet \
   --global-folder "$rivet_bootstrap/global" --prefix "$rivet_bootstrap" \
   --cache-folder "$rivet_bootstrap/cache" --ignore-scripts
 "$rivet_bootstrap/bin/rivet" install --project-runtime
@@ -76,7 +76,7 @@ node .rivet.cjs setup
 node .rivet.cjs setup --write
 ```
 
-Replace `@alpha` with an exact published version, such as `@0.1.0-alpha.0`, for reproducible version selection. Use Node 22 or newer, Yarn Classic 1.22, and Git. The project-only runtime installer also requires npm 10 or newer, included with the supported Node distribution, to install its dependencies. Unsupported Node versions are rejected before installation changes. The initial command requires access to the npm registry; it does not require a global Rivet executable.
+Append an exact published version, such as `@0.1.0-alpha.0`, for reproducible version selection. Use Node 22 or newer, Yarn Classic 1.22, and Git. The project-only runtime installer also requires npm 10 or newer, included with the supported Node distribution, to install its dependencies. Unsupported Node versions are rejected before installation changes. The initial command requires access to the npm registry; it does not require a global Rivet executable.
 
 Project installation snapshots the running Rivet package and installs its runtime and dependencies into your private `~/.cache/rivet/project-runtimes` cache. A small owned `.rivet.cjs` file pins the Rivet source. Each user keeps their platform-specific runtime and resolved dependency inventory privately. Your application's `package.json`, lockfile and dependencies are preserved. The selected minimal harness instructions use this project reference even when another Rivet version is available globally. Use `--target=claude` or `--target=codex` to install only one target; both are the default. Use `--project=<path>` only when automatic project discovery is insufficient.
 
