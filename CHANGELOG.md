@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0-alpha.4](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.3...v0.1.0-alpha.4) (2026-10-09)
+
+
+### Features
+
+* simplify global and project updates ([#63](https://github.com/Agilno-Tech/rivet/issues/63)) ([d01b714](https://github.com/Agilno-Tech/rivet/commit/d01b714930ce02e9af6205d54564aa865a2a2f37))
+
 ## [0.1.0-alpha.3](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.2...v0.1.0-alpha.3) (2026-10-09)
 
 
