@@ -1,6 +1,6 @@
 {
   "name": "@agilno-tech/rivet",
-  "version": "0.1.0-alpha.3",
+  "version": "0.1.0-alpha.4",
   "type": "module",
   "description": "A portable team development framework for coding harnesses and multiple LLM providers",
   "bin": {
