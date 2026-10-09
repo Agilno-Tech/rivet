@@ -19,6 +19,7 @@ import {
   withPinnedTargetDirectory,
 } from '../commands/install.js';
 import { deliveryCommand } from '../commands/delivery.js';
+import { reviewCommand } from '../commands/review.js';
 import { repositoriesCommand } from '../commands/repositories.js';
 import { defaultIntegrationSetupPrompt } from './integration-setup-prompt.js';
 import { integrationsCommand } from '../commands/integrations.js';
@@ -69,6 +70,7 @@ Everyday commands:
   rivet setup --write             Apply reviewed setup
   rivet doctor                    Check project readiness
   rivet run "task"                 Plan, execute and offer final review
+  rivet review <PR-URL>            Review someone’s pull request locally
   rivet task status               Inspect work and the next step
   rivet task resume               Continue a saved task or final review
   rivet task start                Reopen an unapproved plan
@@ -97,6 +99,7 @@ Usage:
   rivet delivery publish [--run=<id>] [--provider=<id>] [--project=<path>]
   rivet delivery review [--project=<path>] [--run=<id>] [--provider=<id>]
   rivet delivery merge [--run=<id>] [--provider=<id>] [--method=merge|squash|rebase] [--project=<path>]
+  rivet review <PR-URL> [--harness=claude|codex] [--context] [--input=<report.json>] [--publish] [--project=<path>] [--json]
   rivet repositories inspect [--review=<number>] [--remote=<name>] [--provider=<id>] [--project=<path>] [--json]
   rivet integrations setup [--project=<path>]  Guide local read-only provider configuration
   rivet integrations list|check [--project=<path>] [--host-inventory-json=<json>] [--json]
@@ -297,6 +300,7 @@ function resolveDependencies(overrides = {}) {
     integrationHost: overrides.integrationHost,
     integrationSetupPrompt: overrides.integrationSetupPrompt ?? defaultIntegrationSetupPrompt,
     repositories: overrides.repositories,
+    review: overrides.review,
     resolveCommandExecutable: overrides.resolveCommandExecutable,
     commands: {
       doctor,
@@ -309,6 +313,7 @@ function resolveDependencies(overrides = {}) {
       models: modelsCommand,
       integrations: integrationsCommand,
       repositories: repositoriesCommand,
+      review: reviewCommand,
       delivery: deliveryCommand,
       setup: setupCommand,
       orchestrate: orchestrateCommand,

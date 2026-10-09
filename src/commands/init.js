@@ -141,6 +141,10 @@ function proposalProvenance(config, discovery, git) {
       provenanceRecord(discovery.provenance[`features.${field}`], 'inferred', 'high'),
     );
   }
+  for (const type of Object.keys(git.branchPatterns ?? {})) {
+    replaceProvenance(provenance, `project.repository.branchPatterns.${type}`,
+      provenanceRecord('local Git branch prefixes; confirm against contribution instructions', 'inferred', 'medium'));
+  }
   const visualSource = 'Storybook feature inference';
   replaceProvenance(provenance, 'quality.expectations.visual', provenanceRecord(visualSource, 'inferred', 'medium'));
   replaceProvenance(provenance, 'quality.evidence.requireHumanBaseline', provenanceRecord(visualSource, 'inferred', 'medium'));
@@ -159,6 +163,7 @@ function proposalFromTemplates(discovery, git, packageRoot, fs, remote) {
   config.project.schemaVersion = discovery.proposal.schemaVersion;
   config.project.stack = discovery.proposal.stack;
   config.project.repository.defaultBranch = git.defaultBranch ?? 'main';
+  if (Object.keys(git.branchPatterns ?? {}).length) config.project.repository.branchPatterns = git.branchPatterns;
   if (remote) config.project.repository.remote = remote;
   config.project.commands = discovery.proposal.commands;
   if(discovery.proposal.dependencies)config.project.dependencies=discovery.proposal.dependencies;

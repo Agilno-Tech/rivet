@@ -1,3 +1,4 @@
+import { selectBranchNaming } from './branch-naming.js';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
@@ -27,6 +28,7 @@ export class FeaturePlanError extends Error {
   constructor(reason = 'invalid-plan', violation) {
     const messages = {
       'invalid-plan': 'Feature plan is invalid.',
+      'branch-naming-invalid': 'Review repository.branchPattern and branchPatterns: use safe patterns with one {slug}; {ticket} requires a sourced Jira or Linear ticket. Correct configuration before proposing again.',
       'decomposition-invalid': 'Planning provider returned an invalid feature decomposition.',
       'compiled-plan-invalid': 'Feature decomposition could not be compiled into a valid governed plan.',
     };
@@ -113,6 +115,11 @@ function validatePlanSemantics(plan, { config, workRequest, baselineCommit, clie
   if (plan.baselineCommit !== baselineCommit || plan.workRequestDigest !== workRequest.digest || plan.client !== client
     || !matchesClientProfile(client, plan.clientProfile)) fail();
   if (client === 'host' && config.orchestration.roles.some(role => role.harness !== undefined)) fail();
+  if (plan.branchNaming !== undefined) {
+    let expected;
+    try { expected = selectBranchNaming(config.project.repository,workRequest,plan.branchNaming.workType); } catch { fail(); }
+    if (canonical(expected) !== canonical(plan.branchNaming)) fail();
+  }
   const configuredProviders = new Set(config.providers.providers.map(provider => provider.id));
   if (plan.providerRefs.some(provider => !configuredProviders.has(provider))) fail();
   const roles = new Map(config.orchestration.roles.map(role => [role.id, role]));

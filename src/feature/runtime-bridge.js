@@ -1,3 +1,4 @@
+import { renderBranchName } from './branch-naming.js';
 import { requireGovernance } from './governance.js';
 import {assertSelectedProtocolRefs, selectedProtocolStatus} from '../protocols/project.js';
 import {createProtocolPresentation} from '../protocols/presentation.js';
@@ -257,6 +258,7 @@ function captureExecutor(input) {
 }
 
 export function featureBranchFor(config, plan, runId) {
+  if (plan.branchNaming) return renderBranchName(plan.branchNaming,plan.id,runId);
   const pattern = config.project.repository.branchPattern;
   if (typeof pattern !== 'string' || pattern.split('{slug}').length !== 2) fail();
   if (typeof runId !== 'string' || !ID.test(runId)) fail();

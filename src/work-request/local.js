@@ -1,3 +1,4 @@
+import { normalizeWorkType } from '../feature/branch-naming.js';
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, open } from 'node:fs/promises';
@@ -55,7 +56,10 @@ function parseMarkdown(text) {
   const acceptanceCriteria = markdownAcceptanceCriteria(source);
   if (acceptanceCriteria.length === 0) fail();
   const contextRefs = listed(sectionLines(lines, 'context'));
-  return { title, description: source.trim(), acceptanceCriteria, contextRefs };
+  const typeText = sectionLines(lines, 'work type').filter(line => line.trim()).join(' ').trim();
+  const workType = typeText ? normalizeWorkType(typeText) : undefined;
+  if (typeText && !workType) fail();
+  return { title, description: source.trim(), acceptanceCriteria, contextRefs, ...(workType === undefined ? {} : {workType}) };
 }
 
 function safeRelativeRequestPath(value) {

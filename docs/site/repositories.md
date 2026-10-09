@@ -102,3 +102,38 @@ Pagination is bounded. Access errors, missing branches, rate limits, malformed r
 - [GitHub REST checks](https://docs.github.com/en/rest/checks/runs) and [pull request reviews](https://docs.github.com/en/rest/pulls/reviews).
 - [Bitbucket Cloud commit statuses](https://developer.atlassian.com/cloud/bitbucket/rest/api-group-commit-statuses/) and [pull requests](https://developer.atlassian.com/cloud/bitbucket/rest/api-group-pullrequests/).
 - [GitLab commits](https://docs.gitlab.com/api/commits/) and [merge request approvals](https://docs.gitlab.com/api/merge_request_approvals/).
+
+## Branch names for features and fixes
+
+Rivet chooses the task's branch pattern during planning and includes it in the approval. Terminal and coding-harness workflows use the same choice, so a bugfix can start on `fix/...` or your repository's `bugfix/...` convention.
+
+During initial setup, Rivet suggests familiar prefixes from local and remote-tracking branches when the prefix for a task type is unambiguous. Review these suggestions against your contribution guide. It does not fetch branch history or interpret free-form instructions as executable configuration. For an existing setup, configure the conventions in `.rivet/project.yaml`:
+
+```yaml
+repository:
+  defaultBranch: main
+  branchPattern: feature/{slug}
+  branchPatterns:
+    feature: feature/{slug}
+    bugfix: bugfix/{ticket}/{slug}
+    hotfix: hotfix/{slug}
+    chore: chore/{slug}
+```
+
+`branchPatterns` overrides the fallback for each task type. Supported types are `feature`, `bugfix`, `hotfix`, `chore`, `docs`, `refactor`, `test` and `ci`. `{slug}` includes the task name and unique run suffix. Optional `{ticket}` requires a sourced Jira/Linear ticket ID. `{type}` expands to the usual prefix (`fix` for `bugfix`). Use patterns without `{ticket}` for free-text tasks.
+
+The original generated fallback `feature/{slug}` now selects the matching type prefix, including `fix/` for bugfixes. Other custom fallback patterns, such as `team/{slug}`, remain unchanged. Set an explicit per-type pattern if your team wants a different convention. Existing approved runs retain their original branch choice.
+
+A sourced issue type takes precedence over a planner's classification. Jira bug types and recognized Linear labels can supply it; a harness context bundle can supply `content.workType`. Clear title prefixes such as `Fix login timeout` are also recognized. For other tasks, the planning harness classifies the work before approval. For a Markdown request, you can make the choice explicit:
+
+```markdown
+# Login times out
+
+## Work type
+bugfix
+
+## Acceptance criteria
+- Existing users can sign in successfully.
+```
+
+Before activation, check the proposed branch pattern. If it conflicts with the repository's contribution instructions, update the configuration and create a new proposal before starting work. Do not rename an active Rivet branch behind its saved state.

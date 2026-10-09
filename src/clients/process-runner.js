@@ -1,3 +1,4 @@
+import { validateReviewPayload } from '../review/contract.js';
 import { serializeProtocolLaunch } from '../protocols/presentation.js';
 import { spawn } from 'node:child_process';
 import { lstat, open, realpath } from 'node:fs/promises';
@@ -516,7 +517,7 @@ export async function createProcessRunner(input) {
     try {
       contract = protocol === 'launch'
         ? validateLaunchPayload(request.payload)
-        : validatePlanningPayload(request.payload);
+        : protocol === 'review' ? validateReviewPayload(request.payload) : validatePlanningPayload(request.payload);
     } catch { failAgent('invalid-contract'); }
     if (protocol !== 'launch' && request.protocolContext !== undefined) failAgent('invalid-contract');
     let stdinPayload = protocol === 'launch'
@@ -652,6 +653,6 @@ export async function createProcessRunner(input) {
       if (!['claude', 'codex'].includes(provider)) failAgent('invalid-contract');
       return probe(provider === 'codex' ? ['exec', '--help'] : ['--help'], true);
     },
-    run, runPlanning,
+    run, runPlanning, runReview(inputRequest) { return execute(inputRequest, 'review'); },
   });
 }

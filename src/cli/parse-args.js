@@ -10,6 +10,7 @@ const COMMANDS = new Set([
   'models',
   'integrations',
   'repositories',
+  'review',
   'orchestrate',
   'preflight',
   'protocols',
@@ -41,6 +42,7 @@ const LEGACY_OPTIONS = {
   },
 };
 const STRICT_OPTIONS = {
+  review: { boolean: new Set(['json', 'context', 'publish']), valued: new Set(['project', 'remote', 'provider', 'harness', 'input']) },
   delivery: { boolean: new Set(['json']), valued: new Set(['project', 'run', 'remote', 'provider', 'method', 'title', 'body']) },
   repositories: { boolean: new Set(['json']), valued: new Set(['project', 'remote', 'provider', 'review']) },
   integrations: { boolean: new Set(['json']), valued: new Set(['project', 'host-inventory-json']) },

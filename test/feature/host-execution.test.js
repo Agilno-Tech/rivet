@@ -39,7 +39,7 @@ async function npmExecutable() {
   return realpath(stdout.trim());
 }
 
-async function fixture(t, { now = NOW, schemaV2 = false, ownedPaths = ['app/agenda.js'], lockedDependencies = false, hostContext = false, repositoryRemote } = {}) {
+async function fixture(t, { now = NOW, schemaV2 = false, ownedPaths = ['app/agenda.js'], lockedDependencies = false, hostContext = false, repositoryRemote, workType } = {}) {
   const parent = await realpath(await mkdtemp(join(tmpdir(), 'rivet-host-execution-')));
   const root = join(parent, 'project');
   await mkdir(root);
@@ -161,6 +161,7 @@ async function fixture(t, { now = NOW, schemaV2 = false, ownedPaths = ['app/agen
     decomposition: {
       schemaVersion: 1,
       kind: 'agilno.feature-decomposition',
+      ...(workType ? {workType} : {}),
       workItems: [{
         objective: 'Add the agenda implementation.',
         ownedPaths,
@@ -1181,4 +1182,15 @@ test('host recovery rejects missing runtime directories for started runs even wi
       assert.deepEqual(await readFile(lock), before);
     }
   }
+});
+
+
+test('host execution creates the approved bugfix branch directly', async t => {
+  const {root,gitClient,approved} = await fixture(t,{workType:'bugfix'});
+  assert.equal(approved.featurePlan.branchNaming.workType,'bugfix');
+  const execution = createHostExecution({gitClient,now:()=>NOW});
+  await execution.prepare({project:root,runId:approved.runId,expectedRunVersion:approved.version});
+  const worktrees = await gitClient.listWorktrees(root);
+  assert.ok(worktrees.some(item=>item.branch===`fix/${approved.featurePlan.id}-${approved.runId}`));
+  assert.ok(!worktrees.some(item=>item.branch===`feature/${approved.featurePlan.id}-${approved.runId}`));
 });

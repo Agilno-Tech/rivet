@@ -1,3 +1,4 @@
+import { normalizeWorkType } from '../feature/branch-naming.js';
 import { createIntegrationRegistry } from '../integrations/registry.js';
 import { normalizeHostObservation } from '../integrations/host-observation.js';
 import { fields, snapshot } from '../integrations/capabilities.js';
@@ -47,7 +48,8 @@ export function resolveHostWorkRequest({ config, bundle: raw, capturedAt }) {
     if (source.provider === 'confluence' && !(url.searchParams.get('pageId') === source.resourceId
       || segments.some((part, index) => part === 'pages' && segments[index + 1] === source.resourceId))) fail();
     if (['jira', 'linear'].includes(source.provider)) {
-      fields(source.content, ['title', 'description', 'acceptanceCriteria']);
+      fields(source.content, ['title', 'description', 'acceptanceCriteria', 'workType'], ['title', 'description', 'acceptanceCriteria']);
+      if (source.content.workType !== undefined && !normalizeWorkType(source.content.workType)) fail();
       if (!Array.isArray(source.content.acceptanceCriteria) || !TICKET.test(source.resourceId)) fail();
     } else {
       fields(source.content, ['title', 'text']);
@@ -68,6 +70,7 @@ export function resolveHostWorkRequest({ config, bundle: raw, capturedAt }) {
   }
   return createWorkRequest({
     source: { kind: 'host-observation', ref: `${primary.providerId}:${primary.resourceId}`, revision: `sha256:${primary.contentDigest}`, url: primary.url },
+    ...(primary.content.workType === undefined ? {} : {workType:normalizeWorkType(primary.content.workType)}),
     title: primary.content.title,
     description: primary.content.description,
     acceptanceCriteria,

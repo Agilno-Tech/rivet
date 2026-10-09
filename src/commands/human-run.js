@@ -31,7 +31,9 @@ export function normalizedTask(value) {
     fail('A ticket ID alone does not include its acceptance criteria. Use the ticket intake command or describe the task.');
   }
   const criterion = task.replace(/\s+/g, ' ');
-  return `# User request\n\n${task}\n\n## Acceptance Criteria\n- ${criterion}\n`;
+  const prefix = /^(fix|bugfix|hotfix)(?:\([^\n)]+\))?(?=[:\s])/i.exec(task)?.[1]?.toLowerCase();
+  const typeSection = prefix ? `\n\n## Work type\n${prefix === 'hotfix' ? 'hotfix' : 'bugfix'}` : '';
+  return `# User request\n\n${task}${typeSection}\n\n## Acceptance Criteria\n- ${criterion}\n`;
 }
 
 function commandSteps(config, id) {
@@ -55,6 +57,7 @@ function reviewLines(project, task, harness, proposal, details = false) {
     `Harness: ${harness.kind} (${harness.version})`,
     ...(details ? [`Executable: ${harness.executable}`] : []),
     `Base commit: ${plan.baselineCommit}`,
+    ...(plan.branchNaming ? [`Branch: ${plan.branchNaming.pattern.replace('{slug}',`${plan.id}-<run-id>`)} (${plan.branchNaming.workType})`] : []),
     `Providers: ${(plan.providerRefs ?? []).join(', ') || 'none'}`,
     ...(plan.clientProfile ? [`Client limits: ${JSON.stringify(plan.clientProfile)}`] : []),
     'Request:', task,

@@ -1,3 +1,4 @@
+import { WORK_TYPES } from '../feature/branch-naming.js';
 import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 
@@ -6,7 +7,7 @@ import { containsSecretMaterial, immutableJson } from '../clients/contract.js';
 const INPUT_KEYS = new Set([
   'source', 'title', 'description', 'acceptanceCriteria', 'contextRefs', 'capturedAt',
 ]);
-const OPTIONAL_KEYS = ['context', 'criteriaProvenance'];
+const OPTIONAL_KEYS = ['context', 'criteriaProvenance', 'workType'];
 const REQUEST_KEYS = new Set(['schemaVersion', ...INPUT_KEYS, 'digest']);
 const SOURCE_KEYS = new Set(['kind', 'ref', 'revision', 'url']);
 const SOURCE_KINDS = new Set(['inline', 'markdown', 'jira', 'linear', 'host-observation']);
@@ -207,6 +208,10 @@ function capturedInput(input, request = false) {
     contextRefs,
     capturedAt: timestamp(value.capturedAt),
   };
+  if (value.workType !== undefined) {
+    if (!WORK_TYPES.includes(value.workType)) fail();
+    output.workType = value.workType;
+  }
   if (value.context !== undefined) output.context = context(value.context);
   if (value.criteriaProvenance !== undefined) output.criteriaProvenance = criteriaProvenance(value.criteriaProvenance, output);
   if (output.source.kind === 'host-observation') {
@@ -227,6 +232,7 @@ function digestPayload(value) {
     acceptanceCriteria: value.acceptanceCriteria,
     contextRefs: value.contextRefs,
     capturedAt: value.capturedAt,
+    ...(value.workType === undefined ? {} : {workType:value.workType}),
     ...(value.context === undefined ? {} : { context: value.context }),
     ...(value.criteriaProvenance === undefined ? {} : { criteriaProvenance: value.criteriaProvenance }),
   };

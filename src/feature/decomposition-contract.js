@@ -29,6 +29,7 @@ export function featureDecompositionResultContract() {
     kind: FEATURE_DECOMPOSITION_KIND,
     framing: 'Emit exactly one JSON object matching this result schema on stdout. Emit no Markdown or commentary.',
     instructions: [
+      'Classify the request with workType (feature, bugfix, hotfix, chore, docs, refactor, test or ci) before branch creation. Preserve explicit tracker/request workType. Read repository contribution instructions and configured branch patterns; do not create a feature branch for a bugfix or plan to rename it later. If configured naming conflicts with repository instructions, ask for the configuration to be corrected before activation.',
       'Inspect the repository read-only and propose between one and sixteen implementation work items.',
       'Use only normalized repository-relative owned paths; never use .git, .rivet, or configured sensitive paths.',
       'Owned path components must not end in a dot or space or use Windows reserved names. Paths within each work item must be unique ignoring case.',

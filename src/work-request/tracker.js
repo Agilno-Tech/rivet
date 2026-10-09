@@ -1,3 +1,4 @@
+import { normalizeWorkType } from '../feature/branch-naming.js';
 import { validateAdapter } from '../adapters/contract.js';
 import { createWorkRequest, WorkRequestError, userAcceptanceCriteria } from './contract.js';
 
@@ -69,7 +70,10 @@ function requestFromEnvelope(provider, expectedId, envelope, additions) {
       error.safeMessage = 'The tracker has no acceptance criteria. Ask the user for explicit acceptance criteria, then retry the ticket proposal with --acceptance-criteria "criterion text" (one criterion per line).';
       throw error;
     }
+    const labelTypes = [...new Set((normalized.labels ?? []).map(label => normalizeWorkType(label.name)).filter(Boolean))];
+    const workType = normalizeWorkType(normalized.kind) ?? (labelTypes.length === 1 ? labelTypes[0] : undefined);
     return createWorkRequest({
+      ...(workType === undefined ? {} : {workType}),
       source: {
         kind: provider,
         ref: expectedId,
