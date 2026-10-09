@@ -6,6 +6,7 @@
   "additionalProperties": false,
   "required": ["schemaVersion", "id", "baselineCommit", "workRequestDigest", "client", "providerRefs", "nodes"],
   "properties": {
+    "branchNaming": {"type": "object", "additionalProperties": false, "required": ["workType", "pattern"], "properties": {"workType": {"enum": ["feature", "bugfix", "hotfix", "chore", "docs", "refactor", "test", "ci"]}, "pattern": {"type": "string", "minLength": 1, "maxLength": 255}}},
     "schemaVersion": { "type": "integer", "const": 1 },
     "id": { "$ref": "#/$defs/id" },
     "baselineCommit": { "type": "string", "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$" },

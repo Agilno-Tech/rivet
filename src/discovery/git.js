@@ -1,3 +1,4 @@
+import { inferBranchPatterns } from '../feature/branch-naming.js';
 import { resolve } from 'node:path';
 
 import { runArgv } from './tools.js';
@@ -45,11 +46,12 @@ export async function discoverGit(projectRoot, options = {}) {
       worktreeCheck: { checked: false, error: 'not_repository' },
     };
   }
-  const [branchResult, statusResult, defaultResult, worktreeResult] = await Promise.all([
+  const [branchResult, statusResult, defaultResult, worktreeResult, refsResult] = await Promise.all([
     git(runner, cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD']),
     git(runner, cwd, ['status', '--porcelain']),
     git(runner, cwd, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']),
     git(runner, cwd, ['worktree', 'list', '--porcelain', '-z']),
+    git(runner, cwd, ['for-each-ref', '--count=512', '--format=%(refname)', 'refs/heads', 'refs/remotes']),
   ]);
   const currentBranch = branchResult.code === 0 ? branchResult.stdout.trim() || null : null;
   const remoteHead = defaultResult.code === 0 ? defaultResult.stdout.trim() : '';
@@ -75,6 +77,8 @@ export async function discoverGit(projectRoot, options = {}) {
     currentBranch,
     defaultBranch,
     defaultBranchSource,
+    branchPatterns: refsResult.code === 0 && refsResult.stdout.trim().split(/\r?\n/).length < 512
+      ? inferBranchPatterns(refsResult.stdout.trim().split(/\r?\n/)) : {},
     detached: currentBranch === null,
     dirty: statusResult.code !== 0 || statusResult.stdout.trim().length > 0,
     baseFreshness,

@@ -399,7 +399,7 @@ export function createProviderHttpClient(input) {
     });
   }
 
-  async function perform(request) {
+  async function perform(request, textResponse = false) {
     const controller = new AbortController();
     let resolveAbort;
     const cancelled = new Promise(resolve => { resolveAbort = resolve; });
@@ -505,7 +505,7 @@ export function createProviderHttpClient(input) {
       const bytes = Buffer.concat(chunks, byteLength);
       let data = null;
       if (bytes.byteLength > 0) {
-        try { data = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
+        try { const decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes); data = textResponse ? decoded : JSON.parse(decoded); }
         catch {
           failProvider('remote', {
             provider, status: response.status,
@@ -514,7 +514,7 @@ export function createProviderHttpClient(input) {
         }
       }
       if (!response.ok) failProvider('remote', { provider, status: response.status, retryClassification: retryFor(response.status) });
-      const result = Object.freeze({ status: response.status, data: immutableRedactedJson(data), headers: responseHeaders(response.headers, provider) });
+      const result = Object.freeze({ status: response.status, data: textResponse ? data : immutableRedactedJson(data), headers: responseHeaders(response.headers, provider) });
       responseMetadata.set(result, { link: response.headers.link });
       return result;
     } finally {
@@ -700,5 +700,5 @@ export function createProviderHttpClient(input) {
     failProvider('pagination-limit', { provider, retryClassification: 'permanent' });
   }
 
-  return Object.freeze({ provider, baseUrl: `${baseUrl.origin}${basePrefix}`, request, paginate, urlFor });
+  return Object.freeze({ provider, baseUrl: `${baseUrl.origin}${basePrefix}`, request, requestText(input) { if (input?.method !== 'GET') failProvider('invalid-request', { provider }); return perform(snapshotRequest(input), true); }, paginate, urlFor });
 }

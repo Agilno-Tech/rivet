@@ -8,7 +8,7 @@ const ENDPOINTS = Object.freeze({github:'https://api.github.com',bitbucket:'http
 const ENV_NAME = /^[A-Z][A-Z0-9_]{1,127}$/;
 function fail(message, code) { throw new CliError(message, code); }
 
-function selectProvider(config, repository, flags) {
+export function selectRepositoryProvider(config, repository, flags) {
   const candidates = config.providers.providers.filter(provider => provider.kind === 'git-ci'
     && provider.mode !== 'disabled' && (provider.transport ?? 'direct-api') === 'direct-api'
     && provider.capabilities.includes('repository-read')
@@ -22,7 +22,7 @@ function selectProvider(config, repository, flags) {
   return candidates[0];
 }
 
-function headers(provider, environment) {
+export function repositoryHeaders(provider, environment) {
   const credentials = provider.credentials ?? {};
   const keys = Object.keys(credentials);
   if (keys.length !== 1 || !['tokenEnv','accessTokenEnv','apiTokenEnv'].includes(keys[0])
@@ -55,8 +55,8 @@ export async function repositoriesCommand(parsed, dependencies) {
   } catch {
     fail('Repository remote is missing, ambiguous, changed or unsupported. Review setup --remote=<name>, or choose a GitHub.com, Bitbucket Cloud or GitLab.com remote with --remote=<name>.','REPOSITORY_CONFLICT');
   }
-  const provider = selectProvider(project.config,repository,flags);
-  const auth = headers(provider,dependencies.env);
+  const provider = selectRepositoryProvider(project.config,repository,flags);
+  const auth = repositoryHeaders(provider,dependencies.env);
   let data;
   try {
     const adapter = createRepositoryProvider({repository,headers:auth,

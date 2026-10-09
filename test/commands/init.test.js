@@ -898,3 +898,13 @@ test('refuses a symlinked .rivet target without modifying its destination', asyn
   assert.equal(exitCode, EXIT_CODES.REPOSITORY_CONFLICT);
   assert.deepEqual(nodeFs.readdirSync(destination), ['safe']);
 });
+
+test('Git discovery proposes observed branch prefixes without guessing between fix and bugfix', async () => {
+  const runner = gitRunner({
+    'rev-parse --show-toplevel':'/tmp/project\n',
+    'symbolic-ref --quiet --short HEAD':'main\n',
+    'for-each-ref --count=512 --format=%(refname) refs/heads refs/remotes':'refs/heads/bugfix/APP-21\nrefs/remotes/origin/feat/add-page\n',
+  });
+  const result = await discoverGit('/tmp/project',{runner});
+  assert.deepEqual(result.branchPatterns,{bugfix:'bugfix/{slug}',feature:'feat/{slug}'});
+});

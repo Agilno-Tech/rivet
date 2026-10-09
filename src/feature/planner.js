@@ -1,3 +1,4 @@
+import { BranchNamingError, selectBranchNaming } from './branch-naming.js';
 import { AgentContractError, immutableJson } from '../clients/contract.js';
 import { validateProjectConfiguration } from '../config/validate.js';
 import { validateWorkRequest } from '../work-request/contract.js';
@@ -104,6 +105,7 @@ function compileFeaturePlan({ decomposition, config, workRequest, baselineCommit
   return {
     schemaVersion: 1,
     id: slug(workRequest.title),
+    branchNaming: selectBranchNaming(config.project.repository,workRequest,decomposition.workType),
     baselineCommit,
     workRequestDigest: workRequest.digest,
     client,
@@ -156,6 +158,7 @@ export function createHostFeaturePlan(input) {
       ...bindings,
     });
   } catch (error) {
+    if (error instanceof BranchNamingError) throw new FeaturePlanError('branch-naming-invalid');
     if (error instanceof FeaturePlanError) throw error;
     if (error instanceof FeatureDecompositionError) fail('decomposition-invalid');
     fail();
@@ -172,6 +175,7 @@ function planningContract({ config, workRequest, baselineCommit, client }) {
       projectId: config.project.id,
       defaultBranch: config.project.repository.defaultBranch,
       branchPattern: config.project.repository.branchPattern,
+      ...(config.project.repository.branchPatterns ? {branchPatterns:config.project.repository.branchPatterns} : {}),
       sensitivePaths: config.project.repository.sensitivePaths ?? [],
       commands: config.project.commands,
       providers: config.providers.providers.map(provider => ({
@@ -243,6 +247,7 @@ export function createFeaturePlanner(input) {
           }
         }
       } catch (error) {
+        if (error instanceof BranchNamingError) throw new FeaturePlanError('branch-naming-invalid');
         if (error instanceof FeaturePlanError || error instanceof AgentContractError) throw error;
         fail();
       }

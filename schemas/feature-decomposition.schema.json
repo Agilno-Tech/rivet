@@ -6,6 +6,7 @@
   "additionalProperties": false,
   "required": ["schemaVersion", "kind", "workItems"],
   "properties": {
+    "workType": {"enum": ["feature", "bugfix", "hotfix", "chore", "docs", "refactor", "test", "ci"]},
     "schemaVersion": { "type": "integer", "const": 1 },
     "kind": { "type": "string", "const": "agilno.feature-decomposition" },
     "workItems": {

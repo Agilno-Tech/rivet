@@ -172,7 +172,14 @@ function payloadDigest(value) {
 function wireValue(write) {
   const payload = cloneJson(write.payload);
   let value;
-  if (write.provider === 'jira' && write.action === 'comment') value = { body: payload.body };
+  if (['github','gitlab','bitbucket'].includes(write.provider) && write.action === 'review-comment') {
+    if (!payload || Object.keys(payload).length !== 2 || !Number.isSafeInteger(payload.number) || payload.number < 1
+      || typeof payload.body !== 'string' || !payload.body.trim() || Buffer.byteLength(payload.body) > 60000
+      || write.expectedState !== 'open' || !/^[a-f0-9]{40}$/.test(write.expectedVersion)
+      || !/^[a-f0-9]{64}$/.test(write.idempotencyKey)) failProvider('invalid-request', {provider:write.provider});
+    value = write.provider === 'bitbucket' ? {content:{raw:payload.body}} : {body:payload.body};
+  }
+  else if (write.provider === 'jira' && write.action === 'comment') value = { body: payload.body };
   else if (write.provider === 'jira' && write.action === 'status') value = { transition: { id: payload.transitionId } };
   else if (write.provider === 'confluence' && write.action === 'page-update') value = {
     id: write.resourceId, status: 'current', title: payload.title,

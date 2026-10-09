@@ -151,3 +151,10 @@ test('missing direct criteria gives an actionable user-input remedy; invalid sup
     assert.equal(calls.length,0);
   }
 });
+
+test('preserves tracker bug type in digest-bound work requests', async () => {
+  const source = envelope('jira',{id:'APP-21',kind:'Bug',summary:'Login times out',description:'Repair login.',acceptanceCriteria:['Login succeeds'],revision:NOW,links:[]});
+  const request = await resolveTrackerWorkRequest({provider:'jira',ticketId:'APP-21',adapter:adapter('jira',source)});
+  assert.equal(request.workType,'bugfix');
+  assert.throws(()=>validateWorkRequest({...request,workType:'feature'}));
+});

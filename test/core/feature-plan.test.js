@@ -361,3 +361,27 @@ test('rejects ownership of the pinned project launcher and descendants with case
     }), error => error.details.violation === 'owned-path-protected');
   }
 });
+
+test('both planning paths bind bugfix naming before activation and reject changed naming policy', async () => {
+  const config = structuredClone(await configuration());
+  config.project.repository.branchPatterns = {bugfix:'bugfix/{ticket}/{slug}'};
+  const original = request();
+  const {schemaVersion,digest,...input} = original;
+  const workRequest = createWorkRequest({...input,workType:'bugfix'});
+  const host = createHostFeaturePlan({config,workRequest,baselineCommit:BASELINE,decomposition:decomposition({workType:'feature'})});
+  const planner = createFeaturePlanner({planningClient:{async propose(){return decomposition({workType:'feature'});}}});
+  const spawned = await planner.propose({config,workRequest,baselineCommit:BASELINE,client:'codex'});
+  assert.deepEqual({...host.branchNaming},{workType:'bugfix',pattern:'bugfix/DEMO-123/{slug}'});
+  assert.deepEqual(spawned.branchNaming,host.branchNaming);
+  const changed = structuredClone(config);
+  changed.project.repository.branchPatterns.bugfix='fix/{slug}';
+  assert.throws(()=>createFeaturePlan({proposal:host,config:changed,workRequest,baselineCommit:BASELINE,client:'host'}));
+});
+
+test('missing ticket placeholder reports an actionable planning error', async()=>{
+  const config=structuredClone(await configuration());
+  config.project.repository.branchPattern='fix/{ticket}/{slug}';
+  const {schemaVersion,digest,...input}=request();
+  const workRequest=createWorkRequest({...input,source:{kind:'inline',ref:'inline'}});
+  assert.throws(()=>createHostFeaturePlan({config,workRequest,baselineCommit:BASELINE,decomposition:decomposition()}),/branchPattern.*ticket/i);
+});

@@ -1,3 +1,4 @@
+import { validateBranchPattern } from '../feature/branch-naming.js';
 import { parseRepositoryRemote } from '../repositories/identity.js';
 import { readFileSync } from 'node:fs';
 
@@ -290,6 +291,10 @@ export function validateProjectConfiguration(config) {
   for (const name of ['project', 'providers', 'orchestration', 'quality']) {
     schemaValidate(name, config[name]);
   }
+  try {
+    validateBranchPattern(config.project.repository.branchPattern);
+    for (const pattern of Object.values(config.project.repository.branchPatterns ?? {})) validateBranchPattern(pattern);
+  } catch { throw new ConfigurationError('/project/repository/branchPattern', 'invalid'); }
   if (config.project.repository.remote) {
     try {
       const identity = parseRepositoryRemote(config.project.repository.remote.url);

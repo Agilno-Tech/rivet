@@ -28,6 +28,7 @@ export default defineConfig({
         { text: 'Integrations', link: '/integrations' },
         { text: 'Models and harnesses', link: '/models' },
         { text: 'Repository inspection', link: '/repositories' },
+        { text: 'PR reviews', link: '/review' },
         { text: 'Review and delivery', link: '/delivery' },
       ] },
       { text: 'Reference and help', items: [
