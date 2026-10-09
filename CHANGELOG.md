@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0-alpha.3](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.2...v0.1.0-alpha.3) (2026-10-09)
+
+
+### Features
+
+* add PR reviews and task-aware branch conventions ([#61](https://github.com/Agilno-Tech/rivet/issues/61)) ([0760a0b](https://github.com/Agilno-Tech/rivet/commit/0760a0b5949442a6c4bf52370e83b1c2085f7bba))
+
 ## [0.1.0-alpha.2](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.1...v0.1.0-alpha.2) (2026-09-28)
 
 
