@@ -18,6 +18,7 @@ const COMMANDS = new Set([
   'status',
   'setup',
   'uninstall',
+  'update',
   'verify',
   'work',
   'task',
@@ -42,6 +43,7 @@ const LEGACY_OPTIONS = {
   },
 };
 const STRICT_OPTIONS = {
+  update: { boolean: new Set(['global', 'project', 'check', 'json']), valued: new Set() },
   review: { boolean: new Set(['json', 'context', 'publish']), valued: new Set(['project', 'remote', 'provider', 'harness', 'input']) },
   delivery: { boolean: new Set(['json']), valued: new Set(['project', 'run', 'remote', 'provider', 'method', 'title', 'body']) },
   repositories: { boolean: new Set(['json']), valued: new Set(['project', 'remote', 'provider', 'review']) },
@@ -96,7 +98,7 @@ const STRICT_OPTIONS = {
     valued: new Set(['fixture', 'port']),
   },
 };
-const NO_POSITIONAL_COMMANDS = new Set(['doctor', 'support', 'init', 'install', 'preflight', 'setup', 'uninstall']);
+const NO_POSITIONAL_COMMANDS = new Set(['doctor', 'support', 'init', 'install', 'preflight', 'setup', 'uninstall', 'update']);
 
 function targetSet(target) {
   const normalized = typeof target === 'string' ? target.toLowerCase() : target;
@@ -135,6 +137,10 @@ export function parseArgs(argv) {
     throw new TypeError('CLI arguments must be an array of strings');
   }
 
+  if (argv[0] === '--version') {
+    if (argv.length !== 1) throw new ArgumentError('Use rivet --version without other arguments');
+    return { command: 'version', subcommand: null, operands: [], flags: {} };
+  }
   const [command = null, ...tokens] = argv;
   if (command === null) {
     return { command: null, subcommand: null, operands: [], flags: {} };
@@ -220,6 +226,9 @@ export function parseArgs(argv) {
     throw new ArgumentError("Flag '--overwrite' requires '--write'");
   }
 
+  if (command === 'update' && flags.global && flags.project) {
+    throw new ArgumentError('Choose either --global or --project, or omit both to update both scopes');
+  }
   if (NO_POSITIONAL_COMMANDS.has(command) && positionals.length > 0) {
     throw new ArgumentError(`Command '${command}' does not accept positional arguments`);
   }

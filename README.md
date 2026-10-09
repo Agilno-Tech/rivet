@@ -47,6 +47,7 @@ Node.js runs Rivet itself. Your application can use Python/Django, Node.js or an
 
 ## Documentation
 
+- [Release notes](https://github.com/Agilno-Tech/rivet/releases)
 - [Quickstart](https://agilno-tech.github.io/rivet/getting-started.html)
 - [Configuration and commands](https://agilno-tech.github.io/rivet/runtime-reference.html)
 - [Integrations](https://agilno-tech.github.io/rivet/integrations.html)
@@ -57,3 +58,7 @@ Node.js runs Rivet itself. Your application can use Python/Django, Node.js or an
 Human-readable failures show a private diagnostic report path when available. Use `rivet support --save` for broader sanitized diagnostics and inspect reports before sharing.
 
 Found a problem or have an improvement? [Open an issue or pull request](https://github.com/Agilno-Tech/rivet). Rivet is developed by [Agilno](https://agilno.com/).
+
+## Updating
+
+Run `rivet update` inside your project to update the global CLI and the project’s managed Rivet files. Check your version with `rivet --version`. See the [updating guide](https://agilno-tech.github.io/rivet/updating.html), including the one-time package-manager update for older releases.

@@ -2,6 +2,10 @@
 
 This describes the current alpha runtime, including the active-harness workflow available through the `rivet work` commands.
 
+## Versions and updates
+
+`rivet --version` reports the running package version. `rivet update` updates the global CLI and current configured project; use `--global` or `--project` to choose one scope, and `--check` for a read-only inspection. `--json` provides structured results. See [Updating Rivet](./updating.md).
+
 ## Project policy and diagnostics
 
 Run `rivet --help` for command syntax. `rivet init --project=<path>` previews project policy; `--write` creates reviewed `.rivet` configuration. `rivet preflight --project=<path>` reports orchestration readiness; `--mode=host` checks host repository, tool, and script readiness without requiring a private goal or unused provider credentials. `rivet doctor --project=<path>` reports general project readiness.

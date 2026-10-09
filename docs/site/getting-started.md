@@ -128,3 +128,7 @@ Nothing is uploaded automatically. See [report contents and sharing](./troublesh
 - [Project protocols](./memory-and-protocols.md): your team's reviewed procedures.
 - [Model selection](./models.md): worker harnesses and advisory text models.
 - [Runtime reference](./runtime-reference.md): configuration and advanced commands.
+
+## Keep Rivet up to date
+
+Run `rivet update` inside your project to update the CLI and that project’s managed instructions and runtime pin. See [Updating Rivet](./updating.md) for older versions and scope options.
