@@ -19,6 +19,7 @@ import {
   withPinnedTargetDirectory,
 } from '../commands/install.js';
 import { deliveryCommand } from '../commands/delivery.js';
+import { updateCommand } from '../commands/update.js';
 import { reviewCommand } from '../commands/review.js';
 import { repositoriesCommand } from '../commands/repositories.js';
 import { defaultIntegrationSetupPrompt } from './integration-setup-prompt.js';
@@ -66,6 +67,8 @@ const BASIC_USAGE = `Usage:
 Rivet: plan, build, check and review a task.
 
 Everyday commands:
+  rivet --version                 Show the running Rivet version
+  rivet update                    Update this machine and current project
   rivet setup                     Preview project setup
   rivet setup --write             Apply reviewed setup
   rivet doctor                    Check project readiness
@@ -79,7 +82,8 @@ Everyday commands:
   rivet task recover              Inspect abandoned operation locks
   rivet support --save            Save diagnostics for a bug report
 
-Run inside your project; use --project=<path> when elsewhere.
+Run inside your project; most commands accept --project=<path> when elsewhere.
+For update, --project selects project-only updates in the current project.
 Choose tasks from a numbered list, or pass --run=<id> explicitly.
 Use --details with run or task for full plan/state identifiers.
 Use rivet --help --advanced for all harness, integration and delivery commands.
@@ -90,6 +94,8 @@ Feature/work lifecycle IDs may also be passed as --run=<id> or --run <id>.
 Use exactly one selector form; project/version/digest requirements remain explicit.
 
 Usage:
+  rivet --version
+  rivet update [--global | --project] [--check] [--json]
   rivet delivery prepare|status|refresh|reconcile|recover [--run=<id>] [--project=<path>] [--json]
   rivet delivery tracker-status [--run=<id>] [--provider=<id>] [--project=<path>] [--json]
   rivet delivery review-update --title=<text> --body=<text> [--run=<id>] [--provider=<id>] [--project=<path>]
@@ -301,6 +307,7 @@ function resolveDependencies(overrides = {}) {
     integrationSetupPrompt: overrides.integrationSetupPrompt ?? defaultIntegrationSetupPrompt,
     repositories: overrides.repositories,
     review: overrides.review,
+    update: overrides.update,
     resolveCommandExecutable: overrides.resolveCommandExecutable,
     commands: {
       doctor,
@@ -314,6 +321,7 @@ function resolveDependencies(overrides = {}) {
       integrations: integrationsCommand,
       repositories: repositoriesCommand,
       review: reviewCommand,
+      update: updateCommand,
       delivery: deliveryCommand,
       setup: setupCommand,
       orchestrate: orchestrateCommand,
@@ -517,6 +525,12 @@ async function executeMain(argv, dependencies, failure) {
       return EXIT_CODES.INVALID_INPUT;
     }
 
+    if (parsed.command === 'version') {
+      const metadata = JSON.parse(dependencies.fs.readFileSync(join(dependencies.packageRoot, 'package.json'), 'utf8'));
+      dependencies.output.log(metadata.version);
+      return EXIT_CODES.SUCCESS;
+    }
+
     const explicitV2Init = parsed.command === 'init' && Object.keys(parsed.flags).length > 0;
     const handler = parsed.command === 'init' && !explicitV2Init
       ? legacyInit
@@ -585,7 +599,7 @@ export async function main(argv, overrides = {}) {
   const subcommand = ['task','feature','work','delivery','models','integrations','protocols','repositories','goals','orchestrate','worktrees'].includes(command) ? argv[1] : null;
   const json = Array.isArray(argv) && argv.includes('--json');
   async function report(exitCode) {
-    if (json || exitCode === EXIT_CODES.SUCCESS) return;
+    if (json || exitCode === EXIT_CODES.SUCCESS || (command === 'update' && argv.includes('--check'))) return;
     const code = Object.entries(EXIT_CODES).find(([,value])=>value===exitCode)?.[0] ?? 'INTERNAL_ERROR';
     let saved = null;
     try { saved = await dependencies.reportFailure?.({command,subcommand,code,exitCode,causeCode:failure.causeCode}); } catch { /* diagnostics must preserve the original failure */ }

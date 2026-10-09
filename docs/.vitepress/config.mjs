@@ -20,6 +20,7 @@ export default defineConfig({
         { text: 'Overview', link: '/' },
         { text: 'Get started', link: '/getting-started' },
         { text: 'Installation', link: '/installation' },
+        { text: 'Updating Rivet', link: '/updating' },
         { text: 'Compatibility', link: '/compatibility' },
       ] },
       { text: 'Use Rivet', items: [

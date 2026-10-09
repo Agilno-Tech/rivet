@@ -74,5 +74,5 @@ test('current alpha packages follow latest without changing their prerelease ide
   fetch:async()=>new Response(JSON.stringify({'dist-tags':{latest:'0.1.0-alpha.2',alpha:'0.1.0-alpha.1'}})),
   output:{log:line=>lines.push(line)}});
  assert.match(lines.join('\n'),/0\.1\.0-alpha\.1 → 0\.1\.0-alpha\.2/);
- assert.match(lines.join('\n'),/@agilno-tech\/rivet@latest/);
+ assert.match(lines.join('\n'), /Run: rivet update/);
 });

@@ -2,33 +2,16 @@
 
 Rivet is published on [npm](https://www.npmjs.com/package/@agilno-tech/rivet) as `@agilno-tech/rivet`. Install without a version to select npm’s `latest` tag. Rivet is still alpha software; the tag does not mean a stable release. The first published version is `0.1.0-alpha.0`.
 
-## Update the alpha package
+## Update Rivet
 
-Repeat the installation command with the package manager you originally used:
-
-::: code-group
-
-```sh [Yarn Classic]
-yarn global add @agilno-tech/rivet
-```
-
-```sh [npm]
-npm install --global @agilno-tech/rivet
-```
-
-```sh [pnpm]
-pnpm add --global @agilno-tech/rivet
-```
-
-:::
-
-Then check the installation:
+Inside your project, run:
 
 ```sh
-rivet --help
-rivet doctor
-rivet task status
+rivet update
+rivet --version
 ```
+
+See [Updating Rivet](./updating.md) for the one-time update from older versions, project runtime pins, scope options and manual package-manager commands.
 
 The default `latest` tag moves forward when a new release is published. Append an exact published version, such as `@0.1.0-alpha.0`, when your team needs the same version. The legacy `alpha` tag is not updated by automation; reinstall without `@alpha` to receive current releases. Project-only, verified-tarball and advanced source installations have separate [installation instructions](./installation.md).
 

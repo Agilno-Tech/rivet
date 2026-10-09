@@ -620,7 +620,7 @@ export async function checkForUpdate(dependencies) {
     const current = JSON.parse(fs.readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
     if (latest && latest !== current) {
       output.log(`\nUpdate available: ${current} → ${latest}`);
-      output.log(`Run: npm install -g @agilno-tech/rivet@${channel}`);
+      output.log(channel === 'latest' ? 'Run: rivet update' : `Run: npm install -g @agilno-tech/rivet@${channel}`);
     }
   } catch {
     // The install/uninstall operation must not depend on registry availability.
