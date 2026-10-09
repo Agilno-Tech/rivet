@@ -17,6 +17,12 @@ A GitHub prerelease may appear before npm publication finishes. Confirm the publ
 
 Release Please is bootstrapped at commit `13f109e9d99e0591a7e0c255df50fd9ba1670cea`, the source of the manually published first alpha. The release manifest records that baseline. Changing release channels or moving to a stable version requires a reviewed configuration change.
 
+## Release notes
+
+Review the generated changelog in each release PR. Add a short user-facing summary of changes and fixes, plus any required upgrade steps or compatibility changes. Keep the GitHub release notes aligned with the reviewed changelog; distinguish released functionality from planned work.
+
+The README and Pages update guide link to [GitHub Releases](https://github.com/Agilno-Tech/rivet/releases). npm renders the published README, so this link makes release notes available from the package page without duplicating the full changelog there. README changes reach npm with the next package publication.
+
 ## One-time repository and npm setup
 
 - In GitHub Actions settings, allow Actions to create pull requests. Workflow permissions remain read-only by default; individual jobs request their required permissions.

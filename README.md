@@ -47,6 +47,7 @@ Node.js runs Rivet itself. Your application can use Python/Django, Node.js or an
 
 ## Documentation
 
+- [Release notes](https://github.com/Agilno-Tech/rivet/releases)
 - [Quickstart](https://agilno-tech.github.io/rivet/getting-started.html)
 - [Configuration and commands](https://agilno-tech.github.io/rivet/runtime-reference.html)
 - [Integrations](https://agilno-tech.github.io/rivet/integrations.html)

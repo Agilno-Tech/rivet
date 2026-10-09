@@ -1,5 +1,7 @@
 # Updating Rivet
 
+Read the [release notes](https://github.com/Agilno-Tech/rivet/releases) for changes, fixes and any required upgrade steps before updating.
+
 From a configured project, run:
 
 ```sh

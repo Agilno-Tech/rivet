@@ -17,7 +17,7 @@ The default `latest` tag moves forward when a new release is published. Append a
 
 Review active tasks and keep your project configuration, private task state and worktrees before updating. Do not delete unfinished work to resolve an upgrade problem. Older versions may not understand newer task state; downgrades are not guaranteed.
 
-See [recent changes](https://github.com/Agilno-Tech/rivet/commits/main/) and [compatibility](./compatibility.md). Maintainers preparing a package should use the [release procedure](https://github.com/Agilno-Tech/rivet/blob/main/docs/maintainers/release.md).
+See [release notes](https://github.com/Agilno-Tech/rivet/releases) and [compatibility](./compatibility.md). Maintainers preparing a package should use the [release procedure](https://github.com/Agilno-Tech/rivet/blob/main/docs/maintainers/release.md).
 
 ## License
 
