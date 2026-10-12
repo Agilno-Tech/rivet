@@ -1,3 +1,4 @@
+import { validateExecutionPolicy } from '../models/execution-policy.js';
 import { validateBranchPattern } from '../feature/branch-naming.js';
 import { parseRepositoryRemote } from '../repositories/identity.js';
 import { readFileSync } from 'node:fs';
@@ -189,6 +190,10 @@ function assertSafeRelativePath(value, path) {
 
 function validateConfigSemantics(config) {
   scanForSecrets(config);
+  if (config.orchestration.executionPolicy !== undefined) {
+    try { validateExecutionPolicy(config.orchestration.executionPolicy); }
+    catch { fail('/orchestration/executionPolicy', 'execution-policy'); }
+  }
 
   const providerIds = uniqueBy(config.providers.providers, 'id', '/providers/providers');
   if (config.project.deployment && !providerIds.has(config.project.deployment.providerId))

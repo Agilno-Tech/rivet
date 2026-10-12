@@ -249,3 +249,18 @@ allowlist:
 The example is nested under `contentScan`. Do not use an exception to accept a real credential. Resource-limit failures and unreadable scan inputs require investigation rather than being treated as a pass.
 
 Projects can also opt into the known `type-suppression` rule for explicit file paths through `shortcutRules`, with a reason and optional `required: true`. This reports `@ts-ignore` and `@ts-nocheck`; it does not establish whether every shortcut or placeholder is acceptable. Use existing configured command gates for broader tools such as Gitleaks, language-specific linters and project-specific checks. Rivet does not install or launch extra scanners implicitly.
+
+## Execution policy contract
+
+The optional `orchestration.executionPolicy` has `version: 1`, `mode: managed`, and these required fields:
+
+| Field | Contract |
+| --- | --- |
+| `limits` | Positive integers up to 64 for `activeTasks`, `agentExecutions`, `workersPerTask`, `heavyVerification`, and `dependencyInstalls` |
+| `profiles` | 1–32 named profiles with `harness` (`claude` or `codex`), a safe model identifier, explicit `effort`, and requested `capabilities` |
+| `routing` | Exactly one profile ID for each of `bounded-fix`, `implementation`, `independent-review`, and `coordination` |
+| `sessions` | `maxReplacements` (0–32), `maxActions` (1–10000), `maxMinutes` (1–1440), and `contextThresholdPercent` (1–99) |
+
+The schema accepts effort labels `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`. Syntactic acceptance is separate from model/client support. No model is selected by default. Explicit routes must reference existing profiles, and advisory routes cannot request edit or command capabilities.
+
+`resolveExecutionSelection` returns an immutable, versioned selection with policy/profile identity and a recorded reason; `executionPolicyIdentity` pins the complete policy in a proposal. Validation rechecks these identities against current configuration when loading a governed plan. The policy does not widen role budgets, create a second scheduler, or enable dispatch by itself. See [Models](./models.md#managed-execution-selection-contract) for legacy and host behavior.

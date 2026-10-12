@@ -1,3 +1,4 @@
+import { executionPolicyIdentity, matchesExecutionSelection } from '../models/execution-policy.js';
 import { selectBranchNaming } from './branch-naming.js';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -120,6 +121,8 @@ function validatePlanSemantics(plan, { config, workRequest, baselineCommit, clie
     try { expected = selectBranchNaming(config.project.repository,workRequest,plan.branchNaming.workType); } catch { fail(); }
     if (canonical(expected) !== canonical(plan.branchNaming)) fail();
   }
+  const executionPolicy = config.orchestration.executionPolicy;
+  if (canonical(plan.executionPolicy) !== canonical(executionPolicyIdentity(executionPolicy))) fail();
   const configuredProviders = new Set(config.providers.providers.map(provider => provider.id));
   if (plan.providerRefs.some(provider => !configuredProviders.has(provider))) fail();
   const roles = new Map(config.orchestration.roles.map(role => [role.id, role]));
@@ -145,6 +148,11 @@ function validatePlanSemantics(plan, { config, workRequest, baselineCommit, clie
     const role = roles.get(node.roleId);
     if (!role || role.kind !== node.role || node.dependencies.includes(node.id)) fail();
     if (!matchesWorkerExecution(role, node.execution)) fail();
+    if (executionPolicy !== undefined && ['worker', 'manager'].includes(node.role)) {
+      const classification = node.executionSelection?.classification;
+      if (node.role === 'worker' ? !['bounded-fix', 'implementation'].includes(classification) : classification !== 'coordination') fail();
+      if (!matchesExecutionSelection(executionPolicy, classification, node.executionSelection, { hostOnly: client === 'host' })) fail();
+    } else if (node.executionSelection !== undefined) fail();
     if (node !== roots[0] && (node.dependencies.length === 0 || !node.parentId)) fail();
     if (node.parentId && !nodeMap.has(node.parentId)) fail();
     if (node.dependencies.some(id => !nodeMap.has(id))) fail();

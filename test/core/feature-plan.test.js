@@ -385,3 +385,59 @@ test('missing ticket placeholder reports an actionable planning error', async()=
   const workRequest=createWorkRequest({...input,source:{kind:'inline',ref:'inline'}});
   assert.throws(()=>createHostFeaturePlan({config,workRequest,baselineCommit:BASELINE,decomposition:decomposition()}),/branchPattern.*ticket/i);
 });
+
+test('managed plans pin routing and reject policy drift at activation/resume', async () => {
+  const { managedPolicy } = await import('../fixtures/execution-policy.js');
+  const config = structuredClone(await configuration());
+  config.orchestration.executionPolicy = managedPolicy();
+  const workRequest = request();
+  const proposed = decomposition();
+  proposed.workItems[0].executionClass = 'bounded-fix';
+  const plan = createHostFeaturePlan({ config, workRequest, baselineCommit: BASELINE, decomposition: proposed });
+  assert.match(plan.executionPolicy.policyDigest, /^[a-f0-9]{64}$/);
+  assert.equal(plan.nodes[2].executionSelection.classification, 'bounded-fix');
+  assert.equal(plan.nodes[2].executionSelection.recommendationOnly, true);
+  assert.equal(plan.nodes[1].executionSelection.classification, 'coordination');
+  assert.equal(plan.nodes[2].execution, undefined);
+  for (const mutate of [
+    c => { c.orchestration.executionPolicy.profiles.implementation.model = 'other-model'; },
+    c => { c.orchestration.executionPolicy.limits.agentExecutions = 8; },
+    c => { delete c.orchestration.executionPolicy; },
+  ]) {
+    const changed = structuredClone(config); mutate(changed);
+    assert.throws(() => createFeaturePlan({ proposal: plan, config: changed, workRequest, baselineCommit: BASELINE, client: 'host' }), FeaturePlanError);
+  }
+  const modified = structuredClone(plan);
+  modified.nodes[2].budget.tokenLimit = config.orchestration.roles.find(r => r.kind === 'worker').budget.tokenLimit + 1;
+  assert.throws(() => createFeaturePlan({ proposal: modified, config, workRequest, baselineCommit: BASELINE, client: 'host' }), FeaturePlanError);
+});
+
+test('spawned managed proposals expose approved model selection while preserving legacy client profile', async () => {
+  const { managedPolicy } = await import('../fixtures/execution-policy.js');
+  const config = structuredClone(await configuration());
+  config.orchestration.executionPolicy = managedPolicy();
+  let received;
+  const planner = createFeaturePlanner({ planningClient: { async propose(contract) { received = contract; return decomposition(); } } });
+  const plan = await planner.propose({ config, workRequest: request(), baselineCommit: BASELINE, client: 'claude' });
+  assert.equal(received.policy.executionPolicy.version, 1);
+  assert.equal(plan.clientProfile.id, 'claude-bounded-sonnet-v1');
+  const worker = plan.nodes.find(node => node.role === 'worker');
+  assert.equal(worker.executionSelection.harness, 'codex');
+  assert.equal(worker.executionSelection.classification, 'implementation');
+  assert.equal(worker.executionSelection.recommendationOnly, false);
+  const proposal = structuredClone(plan);
+  delete proposal.nodes.find(node => node.role === 'worker').executionSelection;
+  assert.throws(() => createFeaturePlan({ proposal, config, workRequest: request(), baselineCommit: BASELINE, client: 'claude' }), FeaturePlanError);
+});
+
+test('published legacy client profile schema rejects managed execution selection fields', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { default: Ajv } = await import('ajv');
+  const { CLAUDE_FEATURE_PROFILE } = await import('../../src/feature/client-profile.js');
+  const schema = JSON.parse(await readFile(new URL('../../schemas/feature-plan.schema.json', import.meta.url), 'utf8'));
+  const validate = new Ajv({ strict: true }).compile(schema.$defs.clientProfile);
+  const { resolveExecutionSelection } = await import('../../src/models/execution-policy.js');
+  const { managedPolicy } = await import('../fixtures/execution-policy.js');
+  assert.equal(validate(CLAUDE_FEATURE_PROFILE), true);
+  assert.equal(validate({ ...CLAUDE_FEATURE_PROFILE, executionSelection: resolveExecutionSelection(managedPolicy(), 'implementation') }), false);
+});

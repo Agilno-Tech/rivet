@@ -153,3 +153,13 @@ This setting selects a CLI adapter. It does not select arbitrary per-node model 
 `src/models/registry.js` exports `createModelRegistry()`. Register an adapter descriptor with a stable ID, protocol, kind, capabilities, and implementation status, then resolve profiles against it. Registration rejects duplicate IDs and unsupported profile fields. Descriptors are immutable copies.
 
 Registering metadata does not install an executor. Custom executors, broader role routing and live qualification require additional implementation and testing.
+
+## Managed execution selection contract
+
+An optional version 1 `executionPolicy` in `.rivet/orchestration.yaml` defines named harness profiles and four explicit routes: `bounded-fix`, `implementation`, `independent-review`, and `coordination`. Profiles contain `harness`, `model`, `effort`, and `capabilities`. Coding routes require `read`, `edit`, and `commands`; review and coordination profiles permit only `read`. These are requested capabilities, subject to executor qualification, not proof of provider availability.
+
+The plan compiler records policy and profile digests alongside each worker's classification, model, effort, capabilities and selection reason. An optional work-item `executionClass` selects `bounded-fix` or `implementation`; omission means `implementation`. The manager receives the coordination recommendation. Host plans mark selections `recommendationOnly: true`; recording a recommendation does not spawn an agent. The independent-review route is available to consumers of the selection contract and does not add a review node by itself.
+
+Policy changes, including wider machine limits or changed session settings, invalidate the saved managed plan at activation or resume. Node budgets and authority remain bounded by existing roles and approval identity. There is no implicit model fallback or escalation route. Effort syntax is bounded; actual model, effort and tool support must be checked by the executor before dispatch. This contract alone does not implement invocation, sessions, machine admission or parallel workers.
+
+When `executionPolicy` is absent, legacy serial plans and the fixed Claude profile remain unchanged. The existing `enabled: false` field keeps its legacy meaning; it is not a managed-execution switch.

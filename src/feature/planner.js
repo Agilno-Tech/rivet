@@ -1,3 +1,4 @@
+import { executionPolicyIdentity, resolveExecutionSelection } from '../models/execution-policy.js';
 import { BranchNamingError, selectBranchNaming } from './branch-naming.js';
 import { AgentContractError, immutableJson } from '../clients/contract.js';
 import { validateProjectConfiguration } from '../config/validate.js';
@@ -71,6 +72,8 @@ function compileFeaturePlan({ decomposition, config, workRequest, baselineCommit
   if (client === 'host' && config.orchestration.roles.some(role => role.harness !== undefined)) fail('compiled-plan-invalid');
   const { boss, manager, worker } = roleChain(config);
   const execution = workerExecutionFor(worker);
+  const policy = config.orchestration.executionPolicy;
+  const selection = classification => policy === undefined ? {} : { executionSelection: resolveExecutionSelection(policy, classification, { hostOnly: client === 'host' }) };
   const managerScopes = intersect(manager.authorityScopes, boss.authorityScopes);
   const workerScopes = intersect(worker.authorityScopes, managerScopes);
   if (managerScopes.length === 0 || workerScopes.length === 0) fail('compiled-plan-invalid');
@@ -85,6 +88,7 @@ function compileFeaturePlan({ decomposition, config, workRequest, baselineCommit
     role: 'worker',
     roleId: worker.id,
     ...(execution === undefined ? {} : { execution }),
+    ...selection(item.executionClass ?? 'implementation'),
     objective: item.objective,
     dependencies: ['management'],
     ownedPaths: item.ownedPaths,
@@ -104,6 +108,7 @@ function compileFeaturePlan({ decomposition, config, workRequest, baselineCommit
   const clientProfile = clientProfileFor(client);
   return {
     schemaVersion: 1,
+    ...(policy === undefined ? {} : { executionPolicy: executionPolicyIdentity(policy) }),
     id: slug(workRequest.title),
     branchNaming: selectBranchNaming(config.project.repository,workRequest,decomposition.workType),
     baselineCommit,
@@ -120,6 +125,7 @@ function compileFeaturePlan({ decomposition, config, workRequest, baselineCommit
       },
       {
         id: 'management', parentId: 'activation', role: 'manager', roleId: manager.id,
+        ...selection('coordination'),
         objective: 'Coordinate implementation and verification.', dependencies: ['activation'], ownedPaths: [],
         authorityScopes: managerScopes, commandIds: [], budget: boundedBudget(boss, manager),
         requiredEvidenceTypes: requiredEvidence(config, manager), acceptanceCriteria: [], status: 'proposed',
@@ -172,6 +178,7 @@ function planningContract({ config, workRequest, baselineCommit, client }) {
     client,
     workRequest,
     policy: {
+      ...(config.orchestration.executionPolicy === undefined ? {} : { executionPolicy: config.orchestration.executionPolicy }),
       projectId: config.project.id,
       defaultBranch: config.project.repository.defaultBranch,
       branchPattern: config.project.repository.branchPattern,

@@ -7,6 +7,191 @@
   "required": ["schemaVersion", "maxDelegationDepth", "roles", "approvalGates", "completionProfiles"],
   "properties": {
     "schemaVersion": { "type": "integer", "const": 1 },
+    "executionPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "mode",
+        "limits",
+        "profiles",
+        "routing",
+        "sessions"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "mode": {
+          "const": "managed"
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "activeTasks",
+            "agentExecutions",
+            "workersPerTask",
+            "heavyVerification",
+            "dependencyInstalls"
+          ],
+          "properties": {
+            "activeTasks": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            },
+            "agentExecutions": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            },
+            "workersPerTask": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            },
+            "heavyVerification": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            },
+            "dependencyInstalls": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            }
+          }
+        },
+        "profiles": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 32,
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "harness",
+              "model",
+              "effort",
+              "capabilities"
+            ],
+            "properties": {
+              "harness": {
+                "enum": [
+                  "claude",
+                  "codex"
+                ]
+              },
+              "model": {
+                "type": "string",
+                "maxLength": 200,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+              },
+              "effort": {
+                "enum": [
+                  "none",
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max",
+                  "ultra"
+                ]
+              },
+              "capabilities": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 3,
+                "uniqueItems": true,
+                "items": {
+                  "enum": [
+                    "read",
+                    "edit",
+                    "commands"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "routing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "bounded-fix",
+            "implementation",
+            "independent-review",
+            "coordination"
+          ],
+          "properties": {
+            "bounded-fix": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+            },
+            "implementation": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+            },
+            "independent-review": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+            },
+            "coordination": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+            }
+          }
+        },
+        "sessions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "maxReplacements",
+            "maxActions",
+            "maxMinutes",
+            "contextThresholdPercent"
+          ],
+          "properties": {
+            "maxReplacements": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 32
+            },
+            "maxActions": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "maxMinutes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1440
+            },
+            "contextThresholdPercent": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 99
+            }
+          }
+        }
+      }
+    },
     "enabled": { "type": "boolean", "const": false, "default": false },
     "maxDelegationDepth": { "type": "integer", "minimum": 1, "maximum": 8 },
     "roles": { "type": "array", "minItems": 3, "maxItems": 128, "items": { "$ref": "#/$defs/role" } },
