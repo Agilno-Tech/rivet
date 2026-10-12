@@ -1,3 +1,5 @@
+import {readJson} from './work.js';
+import * as filesystem from 'node:fs';
 import { taskGovernanceCommand } from './task-governance.js';
 import { taskState } from '../cli/task-presentation.js';
 import { finishTask } from './task-completion.js';
@@ -173,13 +175,23 @@ function renderWorkerCheckouts(status, output) {
 
 
 export async function humanTaskCommand(parsed, dependencies) {
-  if (parsed.command !== 'task' || !['status', 'start', 'approve', 'resume', 'deps', 'recover', 'decisions', 'decide', 'approve-decision', 'review'].includes(parsed.subcommand)
+  if (parsed.command !== 'task' || !['status', 'start', 'approve', 'resume', 'deps', 'recover', 'decisions', 'decide', 'approve-decision', 'review', 'checkpoint', 'handoff'].includes(parsed.subcommand)
     || parsed.operands.length !== 0 || Object.keys(parsed.flags).some(key => !['project', 'run', 'details', 'input', 'input-json', 'phase', 'decision'].includes(key))) {
     fail('Use rivet task status|start|approve|resume|deps|recover [--project=<path>] [--run=<id>].');
   }
   const project = await resolveConfiguredProject(dependencies.cwd(), parsed.flags.project, { env: dependencies.env });
   const record = await selectedRun(project.root, parsed.flags.run, parsed.subcommand, dependencies);
   if (!record) {dependencies.output.log('Task selection cancelled. No task action was taken.');return EXIT_CODES.SUCCESS;}
+  if (['checkpoint','handoff'].includes(parsed.subcommand)) {
+    if(record.featurePlan.client!=='host')fail('Owned CLI sessions checkpoint at bounded call boundaries. A running process cannot be reset from this command; inspect task status.','REPOSITORY_CONFLICT');
+    const keys=['input','input-json'].filter(key=>parsed.flags[key]!==undefined);
+    if(keys.length!==1)fail('Session commands require exactly one --input or --input-json.');
+    let input;
+    try{input=keys[0]==='input'?readJson(project.root,parsed.flags.input,dependencies.fs??filesystem,'Session input'):JSON.parse(parsed.flags['input-json']);}catch(error){if(error instanceof CliError)throw error;fail('Session input is invalid.');}
+    if(!input||typeof input!=='object'||Array.isArray(input)||JSON.stringify(input).length>65536||Object.keys(input).some(key=>!['expectedRuntimeVersion','action','input'].includes(key)))fail('Session input is invalid.');
+    const result=await invokeFeature(dependencies.work,parsed.subcommand,{project:project.root,runId:record.runId,...input});
+    dependencies.output.log(JSON.stringify(result,null,2));return EXIT_CODES.SUCCESS;
+  }
   if (['decisions','decide','approve-decision','review'].includes(parsed.subcommand)) return taskGovernanceCommand(parsed,dependencies,project,record);
   if (['input','input-json','phase','decision'].some(key=>parsed.flags[key]!==undefined)) fail('Evidence options require a decision or review command.');
   if (parsed.subcommand === 'approve') return finishTask(project, record, dependencies);
@@ -229,6 +241,7 @@ export async function humanTaskCommand(parsed, dependencies) {
       }
       if (status.verification.failure) dependencies.output.log(`Failure: ${visible(status.verification.failure)}`);
     }
+    for(const session of status.sessions??[])dependencies.output.log(`Session: ${session.id}; generation ${session.generation}; ${session.phase}; stop ${session.stopStatus}; context ${session.telemetry?.contextUsedTokens?.value??'unknown'}${session.turnoverReason?`; turnover ${session.turnoverReason}`:''}`);
     renderWorkerCheckouts(status, dependencies.output);
     if (status.checkout) dependencies.output.log(`Integration checkout: ${visible(status.checkout.path)} (${status.checkout.status})`);
     return EXIT_CODES.SUCCESS;

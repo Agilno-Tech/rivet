@@ -55,7 +55,7 @@ const STRICT_OPTIONS = {
   work: {
     boolean: new Set(['json']),
     valued: new Set([
-      'action', 'action-json', 'decomposition', 'decomposition-json', 'result-json', 'expected-runtime-version', 'expected-version', 'project', 'result',
+      'input', 'input-json', 'action', 'action-json', 'decomposition', 'decomposition-json', 'result-json', 'expected-runtime-version', 'expected-version', 'project', 'result',
       'request', 'request-text', 'ticket', 'tracker', 'host-context-json', 'acceptance-criteria', 'run',
     ]),
   },
@@ -241,10 +241,10 @@ export function parseArgs(argv) {
   if (command === 'protocols' && !['add', 'import', 'validate', 'find', 'show', 'update', 'retire'].includes(positionals[0])) {
     throw new ArgumentError('Unsupported protocol subcommand');
   }
-  if (command === 'work' && !['propose', 'prepare', 'next', 'status', 'submit', 'verify', 'recover'].includes(positionals[0])) {
+  if (command === 'work' && !['propose', 'prepare', 'next', 'status', 'submit', 'verify', 'recover', 'checkpoint', 'handoff'].includes(positionals[0])) {
     throw new ArgumentError('Unsupported work subcommand');
   }
-  if (command === 'task' && !['status', 'start', 'approve', 'resume', 'deps', 'recover', 'decisions', 'decide', 'approve-decision', 'review'].includes(positionals[0])) {
+  if (command === 'task' && !['status', 'start', 'approve', 'resume', 'deps', 'recover', 'decisions', 'decide', 'approve-decision', 'review', 'checkpoint', 'handoff'].includes(positionals[0])) {
     throw new ArgumentError('Unsupported task subcommand');
   }
 

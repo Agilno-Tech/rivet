@@ -1,3 +1,4 @@
+import {managedPolicy} from '../fixtures/execution-policy.js';
 import {bodyDigest} from '../../src/protocols/project.js';
 import assert from 'node:assert/strict';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -39,12 +40,13 @@ async function npmExecutable() {
   return realpath(stdout.trim());
 }
 
-async function fixture(t, { now = NOW, schemaV2 = false, ownedPaths = ['app/agenda.js'], lockedDependencies = false, hostContext = false, repositoryRemote, workType } = {}) {
+async function fixture(t, { now = NOW, schemaV2 = false, ownedPaths = ['app/agenda.js'], lockedDependencies = false, hostContext = false, repositoryRemote, workType, managed = false } = {}) {
   const parent = await realpath(await mkdtemp(join(tmpdir(), 'rivet-host-execution-')));
   const root = join(parent, 'project');
   await mkdir(root);
   t.after(() => rm(parent, { recursive: true, force: true }));
   await cp(CONFIG, join(root, '.rivet'), { recursive: true });
+  if(managed) { const path=join(root,'.rivet','orchestration.yaml'); const config=YAML.parse(await readFile(path,'utf8'));config.executionPolicy=managedPolicy();if(typeof managed==='object')Object.assign(config.executionPolicy.sessions,managed);await writeFile(path,YAML.stringify(config)); }
   await writeFile(join(root, 'README.md'), '# Host execution fixture\n');
   if (lockedDependencies) {
     await writeFile(join(root, '.gitignore'), 'node_modules/\n');
@@ -1193,4 +1195,117 @@ test('host execution creates the approved bugfix branch directly', async t => {
   const worktrees = await gitClient.listWorktrees(root);
   assert.ok(worktrees.some(item=>item.branch===`fix/${approved.featurePlan.id}-${approved.runId}`));
   assert.ok(!worktrees.some(item=>item.branch===`feature/${approved.featurePlan.id}-${approved.runId}`));
+});
+
+async function managedWorker(t,options={}) {
+ const context=await fixture(t,{managed:options.policy??true});
+ const clock={now:Date.parse(NOW)};
+ const execution=createHostExecution({gitClient:context.gitClient,now:()=>new Date(clock.now).toISOString()});
+ const prepared=await execution.prepare({project:context.root,runId:context.approved.runId,expectedRunVersion:context.approved.version});
+ const next=await execution.nextAction({project:context.root,runId:context.approved.runId,expectedRuntimeVersion:prepared.runtimeVersion});
+ const worktree=JSON.parse(next.action.payload).contract.worktree.path;
+ await mkdir(join(worktree,'app'),{recursive:true});await writeFile(join(worktree,'app','agenda.js'),'export const agenda = true;\n');
+ return {...context,execution,next,worktree,clock};
+}
+test('managed host checkpoint stopped successor completion preserves dirty work and rejects late results before integration',async t=>{
+ const {root,approved,execution,next,worktree,gitClient}=await managedWorker(t);
+ assert.equal(next.action.generation,1);
+ const base={project:root,runId:approved.runId};
+ const checkpoint=await execution.checkpoint({...base,expectedRuntimeVersion:next.runtimeVersion,action:next.action,
+   input:{summary:'Agenda implemented; run remaining checks.',usage:{tokens:10,costUsd:0},nativeHandle:'native-one',actorId:'host-one',observedAtMs:Date.parse(NOW)}});
+ const fenced=await execution.handoff({...base,expectedRuntimeVersion:checkpoint.runtimeVersion,input:{operation:'fence'}});
+ await assert.rejects(()=>execution.submitResult({...base,expectedRuntimeVersion:next.runtimeVersion,action:next.action,result:resultFor(next.action)}));
+ const stopped=await execution.handoff({...base,expectedRuntimeVersion:fenced.runtimeVersion,input:{operation:'stop',receipt:{sessionId:next.action.sessionId,generation:1,nativeHandle:'native-one',actorId:'host-one',observedAtMs:Date.parse(NOW),status:'stopped',source:'host-observation',assurance:'host-reported'}}});
+ const transferred=await execution.handoff({...base,expectedRuntimeVersion:stopped.runtimeVersion,input:{operation:'transfer'}});
+ const successor=await execution.nextAction({...base,expectedRuntimeVersion:transferred.runtimeVersion});
+ assert.equal(successor.action.generation,2);assert.equal(successor.action.attempt,1);
+ assert.equal(JSON.parse(successor.action.payload).contract.worktree.path,worktree);
+ assert.match(JSON.parse(successor.action.payload).contract.session.checkpoint,/Agenda implemented/);
+ const result=await execution.submitResult({...base,expectedRuntimeVersion:successor.runtimeVersion,action:successor.action,result:resultFor(successor.action)});
+ assert.equal(result.status,'accepted');
+ const state=await execution.status(base);assert.equal(state.sessions[0].generation,2);assert.equal(state.runtime.usage.tokens,20);
+ assert.equal((await gitClient.inspectRepository(worktree)).dirty,false);
+});
+test('managed host unknown stop and changed dirty bytes block successor without resetting cumulative budgets',async t=>{
+ const {root,approved,execution,next,worktree}=await managedWorker(t);const base={project:root,runId:approved.runId};
+ let state=await execution.checkpoint({...base,expectedRuntimeVersion:next.runtimeVersion,action:next.action,input:{summary:'Pending checks.',usage:{tokens:10,costUsd:0},nativeHandle:'native-one',actorId:'host-one',observedAtMs:Date.parse(NOW)}});
+ state=await execution.handoff({...base,expectedRuntimeVersion:state.runtimeVersion,input:{operation:'fence'}});
+ state=await execution.handoff({...base,expectedRuntimeVersion:state.runtimeVersion,input:{operation:'stop',receipt:{sessionId:next.action.sessionId,generation:1,nativeHandle:'native-one',actorId:'host-one',observedAtMs:Date.parse(NOW),status:'unknown',source:'host-observation',assurance:'host-reported'}}});
+ await assert.rejects(()=>execution.handoff({...base,expectedRuntimeVersion:state.runtimeVersion,input:{operation:'transfer'}}));
+ state=await execution.handoff({...base,expectedRuntimeVersion:state.runtimeVersion,input:{operation:'stop',receipt:{sessionId:next.action.sessionId,generation:1,nativeHandle:'native-one',actorId:'host-one',observedAtMs:Date.parse(NOW),status:'stopped',source:'host-observation',assurance:'host-reported'}}});
+ await writeFile(join(worktree,'app','agenda.js'),'changed after checkpoint');
+ await assert.rejects(()=>execution.handoff({...base,expectedRuntimeVersion:state.runtimeVersion,input:{operation:'transfer'}}));
+ assert.equal((await execution.status(base)).sessions[0].generation,1);
+});
+
+test('host handoff cap retains charged usage and does not erase reported wall time',async t=>{
+ const {root,approved,execution,next,clock}=await managedWorker(t,{policy:{maxReplacements:0}});const base={project:root,runId:approved.runId};
+ let state=await execution.checkpoint({...base,expectedRuntimeVersion:next.runtimeVersion,action:next.action,input:{summary:'Remaining checks.',usage:{tokens:10,costUsd:0,timeMinutes:0},nativeHandle:'native-one',actorId:'host-one',observedAtMs:Date.parse(NOW)}});
+ state=await execution.handoff({...base,expectedRuntimeVersion:state.runtimeVersion,input:{operation:'fence'}});
+ clock.now+=120000;
+ state=await execution.handoff({...base,expectedRuntimeVersion:state.runtimeVersion,input:{operation:'stop',receipt:{sessionId:next.action.sessionId,generation:1,nativeHandle:'native-one',actorId:'host-one',observedAtMs:clock.now,status:'stopped',source:'host-observation',assurance:'host-reported'}}});
+ await assert.rejects(()=>execution.handoff({...base,expectedRuntimeVersion:state.runtimeVersion,input:{operation:'transfer'}}),error=>error.code==='ERR_SESSION_REPLACEMENT_CAP');
+ const status=await execution.status(base);assert.equal(status.runtime.usage.tokens,10);assert.equal(status.runtime.usage.timeMinutes,2);assert.equal(status.runtime.usage.retries,0);
+});
+test('host handoff crash boundaries recover exact recorded phase or block without overlapping generation',async t=>{
+ const {root,approved,execution,next,worktree,gitClient}=await managedWorker(t);const base={project:root,runId:approved.runId};
+ const input={summary:'Remaining checks.',usage:{tokens:10,costUsd:0},nativeHandle:'native-one',actorId:'host-one',observedAtMs:Date.parse(NOW)};
+ await writeFile(join(worktree,'outside-scope'),'preserve');
+ await assert.rejects(()=>execution.checkpoint({...base,expectedRuntimeVersion:next.runtimeVersion,action:next.action,input}));
+ let current=await execution.status(base);assert.equal(current.sessions[0].phase,'checkpoint-requested');
+ await rm(join(worktree,'outside-scope'));
+ const fresh=()=>createHostExecution({gitClient,now:()=>NOW});
+ let state=await fresh().checkpoint({...base,expectedRuntimeVersion:current.runtime.version,action:next.action,input});
+ state=await fresh().handoff({...base,expectedRuntimeVersion:state.runtimeVersion,input:{operation:'fence'}});
+ assert.equal((await fresh().status(base)).sessions[0].phase,'stopping');
+ state=await fresh().handoff({...base,expectedRuntimeVersion:state.runtimeVersion,input:{operation:'stop',receipt:{sessionId:next.action.sessionId,generation:1,nativeHandle:'native-one',actorId:'host-one',observedAtMs:Date.parse(NOW),status:'stopped',source:'host-observation',assurance:'host-reported'}}});
+ assert.equal((await fresh().status(base)).sessions[0].phase,'stopped');
+ const predecessorVersion=state.runtimeVersion;
+ state=await fresh().handoff({...base,expectedRuntimeVersion:state.runtimeVersion,input:{operation:'transfer'}});
+ await assert.rejects(()=>fresh().handoff({...base,expectedRuntimeVersion:predecessorVersion,input:{operation:'transfer'}}));
+ const successor=await fresh().nextAction({...base,expectedRuntimeVersion:state.runtimeVersion});assert.equal(successor.action.generation,2);
+ assert.equal((await fresh().status(base)).runtime.usage.tokens,10);
+});
+
+test('host observation exposes action fallback without promoting host-reported context into native measurement',async t=>{
+ const {root,approved,execution,next}=await managedWorker(t,{policy:{maxActions:2}});const base={project:root,runId:approved.runId};
+ const {sessionTelemetry}=await import('../../src/clients/session-capabilities.js');
+ const telemetry=structuredClone(sessionTelemetry('host'));telemetry.contextUsedTokens={value:99,source:'host-context',assurance:'host-reported'};telemetry.contextWindowTokens={value:100,source:'host-context',assurance:'host-reported'};
+ const receipt={sessionId:next.action.sessionId,generation:1,nativeHandle:'native-one',actorId:'host-one',observedAtMs:Date.parse(NOW),source:'host-observation',assurance:'host-reported',actions:1,telemetry};
+ let state=await execution.handoff({...base,expectedRuntimeVersion:next.runtimeVersion,input:{operation:'observe',receipt}});
+ assert.equal(state.turnoverReason,null);
+ const forged=structuredClone(receipt);forged.telemetry.contextUsedTokens.assurance='native-measured';
+ await assert.rejects(()=>execution.handoff({...base,expectedRuntimeVersion:state.runtimeVersion,input:{operation:'observe',receipt:forged}}));
+ state=await execution.handoff({...base,expectedRuntimeVersion:state.runtimeVersion,input:{operation:'observe',receipt:{...receipt,actions:2}}});
+ assert.equal(state.status,'checkpoint-required');assert.equal(state.turnoverReason,'observed-action-boundary');
+ const observed=await execution.nextAction({...base,expectedRuntimeVersion:state.runtimeVersion});assert.equal(observed.status,'checkpoint-required');assert.equal(observed.action.generation,1);
+});
+
+test('public task checkpoint and handoff reach the managed host service',async t=>{
+ const {root,approved,execution,next}=await managedWorker(t);const messages=[];
+ const output={log:value=>messages.push(value),error:value=>messages.push(value),json:value=>messages.push(value)};
+ const input={expectedRuntimeVersion:next.runtimeVersion,action:next.action,input:{summary:'Pending checks.',usage:{tokens:10,costUsd:0},nativeHandle:'native-one',actorId:'host-one',observedAtMs:Date.parse(NOW)}};
+ assert.equal(await main(['task','checkpoint',`--run=${approved.runId}`,`--input-json=${JSON.stringify(input)}`],{cwd:()=>root,work:execution,output}),0,messages.join('\n'));
+ const checkpoint=JSON.parse(messages.at(-1));assert.equal(checkpoint.status,'checkpoint-ready');
+ assert.equal(await main(['task','handoff',`--run=${approved.runId}`,`--input-json=${JSON.stringify({expectedRuntimeVersion:checkpoint.runtimeVersion,input:{operation:'fence'}})}`],{cwd:()=>root,work:execution,output}),0,messages.join('\n'));
+ assert.equal(JSON.parse(messages.at(-1)).status,'stopping');
+});
+
+test('host handoff rejects checkpoint and stop observations older than latest activity or fence',async t=>{
+ const {root,approved,execution,next,clock}=await managedWorker(t);const base={project:root,runId:approved.runId};
+ const {sessionTelemetry}=await import('../../src/clients/session-capabilities.js');
+ clock.now+=1000;
+ const receipt={sessionId:next.action.sessionId,generation:1,nativeHandle:'native-one',actorId:'host-one',observedAtMs:clock.now,source:'host-observation',assurance:'host-reported',actions:1,telemetry:sessionTelemetry('host')};
+ let state=await execution.handoff({...base,expectedRuntimeVersion:next.runtimeVersion,input:{operation:'observe',receipt}});
+ const checkpoint={summary:'Remaining checks.',usage:{tokens:10,costUsd:0},nativeHandle:'native-one',actorId:'host-one',observedAtMs:Date.parse(NOW)};
+ await assert.rejects(()=>execution.checkpoint({...base,expectedRuntimeVersion:state.runtimeVersion,action:next.action,input:checkpoint}));
+ state={runtimeVersion:(await execution.status(base)).runtime.version};
+ clock.now+=1000;
+ state=await execution.checkpoint({...base,expectedRuntimeVersion:state.runtimeVersion,action:next.action,input:{...checkpoint,observedAtMs:clock.now}});
+ const checkpointTime=clock.now;clock.now+=1000;
+ state=await execution.handoff({...base,expectedRuntimeVersion:state.runtimeVersion,input:{operation:'fence'}});
+ const {actions,telemetry,...proof}=receipt;
+ for(const observedAtMs of [receipt.observedAtMs,checkpointTime])await assert.rejects(()=>execution.handoff({...base,expectedRuntimeVersion:state.runtimeVersion,input:{operation:'stop',receipt:{...proof,observedAtMs,status:'stopped'}}}));
+ state=await execution.handoff({...base,expectedRuntimeVersion:state.runtimeVersion,input:{operation:'stop',receipt:{...proof,observedAtMs:clock.now,status:'stopped'}}});
+ assert.equal(state.status,'stopped');
 });

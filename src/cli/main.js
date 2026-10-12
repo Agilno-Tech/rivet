@@ -80,6 +80,8 @@ Everyday commands:
   rivet task approve              Review and finish verified work
   rivet task deps                 Approve configured dependency setup
   rivet task recover              Inspect abandoned operation locks
+  rivet task checkpoint           Preserve a managed host checkpoint
+  rivet task handoff              Fence and transfer a managed session
   rivet support --save            Save diagnostics for a bug report
 
 Run inside your project; most commands accept --project=<path> when elsewhere.
@@ -119,6 +121,8 @@ Usage:
   rivet setup [--project=<path>|--global] [--remote=<name>] [--target=claude|codex|both] [--checks-json='<json>'] [--dependencies-json='<json>'] [--write] [--json]
                                   Project checks are exact argv arrays; unknown projects prompt with --write
   rivet run "task" [--harness=claude|codex] [--project=<path>] [--details]
+  rivet task checkpoint --input=<session.json> [--project=<path>] [--run=<id>]
+  rivet task handoff --input=<session.json> [--project=<path>] [--run=<id>]
   rivet task recover [--project=<path>] [--run=<id>]
   rivet task status [--project=<path>] [--run=<id>]
   rivet task start [--project=<path>] [--run=<id>]
@@ -141,6 +145,8 @@ Usage:
   rivet work next <run-id> --project=<path> --expected-runtime-version=<n> [--json]
   rivet work submit <run-id> --project=<path> --expected-runtime-version=<n> (--action=<file>|--action-json=<json>) (--result=<file>|--result-json=<json>) [--json]
   rivet work verify <run-id> --project=<path> --expected-version=<n> --expected-runtime-version=<n> [--json]
+  rivet work checkpoint <run-id> --project=<path> --expected-runtime-version=<n> --action=<action.json> --input=<checkpoint.json> [--json]
+  rivet work handoff <run-id> --project=<path> --expected-runtime-version=<n> --input=<handoff.json> [--json]
   rivet work recover <run-id> --project=<path> [--json]
   rivet work status <run-id> --project=<path> [--json]
   rivet install --project-runtime [--project=<path>] [--target=both|claude|codex] [--json] Pin a private project runtime and entry skills

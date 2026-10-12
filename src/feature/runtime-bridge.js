@@ -1,3 +1,4 @@
+import {captureCheckpoint,verifyCheckpoint} from './checkpoints.js';
 import { renderBranchName } from './branch-naming.js';
 import { requireGovernance } from './governance.js';
 import {assertSelectedProtocolRefs, selectedProtocolStatus} from '../protocols/project.js';
@@ -174,6 +175,7 @@ export function createFeatureRuntimeState(input) {
     terminal: null,
     graph,
     events: [],
+    ...(value.config.orchestration.executionPolicy ? {sessionPolicy:value.config.orchestration.executionPolicy.sessions,sessions:{}} : {}),
     attempts: {},
     launchIntents: {},
     results: {},
@@ -383,6 +385,7 @@ async function recoverBlockedWorker(input) {
     parent, run, nowMs, recoveryWorktrees,
   } = input;
   if (state.terminal !== 'blocked' || state.graph.status !== 'blocked') fail();
+  if(Object.values(state.sessions??{}).some(session=>session.phase==='blocked'&&session.stopReceipt?.status!=='stopped')) fail();
   const candidates = state.graph.nodes.filter(node => node.owner.role === 'worker'
     && !node.approvalGate && node.status === 'blocked');
   if (candidates.length !== 1) fail();
@@ -436,15 +439,16 @@ export function createFeatureLaunchInput(node, intent, planNode, run) {
     : Math.min(approvedCost, clientProfile.execution.maxCostUsd);
   return {
     nodeId: node.id,
+    ...(intent.session ? {session: {id:intent.session.id,generation:intent.session.generation,maxActions:intent.session.maxActions,maxMinutes:intent.session.maxMinutes,checkpoint:intent.session.checkpoint??null}} : {}),
     parentId: node.parentId ?? null,
-    objective: `${planNode.objective}\n\nExecution protocol: implement the objective only within the sealed owned paths. The trusted host will validate scope and create the local commit after a successful result, so do not block or return retry merely because you cannot create a Git commit yourself. Return status success only after the implementation and required checks are complete, with exactly the declared evidence references.`,
+    objective: `${planNode.objective}${intent.session ? `\nManaged session: stop at a safe boundary within ${intent.session.maxMinutes} minutes and ${intent.session.maxActions} observed Rivet actions. Return status checkpoint with completed work, pending work, evidence and next action when continuation is needed; only success means complete. No provider tool count is measured.` : ''}\n\nExecution protocol: implement the objective only within the sealed owned paths. The trusted host will validate scope and create the local commit after a successful result, so do not block or return retry merely because you cannot create a Git commit yourself. Return status success only after the implementation and required checks are complete, with exactly the declared evidence references.`,
     ownedPaths: planNode.ownedPaths,
     authority: { actions: planNode.authorityScopes, providers: run.featurePlan.providerRefs },
     commands: planNode.commandIds,
     evidence: node.evidenceRefs,
     budget: {
       maxTokens: intent.allocation.tokenLimit,
-      maxRuntimeMs: intent.allocation.timeMinutes * 60_000,
+      maxRuntimeMs: Math.min(intent.allocation.timeMinutes, intent.session?.maxMinutes ?? intent.allocation.timeMinutes) * 60_000,
       maxCostUsd,
     },
     worktree: intent.worktree,
@@ -604,7 +608,10 @@ export function createFeatureExecutor(input) {
       },
     });
     const runtime = createOrchestrator({
+      ...(config.orchestration.executionPolicy ? {sessionPolicy:config.orchestration.executionPolicy.sessions} : {}),
       client,
+      checkpointFor:(node,intent,session,result)=>captureCheckpoint({gitClient:configured.gitClient,run,node,intent,session,summary:result.output.summary,usage:result.usage,nowMs:nowMs()}),
+      verifyCheckpoint:checkpoint=>verifyCheckpoint(configured.gitClient,checkpoint,run,nowMs()),
       now: nowMs,
       async prepareWorktree(node, intent) {
         try {

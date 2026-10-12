@@ -313,7 +313,7 @@ for (const managed of [false,true]) test(`executes all Workers sequentially with
       assert.equal(JSON.stringify(clientProfile), JSON.stringify(featurePlan.clientProfile));
       return Object.freeze({
         provider: kind,
-        async launch(contract) {
+        async launch(contract,launchOptions) {
           assert.equal(await readFile(join(contract.worktree.path, 'node_modules/installed'), 'utf8'), 'ready');
           launches.push({
             nodeId: contract.nodeId,
@@ -326,6 +326,7 @@ for (const managed of [false,true]) test(`executes all Workers sequentially with
             await mkdir(dirname(target), { recursive: true });
             await writeFile(target, `${contract.nodeId}\n`);
           }
+          if(managed){const receipt={version:1,executionId:`execution-${contract.nodeId}`,processId:111,processGroupId:111,ownerProcessId:process.pid,processBirth:null,observedAtMs:Date.parse(NOW),source:'owned-process',assurance:'observed',status:'started'};await launchOptions.onExecution(receipt);await launchOptions.onExecution({...receipt,status:'stopped'});}
           return {
             version: 1, status: 'success',
             output: { summary: `Completed ${contract.nodeId}.`, evidence: [...contract.evidence] },
@@ -359,6 +360,124 @@ for (const managed of [false,true]) test(`executes all Workers sequentially with
   assert.equal(launches.length, 2);
   if(managed)assert.deepEqual(launches.map(item=>[item.selection.model,item.selection.effort]),[['sonnet','low'],['opus','high']]);
   assert.deepEqual(launches.map(launch => launch.maxCostUsd), [2, 2]);
+  const integrationEntry = (await gitClient.listWorktrees(root)).find(item => item.branch === 'feature/smart-agenda-builder-smart-agenda-live-run');
+  assert.ok(integrationEntry);
+  assert.notEqual(launches[0].branchBase, (await gitClient.inspectRepository(integrationEntry.path)).headSha);
+  const integrationLog = (await execFile('git', [
+    '-C', integrationEntry.path, 'log', '-2', '--format=%s',
+  ])).stdout;
+  assert.match(integrationLog, /rivet: complete implement-ics-export/);
+  assert.equal((await gitClient.inspectRepository(root)).branch, 'main');
+  assert.equal((await gitClient.inspectRepository(root)).headSha, baselineCommit);
+  assert.match(result.runtimeRefs[0], /^runtime:/);
+  assert.ok(result.evidenceRefs.some(ref => ref.startsWith('commit:')));
+});
+
+test('managed one-shot checkpoint successor preserves dirty checkout and cumulative budgets', async t => {
+  const managed=true;
+  const parentRoot = await realpath(await mkdtemp(join(tmpdir(), 'rivet-feature-executor-')));
+  const root = join(parentRoot, 'project');
+  await mkdir(root);
+  t.after(() => rm(parentRoot, { recursive: true, force: true }));
+  await cp(new URL('../fixtures/config/valid/.rivet/', import.meta.url), join(root, '.rivet'), { recursive: true });
+  if(managed){
+    const {parse,stringify}=await import('yaml');
+    const {managedPolicy}=await import('../fixtures/execution-policy.js');
+    const path=join(root,'.rivet','orchestration.yaml');
+    const orchestration=parse(await readFile(path,'utf8'));
+    const policy=managedPolicy();
+    policy.profiles.implementation={harness:'claude',model:'opus',effort:'high',capabilities:['read','edit','commands']};
+    policy.profiles.fix={harness:'claude',model:'sonnet',effort:'low',capabilities:['read','edit','commands']};
+    policy.routing['bounded-fix']='fix';
+    orchestration.executionPolicy=policy;
+    await writeFile(path,stringify(orchestration));
+  }
+  await writeFile(join(root, 'README.md'), '# Runtime fixture\n');
+  await writeFile(join(root, '.gitignore'), 'node_modules/\n');
+  await writeFile(join(root, 'package.json'), JSON.stringify({
+    scripts: { build: 'x', test: 'x', lint: 'x', typecheck: 'x', dev: 'x' },
+  }));
+  await writeFile(join(root, 'package-lock.json'), '{"lockfileVersion":3}\n');
+  await execFile('git', ['init', '--quiet', '--initial-branch=main', root]);
+  await execFile('git', ['-C', root, 'add', '.']);
+  await execFile('git', ['-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--quiet', '-m', 'fixture']);
+  const baselineCommit = (await execFile('git', ['-C', root, 'rev-parse', 'HEAD'])).stdout.trim();
+  const gitClient = await createGitClient({ gitExecutable: await gitExecutable() });
+  const config = await loadProjectConfig(root);
+  const request = workRequest();
+  const planner = createFeaturePlanner({ planningClient: { propose: async () => { const value=proposal(request); if(managed)value.workItems[0].executionClass='bounded-fix'; return value; } } });
+  const featurePlan = await planner.propose({ config, workRequest: request, baselineCommit, client: 'claude' });
+  const run = await persistedRunningRun(root, 'smart-agenda-live-run', request, featurePlan);
+  const gateExecutable = join(dirname(root), 'bounded-gate');
+  await writeFile(gateExecutable, '#!/bin/sh\nif [ "$1" = ci ]; then mkdir -p node_modules; printf ready > node_modules/installed; exit 0; fi\n[ "$RIVET_GATE_ENV" = present ]\n', { mode: 0o700 });
+  await chmod(gateExecutable, 0o700);
+  const launches = [];
+  let installsApproved = 0;
+  const executor = createFeatureExecutor({
+    gitClient,
+    environment: { RIVET_GATE_ENV: 'present', PATH: '/bin' },
+    now: () => NOW,
+    resolveCommandExecutable: async runner => {
+      assert.equal(runner, 'npm');
+      return gateExecutable;
+    },
+    clientFor(kind, clientProfile, options) {
+      assert.equal(kind, 'claude');
+      assert.equal(JSON.stringify(clientProfile), JSON.stringify(featurePlan.clientProfile));
+      return Object.freeze({
+        provider: kind,
+        async launch(contract, launchOptions) {
+          assert.equal(await readFile(join(contract.worktree.path, 'node_modules/installed'), 'utf8'), 'ready');
+          const generation=contract.session.generation;
+          const receipt={version:1,executionId:`execution-${contract.nodeId}-${generation}`,processId:111,processGroupId:111,ownerProcessId:process.pid,processBirth:null,observedAtMs:Date.parse(NOW),source:'owned-process',assurance:'observed',status:'started'};
+          await launchOptions.onExecution(receipt);
+          launches.push({
+            generation,
+            nodeId: contract.nodeId,
+            selection: options.executionSelection,
+            branchBase: (await gitClient.inspectRepository(contract.worktree.path)).headSha,
+            maxCostUsd: contract.budget.maxCostUsd,
+          });
+          for (const path of contract.ownedPaths) {
+            const target = join(contract.worktree.path, path);
+            await mkdir(dirname(target), { recursive: true });
+            await writeFile(target, `${contract.nodeId}\n`);
+          }
+          await launchOptions.onExecution({...receipt,status:'stopped'});
+          return {
+            version: 1, status: generation===1?'checkpoint':'success',
+            output: { summary: `Completed ${contract.nodeId}.`, evidence: [...contract.evidence] },
+            usage: { tokens: 10, costUsd: 0 },
+          };
+        },
+      });
+    },
+  });
+
+  const deferred = await executor({ project: root, run }, { confirmDependencyInstall: async () => false });
+  assert.equal(deferred.status, 'blocked');
+  assert.equal(launches.length, 0);
+
+  const result = await executor({ project: root, run }, {
+    confirmDependencyInstall: async plan => {
+      assert.deepEqual(plan.args, ['ci']);
+      assert.match(plan.worktreePath, /workers\//);
+      installsApproved += 1;
+      return true;
+    },
+  });
+  assert.equal(result.status, 'awaiting-final-approval', JSON.stringify({ result, launches }));
+  assert.equal(installsApproved, 2);
+  const featurePaths = await resolveFeatureRunPaths(root, run.runId);
+  const accepted = await createAcceptedIntegrationStore(await acceptedIntegrationPaths(featurePaths)).readOnly();
+  const verification = await createVerificationReportStore(await verificationReportPaths(featurePaths)).readOnly();
+  assert.equal(verification.status, 'pass');
+  assert.equal(verification.commitSha, accepted.commitSha);
+  assert.ok(verification.checks.some(check => check.status === 'passed'));
+  assert.equal(launches.length, 4);
+  assert.deepEqual(launches.map(x=>x.generation),[1,2,1,2]);
+  if(managed)assert.deepEqual(launches.map(item=>[item.selection.model,item.selection.effort]),[['sonnet','low'],['sonnet','low'],['opus','high'],['opus','high']]);
+  assert.deepEqual(launches.map(launch => launch.maxCostUsd), [2, 2, 2, 2]);
   const integrationEntry = (await gitClient.listWorktrees(root)).find(item => item.branch === 'feature/smart-agenda-builder-smart-agenda-live-run');
   assert.ok(integrationEntry);
   assert.notEqual(launches[0].branchBase, (await gitClient.inspectRepository(integrationEntry.path)).headSha);

@@ -113,7 +113,7 @@ export function createCodexClient(input) {
   const maxOutputBytes = config.maxOutputBytes;
 
   async function launch(contractInput, optionInput = {}) {
-    const options = capture(optionInput, new Set(['signal','protocolContext','onTelemetry']), []);
+    const options = capture(optionInput, new Set(['signal','protocolContext','onTelemetry','onExecution']), []);
     const signalState = stable(() => {
       const value = options.signal;
       if (value !== undefined && (!(value instanceof AbortSignal) || Object.getPrototypeOf(value) !== AbortSignal.prototype)) failAgent('template-invalid');
@@ -127,7 +127,7 @@ export function createCodexClient(input) {
       worktreeIdentity: { dev: contract.worktree.dev, ino: contract.worktree.ino },
       environment, signal: signalState.value,
       timeoutMs: Math.min(timeoutMs ?? contract.budget.maxRuntimeMs, contract.budget.maxRuntimeMs, 10 * 60_000),
-      maxOutputBytes, onTelemetry: options.onTelemetry ?? config.onTelemetry, telemetryProvider: 'codex', allowOptionArgs: true,
+      maxOutputBytes, onExecution:options.onExecution, onTelemetry: options.onTelemetry ?? config.onTelemetry, telemetryProvider: 'codex', allowOptionArgs: true,
     });
     await checkCompatibility(runner, 'codex', args, expectedVersion);
     return runner.run({ args, cwd: '.', payload: serializeLaunchContract(contract), protocolContext: options.protocolContext, signal: signalState.value });

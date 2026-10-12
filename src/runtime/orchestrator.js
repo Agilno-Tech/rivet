@@ -1,3 +1,4 @@
+import {newSession,validateSessions,requireSession,stopReceipt,sessionFailure,turnoverReason,validateSessionTelemetry,observeHostSession} from '../feature/sessions.js';
 import { createHash, randomUUID } from 'node:crypto';
 
 import { evaluateAuthority } from '../policy/authority.js';
@@ -102,7 +103,7 @@ function canonicalState(input, expectedInstanceId, retryDelaysMs = null) {
       || !safeId(intent.id) || !safeId(intent.reservationId) || !Number.isSafeInteger(intent.attempt) || intent.attempt < 1 || intent.attempt > 10_000
       || !Number.isSafeInteger(intent.eventSequence) || intent.eventSequence < 0 || intent.eventSequence > 10_000
       || !INTENT_STATUSES.has(intent.status)) fail('invalid-runtime-input');
-    const allowedIntentKeys = new Set([...INTENT_KEYS, ...INTENT_STATUS_KEYS[intent.status]]);
+    const allowedIntentKeys = new Set([...INTENT_KEYS, ...INTENT_STATUS_KEYS[intent.status], 'session']);
     const intentKeys = Reflect.ownKeys(intent);
     if (intentKeys.some(key => typeof key !== 'string' || !allowedIntentKeys.has(key))
       || INTENT_KEYS.some(key => !Object.hasOwn(intent, key))
@@ -201,6 +202,7 @@ function canonicalState(input, expectedInstanceId, retryDelaysMs = null) {
     if ((node.status === 'reserved' && !['committed', 'prepared'].includes(intentStatus))
       || (node.status === 'running' && intentStatus !== 'started')) fail('invalid-runtime-input');
   }
+  validateSessions(state,expectedInstanceId);
   validateDurableIntentRelations(state, retryDelaysMs);
   state.appliedSequence = state.events.length;
   state.terminal ??= null;
@@ -476,12 +478,12 @@ function validateDurableIntentRelations(state, retryDelaysMs) {
   for (const remaining of parentAvailability.values()) validateNonnegativeBudget(remaining);
 }
 
-function captureResult(input) {
+function captureResult(input, managed = false) {
   try {
     const value = captureOptions(input, ['version', 'status', 'output', 'usage'], ['version', 'status', 'output', 'usage']);
     const output = immutableJson(value.output);
     const usage = immutableJson(value.usage);
-    if (value.version !== 1 || !['success', 'retry', 'failed', 'blocked', 'budget-exhausted'].includes(value.status)
+    if (value.version !== 1 || !['success', 'retry', 'failed', 'blocked', 'budget-exhausted', ...(managed ? ['checkpoint'] : [])].includes(value.status)
       || Reflect.ownKeys(output).some(key => !['summary', 'evidence'].includes(key))
       || Reflect.ownKeys(usage).some(key => !['tokens', 'costUsd', 'timeMinutes', 'tasks'].includes(key))
       || typeof output.summary !== 'string' || output.summary.length < 1 || containsSecretMaterial(output.summary)
@@ -499,10 +501,14 @@ function captureResult(input) {
   }
 }
 
-function resultWithinAllocation(result, allocation, elapsed = 0) {
+function resultTimeMinutes(result, elapsed, managed) {
+  return managed ? Math.max(result.usage.timeMinutes ?? 0, elapsed) : result.usage.timeMinutes ?? elapsed;
+}
+
+function resultWithinAllocation(result, allocation, elapsed = 0, managed = false) {
   return result.usage.tokens <= allocation.tokenLimit
     && decimalCompare(result.usage.costUsd, allocation.costUsd) <= 0
-    && (result.usage.timeMinutes ?? elapsed) <= allocation.timeMinutes
+    && resultTimeMinutes(result, elapsed, managed) <= allocation.timeMinutes
     && (result.usage.tasks ?? 1) <= allocation.taskLimit;
 }
 
@@ -528,7 +534,7 @@ function deriveTerminal(state, nowMs) {
 }
 
 export function createOrchestrator(input) {
-  const config = captureOptions(input, ['client', 'now', 'launchFor', 'reservationId', 'retryPolicy', 'prepareWorktree', 'reconcile', 'processStatus', 'launchGraceMs'], ['client', 'now', 'launchFor']);
+  const config = captureOptions(input, ['client', 'now', 'launchFor', 'reservationId', 'retryPolicy', 'prepareWorktree', 'reconcile', 'processStatus', 'launchGraceMs', 'checkpointFor', 'verifyCheckpoint', 'sessionPolicy'], ['client', 'now', 'launchFor']);
   if (!config.client || typeof config.client.launch !== 'function' || typeof config.now !== 'function' || typeof config.launchFor !== 'function'
     || (config.prepareWorktree !== undefined && typeof config.prepareWorktree !== 'function')
     || (config.reconcile !== undefined && typeof config.reconcile !== 'function')
@@ -537,7 +543,7 @@ export function createOrchestrator(input) {
   if (!Number.isSafeInteger(launchGraceMs) || launchGraceMs < 100 || launchGraceMs > 300_000) fail('invalid-runtime-input');
   const retryPolicy = config.retryPolicy ?? createRetryPolicy({ maxAttempts: 3, delaysMs: [0, 0], retryable: ['provider-transient'] });
   const retryDelaysMs = retryPolicySchedule(retryPolicy);
-  const canonicalRuntimeState = (state, instanceId) => canonicalState(state, instanceId, retryDelaysMs);
+  const canonicalRuntimeState = (state, instanceId) => {if(config.sessionPolicy && JSON.stringify(state.sessionPolicy)!==JSON.stringify(config.sessionPolicy))fail('invalid-runtime-input');return canonicalState(state, instanceId, retryDelaysMs);};
   const runTransaction = (instance, expectedVersion, operation) => transaction(instance, expectedVersion, operation, retryDelaysMs);
   const controllers = new Map();
   const inflight = new Map();
@@ -686,7 +692,7 @@ export function createOrchestrator(input) {
           if (state.terminal === 'cancelled' || state.launchIntents[intent.nodeId]?.status === 'complete') return null;
           const node = state.graph.nodes.find(item => item.id === intent.nodeId);
           const storedIntent = state.launchIntents[intent.nodeId];
-          if (storedIntent?.id !== intent.id || storedIntent.attempt !== intent.attempt) return null;
+          if (storedIntent?.id !== intent.id || storedIntent.attempt !== intent.attempt || (storedIntent.session && (storedIntent.session.id !== intent.session?.id || !['active','reconciling'].includes(state.sessions[intent.nodeId]?.phase)))) return null;
           const preparationFailure = outcome.phase === 'prepare' && node?.status === 'reserved'
             && storedIntent?.id === intent.id && storedIntent.status === 'committed'
             && storedIntent.preparationClaim?.id === outcome.preparationClaimId;
@@ -697,8 +703,11 @@ export function createOrchestrator(input) {
           if (result) {
             const allocation = state.launchIntents[intent.nodeId]?.allocation ?? node.budget;
             const elapsed = Math.ceil(Math.max(0, config.now() - (state.launchIntents[intent.nodeId]?.startedAtMs ?? config.now())) / 60_000);
-            const attemptUsage = { tokens: result.usage.tokens, costUsd: result.usage.costUsd, timeMinutes: result.usage.timeMinutes ?? elapsed, tasks: result.usage.tasks ?? 1 };
-            if (result.status !== 'budget-exhausted' && !resultWithinAllocation(result, allocation, elapsed)) { result = undefined; classification = 'malformed-output'; }
+            const managed = Boolean(storedIntent.session);
+            const attemptUsage = { tokens: result.usage.tokens, costUsd: result.usage.costUsd, timeMinutes: resultTimeMinutes(result, elapsed, managed), tasks: result.usage.tasks ?? 1 };
+            const withinAllocation = resultWithinAllocation(result, allocation, elapsed, managed);
+            if (managed && !withinAllocation) result = { ...result, status: 'budget-exhausted' };
+            if (result.status !== 'budget-exhausted' && !withinAllocation) { result = undefined; classification = 'malformed-output'; }
             else {
               state.usage.tokens += attemptUsage.tokens;
               state.usage.costUsd = decimalMath(state.usage.costUsd ?? 0, attemptUsage.costUsd);
@@ -706,6 +715,7 @@ export function createOrchestrator(input) {
               state.usage.taskLimit = (state.usage.taskLimit ?? 0) + attemptUsage.tasks;
               const prior = state.nodeUsage[node.id] ?? { tokens: 0, costUsd: '0', timeMinutes: 0, tasks: 0 };
               state.nodeUsage[node.id] = { tokens: prior.tokens + attemptUsage.tokens, costUsd: decimalMath(prior.costUsd, attemptUsage.costUsd), timeMinutes: prior.timeMinutes + attemptUsage.timeMinutes, tasks: prior.tasks + attemptUsage.tasks };
+              if(state.sessions?.[node.id]){state.sessions[node.id].usageSettled=true;state.sessions[node.id].settledUsage=attemptUsage;}
               for (const parent of ancestorNodes(state, node)) {
                 const delegated = state.delegatedUsage[parent.id] ?? { tokens: 0, costUsd: '0', timeMinutes: 0, tasks: 0 };
                 state.delegatedUsage[parent.id] = { tokens: delegated.tokens + attemptUsage.tokens, costUsd: decimalMath(delegated.costUsd, attemptUsage.costUsd), timeMinutes: delegated.timeMinutes + attemptUsage.timeMinutes, tasks: delegated.tasks + attemptUsage.tasks };
@@ -751,6 +761,7 @@ export function createOrchestrator(input) {
           }
           delete state.launchIntents[node.id].preparationClaim;
           state.launchIntents[node.id].status = 'complete';
+          if(state.sessions?.[node.id])state.sessions[node.id].phase=node.status==='completed'?'completed':'blocked';
           if (result?.status === 'budget-exhausted') {
             state.terminal = 'budget-exhausted';
             if (state.graph.status !== 'blocked') transition(state, state.graph, 'blocked', config.now());
@@ -829,7 +840,8 @@ export function createOrchestrator(input) {
           if (!stored || stored.id !== intent.id || !['committed', 'prepared'].includes(stored.status)) fail('version-conflict');
           const node = current.graph.nodes.find(item => item.id === intent.nodeId);
           if (!node || node.status !== 'reserved') fail('version-conflict');
-          stored.status = 'started'; stored.startedAtMs = config.now(); transition(current, node, 'running', stored.startedAtMs); return current;
+          stored.status = 'started';
+          if(current.sessionPolicy) { const session=newSession(instance.id,stored,current.sessionPolicy,config.now());current.sessions[node.id]=session;stored.session={id:session.id,generation:session.generation,maxActions:session.policy.maxActions,maxMinutes:session.policy.maxMinutes,checkpoint:null}; } stored.startedAtMs = config.now(); transition(current, node, 'running', stored.startedAtMs); return current;
         });
         return state.launchIntents[intent.nodeId];
       } catch (error) {
@@ -843,13 +855,20 @@ export function createOrchestrator(input) {
   async function reconcileResult(instance, node, intent, result) {
     if (!config.reconcile || result.status !== 'success'
       || !resultWithinAllocation(result, intent.allocation ?? node.budget,
-        Math.ceil(Math.max(0, config.now() - (intent.startedAtMs ?? config.now())) / 60_000))) {
+        Math.ceil(Math.max(0, config.now() - (intent.startedAtMs ?? config.now())) / 60_000), Boolean(intent.session))) {
       return { performed: false };
     }
     const lock = await instance.acquire();
     let pending;
     try {
-      if ((await instance.read()).terminal === 'budget-exhausted') return { performed: false };
+      const current=canonicalRuntimeState(await instance.read(),instance.id);
+      if (current.terminal === 'budget-exhausted') return { performed: false };
+      if(intent.session) {
+        const session=requireSession(current,node.id,intent.session);
+        if(session.writer?.source==='owned-process'&&session.stopReceipt?.status!=='stopped')sessionFailure('writer-stop-unknown');
+        session.phase='reconciling';current.version++;
+        await instance.commit(current.version-1,canonicalRuntimeState(current,instance.id));
+      }
       // Invoke while the terminal check is protected, but await external work
       // after releasing the state lock. Handle rejection immediately.
       pending = Promise.resolve(config.reconcile(clone(node), clone(intent), result))
@@ -858,6 +877,36 @@ export function createOrchestrator(input) {
     const settled = await pending;
     if (settled.failed) throw settled.error;
     return { performed: true, report: clone(settled.report) };
+  }
+
+  async function observeSession(instance,intent,kind,receipt) {
+    for(let attempt=0;attempt<4;attempt++) {
+      const lock=await instance.acquire();let state;try{state=await instance.read();}finally{await lock.release();}
+      try{return await runTransaction(instance,state.version,current=>{
+        const session=requireSession(current,intent.nodeId,intent.session,['active']);
+        if(kind==='execution') {
+          if(receipt.status==='started') {if(session.writer)sessionFailure();session.writer=clone(receipt);}
+          else session.stopReceipt=stopReceipt({...receipt,sessionId:session.id,generation:session.generation},session);
+        } else session.telemetry=validateSessionTelemetry(receipt);
+        return current;
+      });} catch(error){if(error.details?.reason==='version-conflict')continue;throw error;}
+    }
+    fail('version-conflict');
+  }
+  async function continueSession(instance,intent,node,result) {
+    if(typeof config.checkpointFor!=='function'||typeof config.verifyCheckpoint!=='function')sessionFailure('checkpoint-unavailable');
+    const read=async()=>{const lock=await instance.acquire();try{return await instance.read();}finally{await lock.release();}};
+    let state=await read();const session=requireSession(state,node.id,intent.session);
+    const proof=session.stopReceipt;
+    state=await sessionOperation(instance,{expectedVersion:state.version,nodeId:node.id,identity:session,operation:'request'});
+    const checkpoint=await config.checkpointFor(clone(node),clone(intent),clone(session),result);
+    state=await sessionOperation(instance,{expectedVersion:state.version,nodeId:node.id,identity:session,operation:'checkpoint',checkpoint});
+    state=await sessionOperation(instance,{expectedVersion:state.version,nodeId:node.id,identity:session,operation:'fence'});
+    if(!proof || proof.status!=='stopped')sessionFailure('writer-stop-unknown');
+    state=await sessionOperation(instance,{expectedVersion:state.version,nodeId:node.id,identity:session,operation:'stop',receipt:proof});
+    await config.verifyCheckpoint(checkpoint);
+    state=await sessionOperation(instance,{expectedVersion:state.version,nodeId:node.id,identity:session,operation:'transfer'});
+    return state.launchIntents[node.id];
   }
 
   async function launch(instance, intent, node, signal) {
@@ -869,7 +918,7 @@ export function createOrchestrator(input) {
     if (signal?.aborted) abort();
     const promise = (async () => {
       try {
-      let outcome; let phase = 'claim'; let preparationClaimId;
+      let outcome; let phase = 'claim'; let preparationClaimId; let outcomeIntent=intent; let finalSessionResult;
       try {
         let preparedIntent = intent;
         if (config.prepareWorktree && intent.status !== 'prepared') {
@@ -886,9 +935,21 @@ export function createOrchestrator(input) {
         const startedIntent = await serializeResult(instance.id, () => markIntentStarted(instance, preparedIntent));
         if (startedIntent === null) return Object.freeze({ coordinated: true });
         phase = 'client';
-        const result = captureResult(await config.client.launch(config.launchFor(clone(node), clone(startedIntent)), { signal: controller.signal }));
+        let executing=startedIntent;let result;
+        while(true) {
+          outcomeIntent=executing;const launchedIntent=executing;
+          result=captureResult(await config.client.launch(config.launchFor(clone(node),clone(executing)),{
+            signal:controller.signal,
+            ...(executing.session ? {onExecution:receipt=>serializeResult(instance.id,()=>observeSession(instance,launchedIntent,'execution',receipt)),onTelemetry:receipt=>serializeResult(instance.id,()=>observeSession(instance,launchedIntent,'telemetry',receipt))} : {}),
+          }),Boolean(executing.session));
+          finalSessionResult=result;
+          if(executing.session){const held=await instance.acquire();let observed;try{observed=await instance.read();}finally{await held.release();}if(observed.sessions[node.id].stopReceipt?.status!=='stopped')sessionFailure('writer-stop-unknown');}
+          if(result.status!=='checkpoint')break;
+          if(controller.signal.aborted)sessionFailure('cancelled');
+          executing=await continueSession(instance,executing,node,result);finalSessionResult=undefined;
+        }
         phase = 'reconcile';
-        const reconciliation = await reconcileResult(instance, node, startedIntent, result);
+        const reconciliation = await reconcileResult(instance, node, executing, result);
         if (reconciliation.performed) {
           const report = reconciliation.report;
           if (report?.status !== 'integrated') outcome = { result: { version: 1, status: 'blocked', output: { summary: 'Worktree reconciliation requires review.', evidence: [] }, usage: result.usage } };
@@ -897,9 +958,27 @@ export function createOrchestrator(input) {
       }
       catch (error) {
         if (phase === 'claim' || phase === 'prepare-commit') throw error;
+        if(outcomeIntent.session) {
+          const held=await instance.acquire();let current;try{current=await instance.read();}finally{await held.release();}
+          if(current.sessions?.[node.id]?.id===outcomeIntent.session.id && (!['active','reconciling'].includes(current.sessions[node.id].phase)||current.sessions[node.id].stopReceipt?.status!=='stopped')) {
+            await runTransaction(instance,current.version,state=>{
+              const session=state.sessions[node.id];
+              if(finalSessionResult&&!session.usageSettled){
+                const usage=finalSessionResult.usage;
+                const charged={tokens:usage.tokens,costUsd:usage.costUsd,timeMinutes:Math.max(usage.timeMinutes??0,Math.ceil(Math.max(0,config.now()-session.startedAtMs)/60000)),tasks:usage.tasks??(finalSessionResult.status==='checkpoint'?0:1)};
+                state.usage.tokens+=charged.tokens;state.usage.costUsd=decimalMath(state.usage.costUsd,charged.costUsd);state.usage.timeMinutes+=charged.timeMinutes;state.usage.taskLimit+=charged.tasks;
+                const own=state.nodeUsage[node.id]??zeroNodeUsage();addNodeUsage(own,charged);state.nodeUsage[node.id]=own;
+                for(const parent of ancestorNodes(state,node)){const delegated=state.delegatedUsage[parent.id]??zeroNodeUsage();addNodeUsage(delegated,charged);state.delegatedUsage[parent.id]=delegated;}
+                session.usageSettled=true;session.settledUsage=charged;
+              }
+              session.phase='blocked';transition(state,state.graph.nodes.find(n=>n.id===node.id),'blocked',config.now());state.launchIntents[node.id].status='complete';deriveTerminal(state,config.now());return state;
+            });
+            return {error};
+          }
+        }
         outcome = { error, ...(phase === 'prepare' ? { phase, preparationClaimId } : {}) };
       }
-      await serializeResult(instance.id, () => commitResult(instance, intent, outcome));
+      await serializeResult(instance.id, () => commitResult(instance, outcomeIntent, outcome));
       return outcome;
       } finally {
         signal?.removeEventListener('abort', abort);
@@ -941,12 +1020,12 @@ export function createOrchestrator(input) {
         const intent = state.launchIntents[node.id]; const heartbeat = state.heartbeats?.[node.id];
         if (!['reserved', 'running'].includes(node.status) || !['committed', 'prepared', 'started'].includes(intent?.status) || !heartbeat) continue;
         const liveness = heartbeatStatus(heartbeat, { nowMs: config.now(), expected: { instanceId: instance.id, nodeId: node.id, actorId: node.owner.id, leaseId: intent.reservationId } });
-        if (liveness.status === 'stalled') { transition(state, node, 'blocked', config.now()); delete intent.preparationClaim; intent.status = 'complete'; abortNodeIds.add(node.id); }
+        if (liveness.status === 'stalled') { if(state.sessions?.[node.id])state.sessions[node.id].phase='blocked'; transition(state, node, 'blocked', config.now()); delete intent.preparationClaim; intent.status = 'complete'; abortNodeIds.add(node.id); }
       }
       for (const [nodeId, status] of processObservations) {
         const node = state.graph.nodes.find(item => item.id === nodeId); const intent = state.launchIntents[nodeId];
         if (node?.status === 'running' && intent?.status === 'started' && !state.heartbeats[nodeId]) {
-          transition(state, node, 'blocked', config.now()); intent.status = 'complete'; abortNodeIds.add(nodeId);
+          if(state.sessions?.[node.id])state.sessions[node.id].phase='blocked'; transition(state, node, 'blocked', config.now()); intent.status = 'complete'; abortNodeIds.add(nodeId);
         }
       }
       for (const node of state.graph.nodes) {
@@ -1000,6 +1079,7 @@ export function createOrchestrator(input) {
         if (!safeId(reservationId)) fail('invalid-runtime-input');
         state.attempts[node.id] ??= 1;
         transition(state, node, 'reserved', config.now());
+        if(state.sessions?.[node.id]) delete state.sessions[node.id];
         state.launchIntents[node.id] = { id: launchIntentId(node.id, state.attempts[node.id]), nodeId: node.id, reservationId, attempt: state.attempts[node.id], idempotencyKey: `${instance.id}:${node.id}:${state.attempts[node.id]}`, allocation: allocations.get(node.id), status: 'committed', eventSequence: state.events.length };
       }
       return state;
@@ -1053,6 +1133,7 @@ export function createOrchestrator(input) {
       active = state.graph.nodes.find(node => node.id === started.nodeId);
     }
     const intent = state.launchIntents[active.id];
+    if(intent.session && state.sessions[active.id].phase!=='active') return Object.freeze({version:state.version,action:null});
     return Object.freeze({
       version: state.version,
       action: Object.freeze({
@@ -1065,7 +1146,7 @@ export function createOrchestrator(input) {
 
   async function submitAction(instance, inputOptions) {
     const options = captureOptions(inputOptions, [
-      'expectedVersion', 'nodeId', 'intentId', 'idempotencyKey', 'reservationId', 'result',
+      'expectedVersion', 'nodeId', 'intentId', 'idempotencyKey', 'reservationId', 'result', 'sessionId', 'generation',
     ], ['expectedVersion', 'nodeId', 'intentId', 'idempotencyKey', 'reservationId', 'result']);
     const result = captureResult(options.result);
     const lock = await instance.acquire();
@@ -1079,6 +1160,7 @@ export function createOrchestrator(input) {
       || intent.id !== options.intentId || intent.idempotencyKey !== options.idempotencyKey
       || intent.reservationId !== options.reservationId
       || intent.worktree?.reservationId !== options.reservationId) fail('version-conflict');
+    if(intent.session) requireSession(state,node.id,{id:options.sessionId,generation:options.generation});
     let report = null;
     let outcome = { result };
     const reconciliation = await reconcileResult(instance, node, intent, result);
@@ -1106,6 +1188,54 @@ export function createOrchestrator(input) {
     });
   }
 
+  async function sessionOperation(instance,input) {
+    const {expectedVersion,nodeId,identity,operation,checkpoint,receipt,writer}=input;
+    return runTransaction(instance,expectedVersion,state=>{
+      const session=requireSession(state,nodeId,identity,['active','checkpoint-requested','checkpoint-ready','stopping','stopped']);
+      const intent=state.launchIntents[nodeId];const node=state.graph.nodes.find(n=>n.id===nodeId);
+      if(node.status!=='running'||intent.status!=='started')sessionFailure();
+      if(operation==='observe') {
+        if(session.phase!=='active')sessionFailure();observeHostSession(session,receipt);
+      } else if(operation==='request') {
+        if(!['active','checkpoint-requested'].includes(session.phase))sessionFailure();
+        session.phase='checkpoint-requested';
+      } else if(operation==='checkpoint') {
+        if(!['active','checkpoint-requested'].includes(session.phase)||checkpoint.sessionId!==session.id||checkpoint.generation!==session.generation)sessionFailure();
+        if(checkpoint.nativeHandle&&(!Number.isSafeInteger(writer?.observedAtMs)||writer.observedAtMs<session.observedAtMs))sessionFailure('stale-observation');
+        session.checkpoint=clone(checkpoint);session.phase='checkpoint-ready';session.actions++;
+        if(checkpoint.nativeHandle){if(session.writer && (session.writer.nativeHandle!==writer.nativeHandle||session.writer.actorId!==writer.actorId))sessionFailure('writer-changed');session.writer??=clone(writer);session.observedAtMs=writer.observedAtMs;}
+      } else if(operation==='fence') {
+        if(!['checkpoint-ready','stopping'].includes(session.phase))sessionFailure();
+        if(session.phase==='checkpoint-ready'&&session.writer?.source==='host-observation')session.observedAtMs=Math.max(session.observedAtMs,config.now());
+        session.phase='stopping';
+      } else if(operation==='stop') {
+        if(!['stopping','stopped'].includes(session.phase))sessionFailure();
+        session.stopReceipt=stopReceipt(receipt,session);
+        if(session.stopReceipt.source==='host-observation')session.observedAtMs=session.stopReceipt.observedAtMs;
+        if(session.stopReceipt.status==='stopped'){session.phase='stopped';if(!session.usageSettled){
+        const usage=session.checkpoint.usage;
+        const elapsed=Math.max(usage.timeMinutes??0,Math.ceil(Math.max(0,config.now()-session.startedAtMs)/60000));
+        const charged={tokens:usage.tokens,costUsd:usage.costUsd,timeMinutes:elapsed,tasks:usage.tasks??0};
+        // The checkpoint call continues one task; provider-declared nested tasks still count.
+        const remaining={tokenLimit:intent.allocation.tokenLimit-charged.tokens,costUsd:decimalMath(intent.allocation.costUsd,charged.costUsd,true),timeMinutes:intent.allocation.timeMinutes-charged.timeMinutes,taskLimit:intent.allocation.taskLimit-charged.tasks};
+        state.usage.tokens+=charged.tokens;state.usage.costUsd=decimalMath(state.usage.costUsd,charged.costUsd);state.usage.timeMinutes+=charged.timeMinutes;state.usage.taskLimit+=charged.tasks;
+        const own=state.nodeUsage[node.id]??zeroNodeUsage();addNodeUsage(own,charged);state.nodeUsage[node.id]=own;
+        for(const parent of ancestorNodes(state,node)){const delegated=state.delegatedUsage[parent.id]??zeroNodeUsage();addNodeUsage(delegated,charged);state.delegatedUsage[parent.id]=delegated;}
+        session.usageSettled=true;session.settledUsage=charged;
+        if(remaining.tokenLimit<1||remaining.timeMinutes<1||remaining.taskLimit<1||decimalCompare(remaining.costUsd,0)<=0){
+          session.phase='blocked';intent.status='complete';transition(state,node,'blocked',config.now());state.terminal='budget-exhausted';if(state.graph.status!=='blocked')transition(state,state.graph,'blocked',config.now());
+        } else intent.allocation=remaining;
+        }}
+      } else if(operation==='transfer') {
+        if(session.phase!=='stopped'||(state.sessionReplacementCounts?.[node.id]??0)>=session.policy.maxReplacements)sessionFailure('replacement-cap');
+        state.sessionReplacementCounts??={};state.sessionReplacementCounts[node.id]=(state.sessionReplacementCounts[node.id]??0)+1;
+        const successor=newSession(instance.id,intent,session.policy,config.now(),session);state.sessions[node.id]=successor;
+        intent.startedAtMs=config.now();intent.session={id:successor.id,generation:successor.generation,maxActions:successor.policy.maxActions,maxMinutes:successor.policy.maxMinutes,checkpoint:successor.continuation};
+      } else sessionFailure();
+      return state;
+    });
+  }
+
   async function cancelGoal(instance, inputOptions) {
     const state = await recoverCancelGoal(instance, inputOptions);
     for (const [key, controller] of controllers) if (key.startsWith(`${instance.id}:`)) controller.abort();
@@ -1128,6 +1258,6 @@ export function createOrchestrator(input) {
 
   async function retryNode(instance, inputOptions) { return recoverRetryNode(instance, inputOptions, { retryPolicy }); }
 
-  const runtime = Object.freeze({ activate, approveNode, recordHeartbeat, tick, prepareAction, submitAction, retryNode, recoverStalledNode, cancelNode, cancelGoal });
+  const runtime = Object.freeze({ sessionOperation, activate, approveNode, recordHeartbeat, tick, prepareAction, submitAction, retryNode, recoverStalledNode, cancelNode, cancelGoal });
   return runtime;
 }

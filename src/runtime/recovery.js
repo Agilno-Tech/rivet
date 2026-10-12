@@ -53,6 +53,7 @@ export async function retryNode(instance, input, runtimeOptions = null) {
   return runtimeTransaction(instance, value.expectedVersion, state => {
     const node = structuralNode(state, value.nodeId, value.authority, 'orchestration.retry');
     if (!['blocked', 'failed', 'corrective'].includes(node.status)) fail('invalid-runtime-input');
+    const session=state.sessions?.[node.id];if(session && session.stopReceipt?.status!=='stopped')fail('invalid-runtime-input');
     let delayMs = 0;
     if (runtimeOptions?.retryPolicy) {
       const decision = retryDecision(runtimeOptions.retryPolicy, { attempt: state.attempts[node.id] ?? 1, classification: 'provider-transient' });
@@ -148,6 +149,7 @@ export async function recoverStalledNode(instance, input) {
   return runtimeTransaction(instance, value.expectedVersion, state => {
     const node = structuralNode(state, value.nodeId, value.authority, 'orchestration.recover');
     const intent = state.launchIntents[node.id]; const heartbeat = state.heartbeats[node.id];
+    if(state.sessions?.[node.id] && state.sessions[node.id].stopReceipt?.status!=='stopped')fail('invalid-runtime-input');
     if (!['reserved', 'running'].includes(node.status) || !intent || !['committed', 'prepared', 'started'].includes(intent.status) || !heartbeat) fail('invalid-runtime-input');
     const liveness = heartbeatStatus(heartbeat, { nowMs, expected: { instanceId: instance.id, nodeId: node.id, actorId: node.owner.id, leaseId: intent.reservationId } });
     if (liveness.status !== 'stalled') fail('invalid-runtime-input');

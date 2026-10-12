@@ -383,3 +383,29 @@ test('telemetry persistence honors abort and deadline without signalling a close
   assert.deepEqual(signals,[]);
  });
 });
+
+test('managed checkpoint result records owned start before stdin and stopped proof before resolving',async t=>{
+ const f=await fixture(t,`cat >/dev/null\nprintf '%s' '${envelope('checkpoint')}'`);
+ const source=JSON.parse(await payload(f));const {version,...contract}=source.contract;
+ contract.session={id:'session-one',generation:1,maxActions:2,maxMinutes:1,checkpoint:null};
+ const receipts=[];
+ const runner=await createProcessRunner({executable:f.executable,interpreter:f.interpreter,worktree:f.worktree,onExecution:async receipt=>{receipts.push(receipt);}});
+ const result=await runner.run({args:[],cwd:'.',payload:buildLaunchContract(contract)});
+ assert.equal(result.status,'checkpoint');assert.deepEqual(receipts.map(r=>r.status),['started','stopped']);
+ assert.equal(receipts[0].executionId,receipts[1].executionId);assert.equal(receipts[1].source,'owned-process');
+ const legacy=await createProcessRunner({executable:f.executable,interpreter:f.interpreter,worktree:f.worktree});
+ const legacyPayload=await payload(f);await assert.rejects(()=>legacy.run({args:[],cwd:'.',payload:legacyPayload}),error=>error.code==='ERR_AGENT_OUTPUT_INVALID');
+});
+
+test('owned successful output with a surviving descendant reports unknown stopped proof',async t=>{
+ const f=await fixture(t,`cat >/dev/null\nsleep 30 </dev/null >/dev/null 2>&1 &\nprintf '%s' '${envelope()}'`);
+ const receipts=[];t.after(()=>{const pid=receipts[0]?.processGroupId;if(pid)try{process.kill(-pid,'SIGKILL');}catch{}});
+ const runner=await createProcessRunner({executable:f.executable,interpreter:f.interpreter,worktree:f.worktree,onExecution:receipt=>receipts.push(receipt)});
+ await runner.run({args:[],cwd:'.',payload:await payload(f)});
+ assert.equal(receipts.at(-1).status,'unknown');
+});
+test('hanging startup ownership receipt is bounded and never dispatches stdin',async t=>{
+ const f=await fixture(t,'cat >/dev/null\nexit 0');
+ const runner=await createProcessRunner({executable:f.executable,interpreter:f.interpreter,worktree:f.worktree,timeoutMs:100,termGraceMs:10,killGraceMs:10,onExecution:()=>new Promise(()=>{})});
+ const input=await payload(f);await assert.rejects(()=>runner.run({args:[],cwd:'.',payload:input}),error=>['ERR_AGENT_TIMEOUT','ERR_AGENT_OUTPUT_INVALID'].includes(error.code));
+});

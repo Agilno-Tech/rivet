@@ -11,6 +11,7 @@ import { createOrchestrator, RuntimeError, runtimeTransaction } from '../../src/
 import { createHeartbeat, heartbeatStatus } from '../../src/runtime/heartbeat.js';
 import { createRetryPolicy, retryDecision, retryPolicySchedule } from '../../src/runtime/retry.js';
 import { SupervisorError, watchOrchestration } from '../../src/runtime/supervisor.js';
+import { newSession } from '../../src/feature/sessions.js';
 
 const NOW = Date.parse('2029-01-01T00:00:00.000Z');
 
@@ -2203,4 +2204,32 @@ test('review new reconciliation starts from stale snapshot after recorded exhaus
  const submit=(id,status,tokens)=>runtime.submitAction(instance,{expectedVersion:backing.inspect().version,nodeId:id,intentId:`launch-${id}-1`,idempotencyKey:`demo-instance:${id}:1`,reservationId:`${id}-lease`,result:{version:1,status,output:{summary:'result',evidence:[`${id}-commit`,`${id}-test`]},usage:{tokens,costUsd:0}}});
  const sibling=submit('design','success',5);await released;await submit('api','budget-exhausted',187231);assert.equal(backing.inspect().terminal,'budget-exhausted');resumeFirst();await sibling;
  assert.equal(terminalAtStart,'not-started','No new reconciliation may start after recorded exhaustion');
+});
+
+test('managed success with an unknown writer never reconciles or retries the checkout',async()=>{
+ const sessionPolicy={maxReplacements:2,maxActions:3,maxMinutes:2,contextThresholdPercent:75};
+ const instance=memoryInstance({activated:true,sessionPolicy,sessions:{}});let reconciles=0;let calls=0;
+ const runtime=createOrchestrator({now:()=>NOW,launchFor,sessionPolicy,client:{async launch(contract,options){calls++;
+  const receipt={version:1,executionId:'execution-one',processId:111,processGroupId:111,ownerProcessId:process.pid,processBirth:null,observedAtMs:NOW,source:'owned-process',assurance:'observed',status:'started'};
+  await options.onExecution(receipt);await options.onExecution({...receipt,status:'unknown'});
+  return {version:1,status:'success',output:{summary:'Complete.',evidence:contract.evidence},usage:{tokens:10,costUsd:0}};
+ }},reconcile:async()=>{reconciles++;return {status:'integrated'};}});
+ const result=await runtime.tick(instance,{expectedVersion:0,maxActiveNodes:1});
+ assert.equal(result.terminal,'blocked');assert.equal(reconciles,0);assert.equal(calls,1);
+ assert.equal(instance.inspect().usage.retries,0);assert.equal(instance.inspect().usage.tokens,10);assert.equal(Object.values(instance.inspect().sessions)[0].phase,'blocked');
+});
+
+for(const elapsed of [2,11])test(`managed host final result cannot erase ${elapsed} minutes of observed elapsed time`,async()=>{
+ const sessionPolicy={maxReplacements:2,maxActions:3,maxMinutes:2,contextThresholdPercent:75};
+ const initial=memoryInstance({activated:true,sessionPolicy,sessions:{}}).inspect();
+ initial.graph.nodes.find(n=>n.id==='api').status='running';initial.attempts.api=1;
+ const intent=durableApiIntent('started',{startedAtMs:NOW,worktree:{path:'/tmp/api',dev:'1',ino:'1',reservationId:'api-lease'}});
+ const session=newSession('demo-instance',intent,sessionPolicy,NOW);intent.session={id:session.id,generation:1,maxActions:3,maxMinutes:2,checkpoint:null};
+ initial.launchIntents.api=intent;initial.sessions.api=session;
+ const instance=memoryInstance(initial);let reconciles=0;
+ const runtime=createOrchestrator({client:{launch:async()=>{throw Error('Host only');}},now:()=>NOW+elapsed*60000,launchFor,sessionPolicy,reconcile:async()=>{reconciles++;return {status:'integrated'};}});
+ await runtime.submitAction(instance,{expectedVersion:0,nodeId:'api',intentId:intent.id,idempotencyKey:intent.idempotencyKey,reservationId:'api-lease',sessionId:session.id,generation:1,result:{version:1,status:'success',output:{summary:'Complete',evidence:['api-commit','api-test']},usage:{tokens:5,costUsd:0,timeMinutes:0}}});
+ assert.equal(reconciles,elapsed>10?0:1);
+ assert.equal(instance.inspect().usage.timeMinutes,elapsed);assert.equal(instance.inspect().usage.tokens,5);
+ if(elapsed>10){assert.deepEqual(instance.inspect().evidence,[]);assert.equal(instance.inspect().terminal,'budget-exhausted');}
 });

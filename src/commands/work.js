@@ -9,7 +9,7 @@ import { CliError, EXIT_CODES } from '../cli/output.js';
 const RUN_ID = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const MAX_DECOMPOSITION_BYTES = 128 * 1024;
 const MAX_INLINE_JSON_BYTES = 64 * 1024;
-const SUBCOMMANDS = new Set(['propose', 'prepare', 'next', 'status', 'submit', 'verify', 'recover']);
+const SUBCOMMANDS = new Set(['propose', 'prepare', 'next', 'status', 'submit', 'verify', 'recover', 'checkpoint', 'handoff']);
 
 function fail(message, code = 'INVALID_INPUT') { throw new CliError(message, code); }
 
@@ -106,7 +106,7 @@ async function invoke(target, method, input) {
     const publicCode = code === 'ERR_INTEGRATION_INPUT' ? 'INVALID_INPUT'
       : code.startsWith('ERR_INTEGRATION_') ? 'PROVIDER_UNAVAILABLE'
       : code === 'ERR_HOST_EXECUTION_VERIFICATION_FAILED' ? 'FAILED_GATE'
-      : code === 'ERR_HOST_EXECUTION_REPOSITORY' || code.startsWith('ERR_HOST_RUN_') || code.includes('STATE_CONFLICT') || code.includes('VERSION') || code.startsWith('ERR_GIT_')
+      : code === 'ERR_HOST_EXECUTION_REPOSITORY' || code.startsWith('ERR_HOST_RUN_') || code.startsWith('ERR_SESSION_') || code.includes('STATE_CONFLICT') || code.includes('VERSION') || code.startsWith('ERR_GIT_')
       ? 'REPOSITORY_CONFLICT'
       : code.includes('INVALID') ? 'INVALID_INPUT'
         : code.includes('MISSING') || code.includes('CONFIGURATION') ? 'MISSING_CONFIGURATION' : 'INTERNAL_ERROR';
@@ -159,6 +159,8 @@ export async function workCommand(parsed, dependencies) {
   if (!parsed || parsed.command !== 'work' || !SUBCOMMANDS.has(parsed.subcommand)
     || !Array.isArray(parsed.operands) || !parsed.flags || typeof parsed.flags !== 'object') fail('Work command is invalid.');
   const allowedFlags = {
+    checkpoint: ['project','expected-runtime-version','action','action-json','input','input-json','json'],
+    handoff: ['project','expected-runtime-version','input','input-json','json'],
     propose: ['project', 'request', 'request-text', 'host-context-json', 'ticket', 'tracker', 'acceptance-criteria', 'decomposition', 'decomposition-json', 'json'],
     prepare: ['project', 'expected-version', 'json'],
     next: ['project', 'expected-runtime-version', 'json'],
@@ -170,6 +172,14 @@ export async function workCommand(parsed, dependencies) {
   if (parsed.subcommand !== 'propose') allowedFlags[parsed.subcommand].push('run');
   if (Object.keys(parsed.flags).some(key => !allowedFlags[parsed.subcommand].includes(key))) {
     fail(`Work ${parsed.subcommand} options are invalid.`);
+  }
+  if (['checkpoint','handoff'].includes(parsed.subcommand)) {
+    const input=lifecycleInput(parsed,{flag:'expected-runtime-version',output:'expectedRuntimeVersion'});
+    const fs=dependencies.fs??filesystem;
+    return emit(parsed,dependencies,await invoke(service(dependencies,'work',parsed.subcommand),parsed.subcommand,{
+      ...input,input:inputJson(input.project,parsed.flags,'input',fs,'Session operation'),
+      ...(parsed.subcommand==='checkpoint'?{action:inputJson(input.project,parsed.flags,'action',fs,'Work action')}:{})
+    }));
   }
   if (parsed.subcommand === 'recover') {
     const result = immutableJson(await invoke(service(dependencies, 'work', 'recover'), 'recover', lifecycleInput(parsed)));

@@ -1,3 +1,5 @@
+import {captureCheckpoint,verifyCheckpoint} from './checkpoints.js';
+import {requireSession,turnoverReason} from './sessions.js';
 import { inspectGovernance, requireGovernance } from './governance.js';
 import {assertSelectedProtocolRefs, selectedProtocolStatus} from '../protocols/project.js';
 import {createProtocolPresentation, protocolLookupContext} from '../protocols/presentation.js';
@@ -14,7 +16,7 @@ import { createReservedWorktree } from '../git/worktrees.js';
 import { buildLaunchContract } from '../prompts/launch-contract.js';
 import { runQualityGates } from '../quality/runner.js';
 import { createRuntimeInstance } from '../runtime/instance-store.js';
-import { createOrchestrator } from '../runtime/orchestrator.js';
+import { createOrchestrator, validateRuntimeSnapshot } from '../runtime/orchestrator.js';
 import {
   acceptedIntegrationPaths,
   resolveExistingFeatureRunPaths,
@@ -161,6 +163,7 @@ export function createHostExecution(input) {
     const planNodes = new Map(run.featurePlan.nodes.map(node => [node.id, node]));
     const nowMs = () => featureNowMilliseconds(now);
     const runtime = createOrchestrator({
+      ...(config.orchestration.executionPolicy ? {sessionPolicy:config.orchestration.executionPolicy.sessions} : {}),
       client: Object.freeze({ async launch() { fail('state-conflict'); } }),
       now: nowMs,
       async prepareWorktree(node, intent) {
@@ -317,11 +320,16 @@ export function createHostExecution(input) {
         idempotencyKey: prepared.action.intent.idempotencyKey,
         reservationId: prepared.action.intent.reservationId,
         attempt: prepared.action.intent.attempt,
+        ...(prepared.action.intent.session ? {sessionId:prepared.action.intent.session.id,generation:prepared.action.intent.session.generation} : {}),
         payload: buildLaunchContract(prepared.action.launch),
       });
       const wasAlreadyStarted = value.expectedRuntimeVersion === prepared.version;
+      const observed=await inspectFeatureRuntime(instance);
+      const session=observed.sessions?.[prepared.action.node.id];
+      const turnover=session?turnoverReason(session,featureNowMilliseconds(now)):null;
       return immutableJson({
-        status: wasAlreadyStarted ? 'waiting-for-result' : 'action',
+        status: turnover?'checkpoint-required':wasAlreadyStarted ? 'waiting-for-result' : 'action',
+        ...(turnover?{turnoverReason:turnover,nextAction:'Request a cooperative checkpoint from the existing writer. Do not launch another writer.'}:{}),
         ...(protocolContext ? {protocolContext} : {}),
         runtimeVersion: prepared.version,
         action,
@@ -360,6 +368,7 @@ export function createHostExecution(input) {
         idempotencyKey: intent.idempotencyKey,
         reservationId: intent.reservationId,
         attempt: intent.attempt,
+        ...(intent.session ? {sessionId:intent.session.id,generation:intent.session.generation} : {}),
         payload: buildLaunchContract(createFeatureLaunchInput(node, intent, planNode, run)),
       });
       if (JSON.stringify(action) !== JSON.stringify(expectedAction)) fail('state-conflict');
@@ -370,6 +379,7 @@ export function createHostExecution(input) {
         idempotencyKey: action.idempotencyKey,
         reservationId: action.reservationId,
         result: value.result,
+        ...(action.sessionId ? {sessionId:action.sessionId,generation:action.generation} : {}),
       });
       if (submitted.nodeStatus === 'completed' && submitted.report?.status === 'integrated') {
         const integrated = await gitClient.inspectRepository(integration.path);
@@ -403,6 +413,51 @@ export function createHostExecution(input) {
         reconciliation: submitted.report,
       });
     } finally { await hostLock.release(); }
+  }
+
+  async function checkpoint(inputValue) {
+    const value=capture(inputValue,new Set(['project','runId','expectedRuntimeVersion','action','input']));
+    request(valueWithoutExtras(value),'expectedRuntimeVersion');
+    const action=validateWorkAction(value.action);
+    const paths=await resolveFeatureRunPaths(value.project,value.runId);const lock=await acquireHostRunLock(paths);
+    try {
+      const {run}=await runRecord(value.project,value.runId);
+      if(run.status!=='running'||action.runId!==run.runId||action.runtimeVersion>value.expectedRuntimeVersion)fail('state-conflict');
+      await requireGovernance({project:value.project,run,gitClient,phase:'plan'});
+      const {instance,runtime}=await runtimeContext(value.project,run);
+      let state=await inspectFeatureRuntime(instance);
+      if(state.version!==value.expectedRuntimeVersion)fail('state-conflict');
+      const session=requireSession(state,action.nodeId,{id:action.sessionId,generation:action.generation},['active','checkpoint-requested']);
+      const intent=state.launchIntents[action.nodeId];const node=state.graph.nodes.find(n=>n.id===action.nodeId);
+      if(action.intentId!==intent.id||action.reservationId!==intent.reservationId)fail('state-conflict');
+      const content=capture(value.input,new Set(['summary','usage','nativeHandle','actorId','observedAtMs']),new Set(['summary','usage','nativeHandle','actorId','observedAtMs']));
+      // Persist the fence before reading dirty work. Recovery can repeat observation.
+      state=await runtime.sessionOperation(instance,{expectedVersion:state.version,nodeId:node.id,identity:session,operation:'request'});
+      const captured=await captureCheckpoint({gitClient,run,node,intent,session,...content,nowMs:featureNowMilliseconds(now)});
+      state=await runtime.sessionOperation(instance,{expectedVersion:state.version,nodeId:node.id,identity:session,operation:'checkpoint',checkpoint:captured,writer:{nativeHandle:content.nativeHandle,actorId:content.actorId,observedAtMs:content.observedAtMs,source:'host-observation',assurance:'host-reported'}});
+      return immutableJson({status:'checkpoint-ready',runtimeVersion:state.version,sessionId:session.id,generation:session.generation,checkpointDigest:captured.digest,nextAction:'Fence the current writer with handoff operation fence.'});
+    } finally {await lock.release();}
+  }
+  function valueWithoutExtras(value) {return {project:value.project,runId:value.runId,expectedRuntimeVersion:value.expectedRuntimeVersion};}
+  async function handoff(inputValue) {
+    const value=capture(inputValue,new Set(['project','runId','expectedRuntimeVersion','input']));
+    request(valueWithoutExtras(value),'expectedRuntimeVersion');
+    const operation=capture(value.input,new Set(['operation','receipt']),new Set(['operation']));
+    if(!['fence','stop','transfer','observe'].includes(operation.operation))fail('invalid-input');
+    const paths=await resolveFeatureRunPaths(value.project,value.runId);const lock=await acquireHostRunLock(paths);
+    try {
+      const {run}=await runRecord(value.project,value.runId);if(run.status!=='running')fail('state-conflict');
+      await requireGovernance({project:value.project,run,gitClient,phase:'plan'});
+      const {instance,runtime}=await runtimeContext(value.project,run);
+      const current=await inspectFeatureRuntime(instance);if(current.version!==value.expectedRuntimeVersion)fail('state-conflict');
+      const sessions=Object.values(current.sessions??{}).filter(s=>(operation.operation==='observe'?['active']:['checkpoint-ready','stopping','stopped']).includes(s.phase));
+      if(sessions.length!==1)fail('state-conflict');const session=sessions[0];
+      if(operation.operation==='transfer')await verifyCheckpoint(gitClient,session.checkpoint,run,featureNowMilliseconds(now));
+      const state=await runtime.sessionOperation(instance,{expectedVersion:current.version,nodeId:session.nodeId,identity:session,...operation});
+      const updated=state.sessions[session.nodeId];
+      return immutableJson({status:turnoverReason(updated,featureNowMilliseconds(now))&&updated.phase==='active'?'checkpoint-required':updated.phase,turnoverReason:turnoverReason(updated,featureNowMilliseconds(now)),runtimeVersion:state.version,sessionId:updated.id,generation:updated.generation,
+        nextAction:updated.phase==='active'&&turnoverReason(updated,featureNowMilliseconds(now))?'Request a cooperative checkpoint from the owning host, then submit work checkpoint.':updated.phase==='stopping'?'Stop the exact native writer with its owning harness and submit the labelled stop receipt. Unknown ownership retains the checkout.':updated.phase==='stopped'?'Use handoff operation transfer to revalidate and transfer the checkout.':'Use work next for the fresh successor action; do not resume the old writer.'});
+    } finally {await lock.release();}
   }
 
   async function verify(inputValue) {
@@ -585,6 +640,7 @@ export function createHostExecution(input) {
     }
     const statePaths = await resolveExistingStatePaths(value.project, value.runId);
     const snapshot = statePaths === null ? null : await readSnapshotWithoutLock(statePaths);
+    if(snapshot!==null)validateRuntimeSnapshot(snapshot.data,run.runId);
     const runtime = snapshot === null ? null : runtimeSummary(snapshot.data);
     const workerCheckouts = await workerCheckoutStatus(value.project, run, statePaths, snapshot);
     const blockedNodes = run.status === 'blocked'
@@ -608,7 +664,8 @@ export function createHostExecution(input) {
       && verification.commitSha === accepted.commitSha
       && verification.integration.path === accepted.path
       && verification.integration.branch === accepted.branch;
-    const nextAction = protocols.status === 'changed' ? protocols.message : checkout?.status === 'stale' || verificationStale
+    const pendingSession=Object.values(snapshot?.data.sessions??{}).find(s=>!['active','completed'].includes(s.phase));
+    const nextAction = pendingSession ? `Session ${pendingSession.id} is ${pendingSession.phase}. ${pendingSession.phase==='checkpoint-requested'?'Repeat checkpoint with the same session action and the current runtime version.':pendingSession.phase==='reconciling'?'Interrupted Git reconciliation requires inspection before recovery; no successor can launch.':pendingSession.phase==='blocked'?'Inspect checkpoint, usage and stopped-writer proof; no automatic replacement is permitted.':'Continue the recorded handoff phase with the owning native harness; unknown writer retains ownership.'}` : protocols.status === 'changed' ? protocols.message : checkout?.status === 'stale' || verificationStale
       ? 'The integration checkout no longer matches the accepted tested commit. Do not deliver it; create a new reviewed proposal for source changes.'
       : !governance.ready ? governance.nextAction
       : run.status === 'awaiting-final-approval' && !deliverable
@@ -634,8 +691,8 @@ export function createHostExecution(input) {
                 ? 'Use work prepare with run.version to create the isolated execution state.'
                 : 'Use rivet task resume to continue the approved spawned task.'
               : 'Review the proposal and current run state before proceeding.';
-    return immutableJson({ run, runtime, protocols, governance, verification, checkout, workerCheckouts, deliveryReady: deliverable, blockedNodes, nextAction });
+    return immutableJson({ run, runtime, ...(snapshot?.data.sessions ? {sessions:Object.values(snapshot.data.sessions).map(s=>({id:s.id,nodeId:s.nodeId,generation:s.generation,phase:s.phase,predecessor:s.predecessor,checkpointDigest:s.checkpoint?.digest??null,stopStatus:s.stopReceipt?.status??'unknown',telemetry:s.telemetry,turnoverReason:turnoverReason(s,featureNowMilliseconds(now))}))} : {}), protocols, governance, verification, checkout, workerCheckouts, deliveryReady: deliverable, blockedNodes, nextAction });
   }
 
-  return Object.freeze({ prepare, nextAction, submitResult, verify, status, recover });
+  return Object.freeze({ checkpoint, handoff, prepare, nextAction, submitResult, verify, status, recover });
 }

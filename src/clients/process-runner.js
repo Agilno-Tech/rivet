@@ -1,3 +1,4 @@
+import {randomUUID} from 'node:crypto';
 import { sessionTelemetry } from './session-capabilities.js';
 import { validateReviewPayload } from '../review/contract.js';
 import { serializeProtocolLaunch } from '../protocols/presentation.js';
@@ -9,7 +10,7 @@ import { AgentContractError, containsSecretMaterial, failAgent, immutableJson } 
 import { validateLaunchPayload } from '../prompts/launch-contract.js';
 import { parsePlanningResult, validatePlanningPayload } from '../prompts/planning-contract.js';
 
-const CONFIG_KEYS = new Set(['executable', 'interpreter', 'worktree', 'worktreeIdentity', 'environment', 'signal', 'launchTimeoutMs', 'timeoutMs', 'termGraceMs', 'killGraceMs', 'maxOutputBytes', 'maxInputBytes', 'allowOptionArgs', 'resultFormat', 'onTelemetry', 'telemetryProvider']);
+const CONFIG_KEYS = new Set(['executable', 'interpreter', 'worktree', 'worktreeIdentity', 'environment', 'signal', 'launchTimeoutMs', 'timeoutMs', 'termGraceMs', 'killGraceMs', 'maxOutputBytes', 'maxInputBytes', 'allowOptionArgs', 'resultFormat', 'onTelemetry', 'telemetryProvider', 'onExecution']);
 const REQUEST_KEYS = new Set(['args', 'cwd', 'payload', 'signal', 'protocolContext']);
 // Keep the provider environment narrow, but preserve the non-secret account
 // context required by native macOS clients to resolve their local login
@@ -334,7 +335,7 @@ function parseEnvelope(buffer, contract, resultFormat, requireBudgetStop = false
     : captured;
   const keys = Reflect.ownKeys(value);
   if (keys.length !== 4 || !['version', 'status', 'output', 'usage'].every(key => Object.hasOwn(value, key))
-    || value.version !== 1 || !['success', 'retry', 'failed', 'blocked', 'budget-exhausted'].includes(value.status)
+    || value.version !== 1 || !['success', 'retry', 'failed', 'blocked', 'budget-exhausted', ...(contract.session ? ['checkpoint'] : [])].includes(value.status)
     || !value.output || typeof value.output !== 'object' || Array.isArray(value.output)
     || !value.usage || typeof value.usage !== 'object' || Array.isArray(value.usage)) failAgent('output-invalid');
   const outputKeys = Reflect.ownKeys(value.output);
@@ -375,9 +376,10 @@ async function settleTermination(child, graceMs) {
   const deadline = performance.now() + graceMs;
   while (performance.now() < deadline) {
     try { process.kill(-child.pid, 0); }
-    catch (error) { if (error.code === 'ESRCH') return; }
+    catch (error) { if (error.code === 'ESRCH') return true; }
     await new Promise(resolve => setTimeout(resolve, 10));
   }
+  return false;
 }
 
 export async function createProcessRunner(input) {
@@ -390,6 +392,7 @@ export async function createProcessRunner(input) {
   const maxOutputBytes = boundedInteger(config.maxOutputBytes, 256 * 1024, 10 * 1024 * 1024);
   const maxInputBytes = boundedInteger(config.maxInputBytes, 128 * 1024, 1024 * 1024);
   if (config.allowOptionArgs !== undefined && typeof config.allowOptionArgs !== 'boolean') failAgent('invalid-contract');
+  if (config.onExecution !== undefined && typeof config.onExecution !== 'function') failAgent('invalid-contract');
   if (config.onTelemetry !== undefined && typeof config.onTelemetry !== 'function') failAgent('invalid-contract');
   if (config.telemetryProvider !== undefined && !['claude','codex','host'].includes(config.telemetryProvider)) failAgent('invalid-contract');
   if (config.resultFormat !== undefined && config.resultFormat !== 'claude-json') failAgent('invalid-contract');
@@ -559,6 +562,30 @@ export async function createProcessRunner(input) {
         let cleanupDeadline;
         let settled = false;
         let childClosed = false;
+        const executionId = `execution-${randomUUID()}`;
+        let startReceipt;
+        let executionStopped = false;
+        let terminationStarted = false;
+        let processGroupStopped = false;
+        const boundedReceipt = async operation => {
+          let timer;
+          try {await Promise.race([operation,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new AgentContractError('output-invalid')),1000);})]);}
+          finally {clearTimeout(timer);}
+        };
+        const reportExecution = async status => {
+          if(!config.onExecution || !child?.pid) return;
+          let observed=status;
+          if(status!=='started') {
+            if(executionStopped) return;
+            executionStopped=true;
+            observed='unknown';
+            if(processGroupStopped)observed='stopped';
+            else if(childClosed) {try {process.kill(-child.pid,0);}catch(error){if(error.code==='ESRCH')observed='stopped';}}
+          }
+          const receipt={version:1,executionId,processId:child.pid,processGroupId:child.pid,ownerProcessId:process.pid,processBirth:null,
+            observedAtMs:Date.now(),source:'owned-process',assurance:'observed',status:observed};
+          await boundedReceipt(Promise.resolve().then(()=>config.onExecution(Object.freeze(receipt))));
+        };
         let runtimeTimer;
         let launchTimer;
         let termTimer;
@@ -567,9 +594,12 @@ export async function createProcessRunner(input) {
           if (settled) return;
           settled = true;
           clearTimeout(runtimeTimer); clearTimeout(launchTimer); clearTimeout(termTimer); clearTimeout(hardTimer);
-          if (error && classification && child && !childClosed) {
-            settleTermination(child, Math.max(0, cleanupDeadline - performance.now())).then(() => rejectPromise(error), () => rejectPromise(error));
-          } else if (error) rejectPromise(error); else resolvePromise(value);
+          if (error && terminationStarted && child) {
+            settleTermination(child, Math.max(0, cleanupDeadline - performance.now())).then(stopped => {processGroupStopped=stopped;return reportExecution('unknown');}).then(() => rejectPromise(error), () => rejectPromise(error));
+          } else if (error) {
+            const timer=setTimeout(()=>rejectPromise(error),1000);
+            Promise.resolve(reportExecution('unknown')).then(()=>{clearTimeout(timer);rejectPromise(error);},()=>{clearTimeout(timer);rejectPromise(error);});
+          } else resolvePromise(value);
         };
         terminateChild = reason => {
           if (settled || classification || !child) return;
@@ -577,6 +607,7 @@ export async function createProcessRunner(input) {
           // Receipt persistence still obeys cancellation/deadlines after close,
           // but a reaped child PID/group is no longer ours to signal.
           if (childClosed) { finish(new AgentContractError(reason)); return; }
+          terminationStarted = true;
           cleanupDeadline = performance.now() + termGraceMs + killGraceMs;
           killTree(child, 'SIGTERM');
           termTimer = setTimeout(() => killTree(child, 'SIGKILL'), termGraceMs);
@@ -614,13 +645,11 @@ export async function createProcessRunner(input) {
         });
         child.once('spawn', () => clearTimeout(launchTimer));
         child.once('close', code => {
+          childClosed = true;
           if (classification) {
-            // The direct adapter may be gone while its descendants remain.
-            killTree(child, 'SIGKILL');
             finish(new AgentContractError(classification));
             return;
           }
-          childClosed = true;
           clearTimeout(launchTimer);
           // Keep the runtime deadline while awaiting telemetry persistence.
           // The child emitted a close event, so it did spawn successfully. A
@@ -636,14 +665,14 @@ export async function createProcessRunner(input) {
             // Only that validated terminal envelope preserves its accounting;
             // any other nonzero exit remains a failed provider execution.
             const result = protocol === 'launch' ? parseEnvelope(bytes, contract, config.resultFormat, code !== 0) : parsePlanningResult(bytes);
-            if (config.onTelemetry) {
+            if (config.onTelemetry || config.onExecution) {
               // The child no longer keeps Node alive; the bounded receipt wait must.
               runtimeTimer.ref?.();
               let usage = protocol === 'launch' && (config.telemetryProvider !== 'claude' || config.resultFormat === 'claude-json') ? result.usage : undefined;
               if (config.telemetryProvider === 'claude' && protocol !== 'launch') {
                 try { usage = claudeMeasuredUsage(JSON.parse(strictDecode(bytes))); } catch { /* Missing native usage remains unknown. */ }
               }
-              Promise.resolve(config.onTelemetry(sessionTelemetry(config.telemetryProvider ?? 'host', usage))).then(
+              Promise.resolve(startReceipt).then(()=>reportExecution('stopped')).then(()=>config.onTelemetry?.(sessionTelemetry(config.telemetryProvider ?? 'host', usage))).then(
                 () => finish(classification ? new AgentContractError(classification) : null, result),
                 () => finish(new AgentContractError('output-invalid')),
               );
@@ -660,7 +689,8 @@ export async function createProcessRunner(input) {
         launchTimer = setTimeout(() => terminateChild('launch-timeout'), Math.min(launchTimeoutMs, runtimeLimit));
         launchTimer.unref?.();
         if (cancelled) { terminateChild('aborted'); return; }
-        try { child.stdin.end(stdinPayload, 'utf8'); } catch { terminateChild('provider-unavailable'); }
+        startReceipt=Promise.resolve().then(()=>reportExecution('started'));
+        startReceipt.then(()=>{if(settled || classification || childClosed)return;try{child.stdin.end(stdinPayload,'utf8');}catch{terminateChild('provider-unavailable');}},()=>terminateChild('output-invalid'));
       });
     } finally {
       terminateChild = undefined;

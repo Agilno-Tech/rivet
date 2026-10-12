@@ -1,6 +1,8 @@
+import { constants } from 'node:fs';
+import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstat, realpath } from 'node:fs/promises';
+import { lstat, realpath, open } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import { inspectDependencyDirectory } from '../runtime/dependency-directory.js';
 
@@ -444,6 +446,49 @@ export async function createGitClient(options = {}) {
       const match = /^(100644|100755) blob ([0-9a-f]{40}|[0-9a-f]{64})\t([^\0]+)\0$/.exec(result.output);
       if (!match || match[3] !== path) fail('repository-path-unsafe');
       return Object.freeze({ path, blob: match[2] });
+    },
+
+    async checkpointManifest(cwdInput) {
+      const cwd = absoluteInput(cwdInput);
+      const observe = async () => {
+        const repository = await client.inspectRepository(cwd);
+        if (repository.root !== cwd || repository.detached) fail('repository-unsafe');
+        const paths = await client.statusPaths(cwd);
+        if (paths.length > 256) fail('git-output-invalid');
+        const index = await run(cwd, ['ls-files','--stage','-z']);
+        const entries = []; const ancestors={}; let total = 0;
+        for (const path of [...paths].sort()) {
+          let cursor = cwd;
+          for (const part of path.split('/').slice(0,-1)) {
+            cursor = join(cursor,part);
+            const meta = await lstat(cursor).catch(error => error.code === 'ENOENT' ? null : Promise.reject(error));
+            if(meta) ancestors[cursor]={dev:String(meta.dev),ino:String(meta.ino)};
+            if (meta && (!meta.isDirectory() || meta.isSymbolicLink() || await realpath(cursor) !== cursor)) fail('repository-path-unsafe');
+          }
+          const target = join(cwd,path);
+          let before; try { before = await lstat(target); } catch(error) { if(error.code !== 'ENOENT') throw error; }
+          if (!before) { entries.push({path,deleted:true}); continue; }
+          if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > 8*1024*1024) fail('repository-path-unsafe');
+          total += before.size; if(total > 16*1024*1024) fail('git-output-invalid');
+          const handle = await open(target,constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+          try {
+            const opened = await handle.stat();
+            if (!sameIdentity(before,opened) || opened.size !== before.size || !opened.isFile()) fail('repository-changed');
+            const bytes = Buffer.alloc(opened.size + 1); let offset=0;
+            while(offset < bytes.length) { const {bytesRead}=await handle.read(bytes,offset,bytes.length-offset,null); if(!bytesRead) break;offset+=bytesRead; }
+            const after=await handle.stat();const current=await lstat(target);
+            if(offset !== opened.size || !sameIdentity(after,current) || !sameIdentity(opened,after)
+              || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs) fail('repository-changed');
+            entries.push({path,dev:String(after.dev),ino:String(after.ino),mode:after.mode & 0o777,digest:createHash('sha256').update(bytes.subarray(0,offset)).digest('hex')});
+          } finally { await handle.close(); }
+        }
+        const data={repositoryId:repository.repositoryId,root:repository.root,rootIdentity:repository.rootIdentity,
+          branch:repository.branch,headSha:repository.headSha,ancestors:Object.entries(ancestors).map(([path,identity])=>({path,...identity})),indexDigest:createHash('sha256').update(index.output).digest('hex'),entries};
+        return {...data,digest:createHash('sha256').update(JSON.stringify(data)).digest('hex')};
+      };
+      const first=await observe();const second=await observe();
+      if(first.digest !== second.digest) fail('repository-changed');
+      return Object.freeze(second);
     },
 
     async statusPaths(cwd) {

@@ -27,7 +27,7 @@ export const CLAUDE_ADAPTER_SYNTAX = Object.freeze({
   inputMode: 'stdin-text',
   outputMode: 'json-structured-output-envelope-v1',
   optionalArgs: Object.freeze([
-    '--model <id>', '--effort <low|medium|high|max>', '--max-budget-usd <amount>',
+    '--model <id>', '--effort <low|medium|high|xhigh|max>', '--max-budget-usd <amount>',
     '--permission-mode <acceptEdits|dontAsk|plan>', '--safe-mode',
     '--tools <Read,Glob,Grep>', '--json-schema <approved-schema>',
   ]),
@@ -130,7 +130,7 @@ export function createClaudeClient(input) {
   const maxOutputBytes = config.maxOutputBytes;
 
   async function launch(contractInput, optionInput = {}) {
-    const options = capture(optionInput, new Set(['signal','protocolContext','onTelemetry']), []);
+    const options = capture(optionInput, new Set(['signal','protocolContext','onTelemetry','onExecution']), []);
     const signalState = stable(() => {
       const value = options.signal;
       if (value !== undefined && (!(value instanceof AbortSignal) || Object.getPrototypeOf(value) !== AbortSignal.prototype)) failAgent('template-invalid');
@@ -144,13 +144,13 @@ export function createClaudeClient(input) {
       worktreeIdentity: { dev: contract.worktree.dev, ino: contract.worktree.ino },
       environment, signal: signalState.value,
       timeoutMs: Math.min(timeoutMs ?? contract.budget.maxRuntimeMs, contract.budget.maxRuntimeMs, 10 * 60_000),
-      maxOutputBytes, onTelemetry: options.onTelemetry ?? config.onTelemetry, telemetryProvider: 'claude', allowOptionArgs: true, resultFormat: 'claude-json',
+      maxOutputBytes, onExecution:options.onExecution, onTelemetry: options.onTelemetry ?? config.onTelemetry, telemetryProvider: 'claude', allowOptionArgs: true, resultFormat: 'claude-json',
     });
     await checkCompatibility(runner, 'claude', [...args, '--json-schema', '--max-budget-usd'], expectedVersion);
     return runner.run({
       args: Object.freeze([
         ...args,
-        '--json-schema', JSON.stringify(agentResultContract(contract.evidence).schema),
+        '--json-schema', JSON.stringify(agentResultContract(contract.evidence, contract.session).schema),
         '--max-budget-usd', String(contract.budget.maxCostUsd),
       ]),
       cwd: '.', payload: serializeLaunchContract(contract), protocolContext: options.protocolContext, signal: signalState.value,

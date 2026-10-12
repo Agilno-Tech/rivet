@@ -157,11 +157,12 @@ export function captureWorktree(input) {
 }
 
 export function createLaunchContract(input) {
-  const value = captureRecord(input, CONTRACT_KEYS, [...CONTRACT_KEYS]);
+  const value = captureRecord(input, new Set([...CONTRACT_KEYS, 'session']), [...CONTRACT_KEYS]);
   const parentId = value.parentId === null ? null : id(value.parentId);
   if (!Number.isSafeInteger(value.heartbeatInterval) || value.heartbeatInterval < 100 || value.heartbeatInterval > 3_600_000) failAgent('invalid-contract');
   const contract = Object.freeze({
     version: 1,
+    ...(value.session === undefined ? {} : {session: captureSession(value.session)}),
     nodeId: id(value.nodeId), parentId,
     objective: string(value.objective, 16_384),
     ownedPaths: array(value.ownedPaths, 256, relativePath),
@@ -222,3 +223,12 @@ export function immutableJson(value, reason = 'output-invalid') {
   }
 }
 import { isAbsolute, resolve } from 'node:path';
+
+function captureSession(input) {
+  const value = captureRecord(input, new Set(['id','generation','maxActions','maxMinutes','checkpoint']), ['id','generation','maxActions','maxMinutes','checkpoint']);
+  if (!Number.isSafeInteger(value.generation) || value.generation < 1 || value.generation > 101
+    || !Number.isSafeInteger(value.maxActions) || value.maxActions < 1 || value.maxActions > 10000
+    || !Number.isSafeInteger(value.maxMinutes) || value.maxMinutes < 1 || value.maxMinutes > 1440) failAgent('invalid-contract');
+  const checkpoint = value.checkpoint === null ? null : string(value.checkpoint, 8000);
+  return Object.freeze({id: id(value.id), generation: value.generation, maxActions:value.maxActions, maxMinutes:value.maxMinutes, checkpoint});
+}

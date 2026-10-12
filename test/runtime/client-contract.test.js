@@ -397,7 +397,7 @@ test('accepts only finite provider-specific configurable template options', () =
   assert.throws(() => createCodexClient({ executable: '/missing/codex', expectedVersion: CODEX_ADAPTER_SYNTAX.observedVersion, args: [...CODEX_ADAPTER_SYNTAX.args.slice(0, -1), '--dangerously-bypass-approvals-and-sandbox', '{stdin}'] }), /template/i);
   assert.deepEqual(CODEX_ADAPTER_SYNTAX.optionalArgs, ['--model <id>', '--sandbox <read-only|workspace-write>', '--strict-config']);
   assert.deepEqual(CLAUDE_ADAPTER_SYNTAX.optionalArgs, [
-    '--model <id>', '--effort <low|medium|high|max>', '--max-budget-usd <amount>',
+    '--model <id>', '--effort <low|medium|high|xhigh|max>', '--max-budget-usd <amount>',
     '--permission-mode <acceptEdits|dontAsk|plan>', '--safe-mode',
     '--tools <Read,Glob,Grep>', '--json-schema <approved-schema>',
   ]);
@@ -461,4 +461,13 @@ test('sanitizes hostile nested adapter templates, environments, and launch optio
   Object.defineProperty(getterOptions, 'signal', { enumerable: true, get() { signalReads += 1; return undefined; } });
   await assert.rejects(() => client.launch(validLaunch(), getterOptions), error => error.code === 'ERR_AGENT_PROVIDER_UNAVAILABLE');
   assert.equal(signalReads, 1);
+});
+
+test('managed session launch permits explicit checkpoint yield while legacy remains strict', () => {
+  const session = {id: 'session-one', generation: 1, maxActions: 3, maxMinutes: 2, checkpoint: null};
+  const managed = JSON.parse(buildLaunchContract(validLaunch({session})));
+  assert.ok(managed.resultContract.schema.properties.status.enum.includes('checkpoint'));
+  assert.equal(managed.contract.session.generation, 1);
+  assert.ok(!JSON.parse(buildLaunchContract(validLaunch())).resultContract.schema.properties.status.enum.includes('checkpoint'));
+  assert.throws(() => createLaunchContract(validLaunch({session: {...session,generation:0}})));
 });

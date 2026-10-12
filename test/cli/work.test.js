@@ -497,3 +497,12 @@ test('invalid supplemental text is an input error without invoking proposal serv
     assert.equal(code,EXIT_CODES.INVALID_INPUT);assert.equal(calls,0);
   }
 });
+
+test('checkpoint and handoff CLI route exact session requests to the application service',async()=>{
+ const output=capture();const calls=[];const work={checkpoint:async input=>{calls.push(input);return {status:'checkpoint-ready'};},handoff:async input=>{calls.push(input);return {status:'stopping'};}};
+ const action={sessionId:'session-one',generation:1};const input={summary:'Continue remaining work.'};
+ assert.equal(await main(['work','checkpoint','run-one','--project=/repo','--expected-runtime-version=3',`--action-json=${JSON.stringify(action)}`,`--input-json=${JSON.stringify(input)}`,'--json'],{output:output.output,work}),0);
+ assert.deepEqual(calls[0],{project:'/repo',runId:'run-one',expectedRuntimeVersion:3,action,input});
+ assert.equal(await main(['work','handoff','run-one','--project=/repo','--expected-runtime-version=4','--input-json={"operation":"fence"}','--json'],{output:output.output,work}),0);
+ assert.equal(calls[1].input.operation,'fence');
+});

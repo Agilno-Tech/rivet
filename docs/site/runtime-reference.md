@@ -299,3 +299,84 @@ failures, for planning, workers and reviews. Installed CLI help/version probes o
 2026-10-12 covered Claude `2.1.280` and Codex `0.162.0-alpha.17.2`; these probes are
 not authenticated execution or billing evidence. No live paid call was made for
 this change.
+
+## Managed session checkpoints and handoffs
+
+These operations require an approved plan with `executionPolicy`. They preserve the worker checkout and pending edits; they do not commit a checkpoint. Sessions belong to the existing runtime launch intent. A replacement increments its generation and keeps the retry attempt, decisions, review rounds, and cumulative budget accounting.
+
+`rivet task checkpoint --input=<file>` accepts this wrapper. The `action` is the complete action returned by `rivet work next`, without modifications:
+
+```json
+{
+  "expectedRuntimeVersion": 12,
+  "action": { "...": "the complete work action" },
+  "input": {
+    "summary": "Completed the parser; next run the focused regression checks. No unresolved blockers.",
+    "usage": { "tokens": 1200, "costUsd": 0.03 },
+    "nativeHandle": "native-child-reference",
+    "actorId": "owning-host",
+    "observedAtMs": 1791792000000
+  }
+}
+```
+
+The timestamp is the observation time in Unix milliseconds. Use the current value, not the example timestamp. Checkpoint observations must not precede the latest session observation. A host stop receipt must be at least as recent as the latest observation, checkpoint and persisted fence; an old receipt for the same handle is insufficient. Usage describes this session only. Optional `timeMinutes` and `tasks` must be nonnegative integers; reported time cannot reduce independently observed elapsed time. A checkpoint continues the same task, so an omitted `tasks` counts no additional task; explicitly reported nested tasks still consume the budget.
+
+The equivalent machine-facing command is:
+
+```sh
+rivet work checkpoint <run-id> --project=<absolute-path> \
+  --expected-runtime-version=<n> --action=<action.json> --input=<checkpoint-input.json> --json
+```
+
+For `work checkpoint`, the input file contains only the inner `input` object. Every file input stays within the project. `--input-json` and `--action-json` are bounded inline alternatives. Supply the current runtime version from each response.
+
+The stored checkpoint binds the approved proposal and execution profile, worktree reservation, repository identity, HEAD, Git index, and a bounded digest manifest of dirty files. Staged and unstaged changes, untracked files, deletions, permissions and filesystem identities are retained. Changed content, HEAD, reservation, symlinks or replaced paths block transfer. The summary is private context, not new authority.
+
+### Native host transfer
+
+The owning harness performs its own native child-session operations. Rivet never sends terminal reset instructions to an unrelated conversation. Native receipts are **host-reported observations**, not cryptographic proof of independence or liveness. The first native handle and actor are bound to the current session; later operations cannot substitute them.
+
+Call `rivet task handoff --input=<file>` with `{ "expectedRuntimeVersion": 13, "input": { "operation": "fence" } }`. This persists `stopping` before the host stops its old writer. Then use the owning harness's native stop/inspect tools and submit:
+
+```json
+{
+  "expectedRuntimeVersion": 14,
+  "input": {
+    "operation": "stop",
+    "receipt": {
+      "sessionId": "session-returned-by-rivet",
+      "generation": 1,
+      "nativeHandle": "native-child-reference",
+      "actorId": "owning-host",
+      "observedAtMs": 1791792001000,
+      "status": "stopped",
+      "source": "host-observation",
+      "assurance": "host-reported"
+    }
+  }
+}
+```
+
+Report `status: "unknown"` if the harness cannot establish that the writer stopped. Unknown ownership retains the checkout and cannot transfer. A known stop settles usage exactly once, including before a replacement-cap refusal. After a known stop, submit `{ "expectedRuntimeVersion": 15, "input": { "operation": "transfer" } }`. Rivet revalidates the checkpoint and admits the next generation. Retrieve its fresh action with `work next`; do not resume the old writer. Late predecessor results cannot create a commit or integrate changes.
+
+The machine-facing equivalent is `rivet work handoff <run-id> --project=<absolute-path> --expected-runtime-version=<n> --input=<handoff-input.json> --json`. Its file contains the inner `input` object. The phases are `active`, `checkpoint-requested`, `checkpoint-ready`, `stopping`, `stopped`, then the successor's `active`. An interrupted checkpoint can be observed again using the same action and current runtime version. Unknown ownership or interrupted Git reconciliation requires inspection; recovery does not authorize another writer. Each persisted phase survives restarting the command.
+
+### Observations and bounded turnover
+
+An active host may use handoff operation `observe` with a receipt containing `sessionId`, `generation`, `nativeHandle`, `actorId`, `observedAtMs`, `source: "host-observation"`, `assurance: "host-reported"`, cumulative `actions`, and `telemetry`. Actions and observation time must not decrease. Count observed Rivet actions; do not infer the provider's internal tool count. Telemetry has this shape:
+
+```json
+{
+  "version": 1,
+  "provider": "host",
+  "tokens": { "value": null, "source": "unavailable", "assurance": "unknown" },
+  "costUsd": { "value": null, "source": "unavailable", "assurance": "unknown" },
+  "contextUsedTokens": { "value": null, "source": "unavailable", "assurance": "unknown" },
+  "contextWindowTokens": { "value": null, "source": "unavailable", "assurance": "unknown" }
+}
+```
+
+Known host observations use a nonnegative value, a bounded source label, and `assurance: "host-reported"`. Host input cannot label itself `native-measured`. Measured context turnover requires native measured occupancy and capacity from an executor; total consumed tokens are not context occupancy. Current CLI adapters report context as unknown. `task status` shows the session phase, generation, stop status, telemetry and turnover reason. Reaching an observed action/time boundary returns `checkpoint-required`; the host should request a cooperative checkpoint from its existing writer.
+
+Owned CLI execution remains one-shot. Its managed launch contract explicitly permits `status: "checkpoint"` with the existing summary, evidence and usage envelope. A valid yield plus observed process-group termination creates a fresh bounded call from the verified checkpoint, in the same checkout and within the remaining budget. Legacy contracts reject this status. `retry` still means the existing retry policy. A time cutoff before a valid checkpoint blocks and preserves edits; it does not invent a successful checkpoint. CLI process receipts use a live owned-process nonce; after a crash, a bare PID is insufficient authority to signal or replace a writer. Native model calls and host tools were not exercised by the deterministic fixtures.
