@@ -362,3 +362,24 @@ test('Claude native cost-cap stop preserves telemetry on nonzero exit without ac
 test('a nonzero Claude exit cannot present a success envelope as successful work', async t => {
   await assert.rejects(runClaudeResult(t, nativeClaudeResult({tokens: 1}), 1));
 });
+
+test('telemetry persistence honors abort and deadline without signalling a closed process',async t=>{
+ for(const mode of ['abort','timeout','hung','reject','success']) await t.test(mode,async t=>{
+  const f=await fixture(t,`cat >/dev/null\nprintf '%s\\n' '${envelope()}'`);
+  const controller=new AbortController();let persisting=false;const signals=[];
+  const originalKill=process.kill;
+  t.mock.method(process,'kill',function(pid,signal){if(persisting)signals.push(signal);return originalKill.call(process,pid,signal);});
+  const runner=await createProcessRunner({executable:f.executable,interpreter:f.interpreter,worktree:f.worktree,signal:controller.signal,timeoutMs:['timeout','hung'].includes(mode)?100:2000,termGraceMs:10,killGraceMs:10,telemetryProvider:'codex',onTelemetry:async()=>{
+   persisting=true;
+   if(mode==='abort')controller.abort();
+   if(mode==='hung')await new Promise(()=>{});
+   await new Promise(resolve=>setTimeout(resolve,mode==='timeout'?150:10));
+   if(mode==='reject')throw new Error('persistence failed');
+  }});
+  const running=runner.run({args:[],cwd:'.',payload:await payload(f)});
+  if(mode==='success')assert.equal((await running).status,'success');
+  else await assert.rejects(running,error=>error.code===({abort:'ERR_AGENT_ABORTED',timeout:'ERR_AGENT_TIMEOUT',hung:'ERR_AGENT_TIMEOUT',reject:'ERR_AGENT_OUTPUT_INVALID'})[mode]);
+  assert.equal(persisting,true);
+  assert.deepEqual(signals,[]);
+ });
+});

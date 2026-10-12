@@ -1,3 +1,4 @@
+import { sessionTelemetry } from './session-capabilities.js';
 import { validateReviewPayload } from '../review/contract.js';
 import { serializeProtocolLaunch } from '../protocols/presentation.js';
 import { spawn } from 'node:child_process';
@@ -8,7 +9,7 @@ import { AgentContractError, containsSecretMaterial, failAgent, immutableJson } 
 import { validateLaunchPayload } from '../prompts/launch-contract.js';
 import { parsePlanningResult, validatePlanningPayload } from '../prompts/planning-contract.js';
 
-const CONFIG_KEYS = new Set(['executable', 'interpreter', 'worktree', 'worktreeIdentity', 'environment', 'signal', 'launchTimeoutMs', 'timeoutMs', 'termGraceMs', 'killGraceMs', 'maxOutputBytes', 'maxInputBytes', 'allowOptionArgs', 'resultFormat']);
+const CONFIG_KEYS = new Set(['executable', 'interpreter', 'worktree', 'worktreeIdentity', 'environment', 'signal', 'launchTimeoutMs', 'timeoutMs', 'termGraceMs', 'killGraceMs', 'maxOutputBytes', 'maxInputBytes', 'allowOptionArgs', 'resultFormat', 'onTelemetry', 'telemetryProvider']);
 const REQUEST_KEYS = new Set(['args', 'cwd', 'payload', 'signal', 'protocolContext']);
 // Keep the provider environment narrow, but preserve the non-secret account
 // context required by native macOS clients to resolve their local login
@@ -389,6 +390,8 @@ export async function createProcessRunner(input) {
   const maxOutputBytes = boundedInteger(config.maxOutputBytes, 256 * 1024, 10 * 1024 * 1024);
   const maxInputBytes = boundedInteger(config.maxInputBytes, 128 * 1024, 1024 * 1024);
   if (config.allowOptionArgs !== undefined && typeof config.allowOptionArgs !== 'boolean') failAgent('invalid-contract');
+  if (config.onTelemetry !== undefined && typeof config.onTelemetry !== 'function') failAgent('invalid-contract');
+  if (config.telemetryProvider !== undefined && !['claude','codex','host'].includes(config.telemetryProvider)) failAgent('invalid-contract');
   if (config.resultFormat !== undefined && config.resultFormat !== 'claude-json') failAgent('invalid-contract');
   const executable = config.executable;
   const interpreter = config.interpreter;
@@ -555,6 +558,7 @@ export async function createProcessRunner(input) {
         let classification;
         let cleanupDeadline;
         let settled = false;
+        let childClosed = false;
         let runtimeTimer;
         let launchTimer;
         let termTimer;
@@ -563,13 +567,16 @@ export async function createProcessRunner(input) {
           if (settled) return;
           settled = true;
           clearTimeout(runtimeTimer); clearTimeout(launchTimer); clearTimeout(termTimer); clearTimeout(hardTimer);
-          if (error && classification && child) {
+          if (error && classification && child && !childClosed) {
             settleTermination(child, Math.max(0, cleanupDeadline - performance.now())).then(() => rejectPromise(error), () => rejectPromise(error));
           } else if (error) rejectPromise(error); else resolvePromise(value);
         };
         terminateChild = reason => {
-          if (classification || !child) return;
+          if (settled || classification || !child) return;
           classification = reason;
+          // Receipt persistence still obeys cancellation/deadlines after close,
+          // but a reaped child PID/group is no longer ours to signal.
+          if (childClosed) { finish(new AgentContractError(reason)); return; }
           cleanupDeadline = performance.now() + termGraceMs + killGraceMs;
           killTree(child, 'SIGTERM');
           termTimer = setTimeout(() => killTree(child, 'SIGKILL'), termGraceMs);
@@ -613,6 +620,9 @@ export async function createProcessRunner(input) {
             finish(new AgentContractError(classification));
             return;
           }
+          childClosed = true;
+          clearTimeout(launchTimer);
+          // Keep the runtime deadline while awaiting telemetry persistence.
           // The child emitted a close event, so it did spawn successfully. A
           // non-zero exit is a provider execution failure, not a spawn failure;
           // classify it as unavailable so the runtime can apply its bounded
@@ -625,7 +635,21 @@ export async function createProcessRunner(input) {
             // A native cost-cap result can accompany a nonzero process exit.
             // Only that validated terminal envelope preserves its accounting;
             // any other nonzero exit remains a failed provider execution.
-            finish(null, protocol === 'launch' ? parseEnvelope(bytes, contract, config.resultFormat, code !== 0) : parsePlanningResult(bytes));
+            const result = protocol === 'launch' ? parseEnvelope(bytes, contract, config.resultFormat, code !== 0) : parsePlanningResult(bytes);
+            if (config.onTelemetry) {
+              // The child no longer keeps Node alive; the bounded receipt wait must.
+              runtimeTimer.ref?.();
+              let usage = protocol === 'launch' && (config.telemetryProvider !== 'claude' || config.resultFormat === 'claude-json') ? result.usage : undefined;
+              if (config.telemetryProvider === 'claude' && protocol !== 'launch') {
+                try { usage = claudeMeasuredUsage(JSON.parse(strictDecode(bytes))); } catch { /* Missing native usage remains unknown. */ }
+              }
+              Promise.resolve(config.onTelemetry(sessionTelemetry(config.telemetryProvider ?? 'host', usage))).then(
+                () => finish(classification ? new AgentContractError(classification) : null, result),
+                () => finish(new AgentContractError('output-invalid')),
+              );
+              return;
+            }
+            finish(null, result);
           } catch (error) {
             finish(error instanceof AgentContractError ? error : new AgentContractError('output-invalid'));
           }

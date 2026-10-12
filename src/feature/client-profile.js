@@ -52,5 +52,6 @@ export function matchesWorkerExecution(role, execution) {
 }
 
 export function executionForNode(plan, node) {
+  if (node.executionSelection && !node.executionSelection.recommendationOnly) return { client: node.executionSelection.harness, clientProfile: clientProfileFor(node.executionSelection.harness), executionSelection: node.executionSelection };
   return node.execution ?? { client: plan.client, clientProfile: plan.clientProfile };
 }

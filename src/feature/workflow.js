@@ -1,3 +1,4 @@
+import { resolveExecutionSelection } from '../models/execution-policy.js';
 import { assertGovernancePolicy, requireGovernance } from './governance.js';
 import {assertSelectedProtocolRefs, selectedProtocolStatus} from '../protocols/project.js';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
@@ -263,7 +264,8 @@ export function createFeatureWorkflow(input) {
         decomposition: request.decomposition,
       });
     } else {
-      const planningClient = await planningClientFor(immutableJson({ client: selectedClient, project: observed.root }));
+      const executionSelection = resolveExecutionSelection(config.orchestration.executionPolicy, 'coordination');
+      const planningClient = await planningClientFor(immutableJson({ client: executionSelection?.harness ?? selectedClient, project: observed.root, ...(executionSelection === undefined ? {} : {executionSelection}) }));
       const planner = createFeaturePlanner({ planningClient: {
         propose: contract => planningClient.propose(contract, { signal }),
       } });

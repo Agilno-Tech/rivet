@@ -188,13 +188,15 @@ export function createRivetApplication(input = {}) {
   };
   const planningClientFor = async request => {
     if (!request || typeof request !== 'object' || Array.isArray(request)
-      || Reflect.ownKeys(request).length !== 2
+      || Reflect.ownKeys(request).some(key => !['client','project','executionSelection'].includes(key))
       || !Object.hasOwn(request, 'client') || !Object.hasOwn(request, 'project')) fail();
+    if (request.executionSelection !== undefined) await harnesses.select(request.client, request.project);
     if (request.client === 'claude') {
       return createClaudePlanningClient({
         ...harnessSettings('claude'),
         expectedVersion: selectedVersion('claude'),
         worktree: executable(request.project),
+        executionSelection: request.executionSelection,
         environment: clientEnvironment,
         timeoutMs: FEATURE_PLANNING_TIMEOUT_MS,
       });
@@ -204,21 +206,23 @@ export function createRivetApplication(input = {}) {
         ...harnessSettings('codex'),
         expectedVersion: selectedVersion('codex'),
         worktree: executable(request.project),
+        executionSelection: request.executionSelection,
         environment: clientEnvironment,
         timeoutMs: FEATURE_PLANNING_TIMEOUT_MS,
       });
     }
     fail();
   };
-  const agentClientFor = (kind, clientProfile) => {
+  const agentClientFor = (kind, clientProfile, options = {}) => {
+    const executionSelection = options.executionSelection;
     if (!matchesClientProfile(kind, clientProfile)) fail();
     if (kind === 'claude') return createClaudeClient({
       ...harnessSettings('claude'),
       expectedVersion: selectedVersion('claude'),
+      executionSelection,
       args: [
         ...CLAUDE_ADAPTER_SYNTAX.args.slice(0, -1),
-        '--model', CLAUDE_FEATURE_PROFILE.model,
-        '--effort', 'low',
+        ...(executionSelection === undefined ? ['--model', CLAUDE_FEATURE_PROFILE.model, '--effort', 'low'] : []),
         '--permission-mode', 'acceptEdits',
         '{stdin}',
       ],
@@ -227,6 +231,7 @@ export function createRivetApplication(input = {}) {
     if (kind === 'codex') return createCodexClient({
       ...harnessSettings('codex'),
       expectedVersion: selectedVersion('codex'),
+      executionSelection,
       args: [...CODEX_ADAPTER_SYNTAX.args.slice(0, -1), '--sandbox', 'workspace-write', '{stdin}'],
       environment: clientEnvironment,
     });
@@ -278,9 +283,9 @@ export function createRivetApplication(input = {}) {
   const executeFeature = async (request, options) => {
     executorPromise ??= gitClient().then(client => createFeatureExecutor({
       gitClient: client,
-      clientFor: async (kind, profile, { project, signal }) => {
+      clientFor: async (kind, profile, { project, signal, executionSelection }) => {
         await harnesses.select(kind, project, { signal });
-        return agentClientFor(kind, profile);
+        return agentClientFor(kind, profile, {executionSelection});
       },
       resolveCommandExecutable,
       now,

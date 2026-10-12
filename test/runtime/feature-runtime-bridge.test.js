@@ -261,12 +261,24 @@ test('rehydrates the exact persisted approved plan without weakening validation'
   assert.throws(() => createFeatureRuntimeState({ config, run: persisted }));
 });
 
-test('executes all Workers sequentially on an isolated integration branch and stops before final approval', async t => {
+for (const managed of [false,true]) test(`executes all Workers sequentially with ${managed?'distinct managed profiles':'legacy profiles'} and stops before final approval`, async t => {
   const parentRoot = await realpath(await mkdtemp(join(tmpdir(), 'rivet-feature-executor-')));
   const root = join(parentRoot, 'project');
   await mkdir(root);
   t.after(() => rm(parentRoot, { recursive: true, force: true }));
   await cp(new URL('../fixtures/config/valid/.rivet/', import.meta.url), join(root, '.rivet'), { recursive: true });
+  if(managed){
+    const {parse,stringify}=await import('yaml');
+    const {managedPolicy}=await import('../fixtures/execution-policy.js');
+    const path=join(root,'.rivet','orchestration.yaml');
+    const orchestration=parse(await readFile(path,'utf8'));
+    const policy=managedPolicy();
+    policy.profiles.implementation={harness:'claude',model:'opus',effort:'high',capabilities:['read','edit','commands']};
+    policy.profiles.fix={harness:'claude',model:'sonnet',effort:'low',capabilities:['read','edit','commands']};
+    policy.routing['bounded-fix']='fix';
+    orchestration.executionPolicy=policy;
+    await writeFile(path,stringify(orchestration));
+  }
   await writeFile(join(root, 'README.md'), '# Runtime fixture\n');
   await writeFile(join(root, '.gitignore'), 'node_modules/\n');
   await writeFile(join(root, 'package.json'), JSON.stringify({
@@ -280,7 +292,7 @@ test('executes all Workers sequentially on an isolated integration branch and st
   const gitClient = await createGitClient({ gitExecutable: await gitExecutable() });
   const config = await loadProjectConfig(root);
   const request = workRequest();
-  const planner = createFeaturePlanner({ planningClient: { propose: async () => proposal(request) } });
+  const planner = createFeaturePlanner({ planningClient: { propose: async () => { const value=proposal(request); if(managed)value.workItems[0].executionClass='bounded-fix'; return value; } } });
   const featurePlan = await planner.propose({ config, workRequest: request, baselineCommit, client: 'claude' });
   const run = await persistedRunningRun(root, 'smart-agenda-live-run', request, featurePlan);
   const gateExecutable = join(dirname(root), 'bounded-gate');
@@ -296,15 +308,16 @@ test('executes all Workers sequentially on an isolated integration branch and st
       assert.equal(runner, 'npm');
       return gateExecutable;
     },
-    clientFor(kind, clientProfile) {
+    clientFor(kind, clientProfile, options) {
       assert.equal(kind, 'claude');
-      assert.deepEqual(clientProfile, featurePlan.clientProfile);
+      assert.equal(JSON.stringify(clientProfile), JSON.stringify(featurePlan.clientProfile));
       return Object.freeze({
         provider: kind,
         async launch(contract) {
           assert.equal(await readFile(join(contract.worktree.path, 'node_modules/installed'), 'utf8'), 'ready');
           launches.push({
             nodeId: contract.nodeId,
+            selection: options.executionSelection,
             branchBase: (await gitClient.inspectRepository(contract.worktree.path)).headSha,
             maxCostUsd: contract.budget.maxCostUsd,
           });
@@ -344,6 +357,7 @@ test('executes all Workers sequentially on an isolated integration branch and st
   assert.equal(verification.commitSha, accepted.commitSha);
   assert.ok(verification.checks.some(check => check.status === 'passed'));
   assert.equal(launches.length, 2);
+  if(managed)assert.deepEqual(launches.map(item=>[item.selection.model,item.selection.effort]),[['sonnet','low'],['opus','high']]);
   assert.deepEqual(launches.map(launch => launch.maxCostUsd), [2, 2]);
   const integrationEntry = (await gitClient.listWorktrees(root)).find(item => item.branch === 'feature/smart-agenda-builder-smart-agenda-live-run');
   assert.ok(integrationEntry);

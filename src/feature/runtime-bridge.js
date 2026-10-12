@@ -526,10 +526,10 @@ export function createFeatureExecutor(input) {
     const selectedClients = new Map();
     for (const planNode of run.featurePlan.nodes.filter(node => node.role === 'worker')) {
       const execution = executionForNode(run.featurePlan, planNode);
-      if (!selectedClients.has(execution.client)) {
-        const selected = await configured.clientFor(execution.client, execution.clientProfile, { project, signal });
+      if (!selectedClients.has(execution.executionSelection?.profileDigest ?? execution.client)) {
+        const selected = await configured.clientFor(execution.client, execution.clientProfile, { project, signal, ...(execution.executionSelection === undefined ? {} : {executionSelection: execution.executionSelection}) });
         if (!selected || selected.provider !== execution.client || typeof selected.launch !== 'function') fail();
-        selectedClients.set(execution.client, selected);
+        selectedClients.set(execution.executionSelection?.profileDigest ?? execution.client, selected);
       }
     }
 
@@ -589,7 +589,7 @@ export function createFeatureExecutor(input) {
           const planNode = planNodes.get(payload.nodeId);
           if (!planNode || planNode.role !== 'worker') fail();
           const execution = executionForNode(run.featurePlan, planNode);
-          const selected = selectedClients.get(execution.client);
+          const selected = selectedClients.get(execution.executionSelection?.profileDigest ?? execution.client);
           if (!selected) fail();
           const { version, ...sealedInput } = payload;
           const protocolContext = run.workRequest.contextRefs.some(ref => ref.startsWith('protocol:'))

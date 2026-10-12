@@ -264,3 +264,38 @@ The optional `orchestration.executionPolicy` has `version: 1`, `mode: managed`, 
 The schema accepts effort labels `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`. Syntactic acceptance is separate from model/client support. No model is selected by default. Explicit routes must reference existing profiles, and advisory routes cannot request edit or command capabilities.
 
 `resolveExecutionSelection` returns an immutable, versioned selection with policy/profile identity and a recorded reason; `executionPolicyIdentity` pins the complete policy in a proposal. Validation rechecks these identities against current configuration when loading a governed plan. The policy does not widen role budgets, create a second scheduler, or enable dispatch by itself. See [Models](./models.md#managed-execution-selection-contract) for legacy and host behavior.
+
+### Managed model dispatch and session telemetry
+
+When `orchestration.executionPolicy` is configured, the approved `coordination`
+route selects the planning model and effort. Each worker uses its pinned execution
+selection; distinct profiles on the same harness remain distinct executions.
+Standalone PR reviews use the project's `independent-review` route. An explicit
+review harness that conflicts with that route is rejected. Host selections remain
+recommendations. Without an execution policy, the existing fixed client profiles
+and serial workflow remain in effect.
+
+Claude receives `--model` and `--effort`; Codex receives `--model` and a single
+bounded `--config model_reasoning_effort="<level>"` setting. Rivet never accepts
+arbitrary Codex configuration through an effort field. Required options are checked
+against the installed executable's help before dispatch. Missing options fail;
+there is no automatic model or account fallback. Requested effort is not a claim
+about effective provider effort: model support and provider caps can reject or
+clamp settings. See the [Claude CLI reference](https://code.claude.com/docs/en/cli-reference),
+[Claude model configuration](https://code.claude.com/docs/en/model-config), and
+[Codex configuration reference](https://developers.openai.com/codex/config-reference/).
+
+Native adapters expose version 1 session telemetry through an optional
+`onTelemetry` callback, awaited before completing the call. This side channel
+preserves existing result-envelope readers. Every metric carries its value, source,
+and assurance. Claude's native nested-agent totals are measured tokens and a
+native cost estimate. Codex's current result-envelope tokens are model-reported;
+its native cost is unknown (`null`). Missing telemetry and host measurements are
+unknown, never measured zero. Native token totals are cumulative usage, not
+current context occupancy; context usage and window size remain unknown.
+
+The managed-dispatch checks use subprocess fixtures, including missing-option
+failures, for planning, workers and reviews. Installed CLI help/version probes on
+2026-10-12 covered Claude `2.1.280` and Codex `0.162.0-alpha.17.2`; these probes are
+not authenticated execution or billing evidence. No live paid call was made for
+this change.
