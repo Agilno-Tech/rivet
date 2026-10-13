@@ -39,6 +39,17 @@ export const catalog = {
       ['approval-output-failure', 'models configure asynchronous output error during approval refuses save'],
       ['explicit-missing-settings', 'models configure missing model and reasoning are clarified rather than defaulted silently'],
     ]),
+    scenario('model-policy-defaults', 'test/cli/model-policy.test.js', [
+      ['detected-defaults', 'models configure without prose proposes detected Claude defaults without translation and requires approval'],
+      ['saved-policy-first', 'models configure without prose reuses existing routes and limits even without installed harnesses'],
+      ['codex-explicit-model', 'models configure Codex defaults request one exact model or use explicit Rivet model setting'],
+      ['editable-approval', 'models configure default proposal can be edited or declined without translating'],
+      ['invalid-and-cancelled', 'models configure defaults refuse absent harnesses invalid model settings and interrupted approval'],
+    ]),
+    scenario('model-provider-detection', 'test/cli/models.test.js', [
+      ['local-evidence', 'models list detects every supported provider from local evidence without leaking credentials'],
+      ['honest-readiness', 'models list rejects blank and unsafe endpoint evidence without claiming authentication'],
+    ]),
     scenario('model-policy-translator', 'test/runtime/model-policy-client.test.js', [
       ['bounded-native-request', 'model policy translator uses literal stdin isolated cwd schema and read-only no-tools arguments'],
       ['invalid-and-timeout', 'model policy translator rejects extra output authority and bounds native timeout'],

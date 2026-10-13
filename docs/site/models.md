@@ -1,6 +1,6 @@
 # Model providers
 
-For task routing, [describe your model and reasoning policy](#model-and-reasoning-policy) with `rivet models configure`. Rivet shows the mapping for approval before saving.
+For task routing, [review detected defaults or describe your model and reasoning policy](#model-and-reasoning-policy) with `rivet models configure`. Rivet shows the mapping for approval before saving.
 
 Rivet's registry distinguishes coding harnesses, hosted APIs, local models, and compatible endpoints. Model IDs are configured by the user rather than restricted to a list of product model names.
 
@@ -20,6 +20,20 @@ rivet models list --json
 | `openai-compatible` | Compatible API, including local endpoints | One-shot text delegation adapter |
 
 These adapters have automated protocol and transport coverage; live provider qualification remains open. A listed provider is not a claim that its model was called or its account authenticated.
+
+### Local provider detection
+
+`models list` and `models configure` report local evidence for all seven providers. Claude Code and Codex use Rivet's existing executable and CLI compatibility probes. Other providers use these environment settings:
+
+| Provider | Detection evidence |
+| --- | --- |
+| Anthropic | `ANTHROPIC_API_KEY` is nonempty |
+| OpenAI | `OPENAI_API_KEY` is nonempty |
+| Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` is nonempty |
+| Ollama | `OLLAMA_HOST` contains a supported endpoint |
+| OpenAI-compatible | `OPENAI_BASE_URL` contains a supported endpoint |
+
+Detection shows evidence names, never credential values. It does not contact API endpoints, validate authentication, list account-accessible models, or scan for local servers. Missing evidence means *not detected*, not unsupported. API and local providers remain available for text delegation; task execution uses Claude Code or Codex.
 
 ## Validate a profile
 
@@ -158,7 +172,17 @@ Registering metadata does not install an executor. Custom executors, broader rol
 
 ## Model and reasoning policy
 
-Describe your preferences in plain language from a configured project:
+Start with detected defaults from a configured project:
+
+```sh
+rivet models configure
+```
+
+Rivet detects installed Claude Code and Codex harnesses and shows local configuration evidence for the other supported providers. A saved routing policy takes precedence. For a new policy, choose a harness if both are installed, then review or edit the proposed routes before approving the save. This defaults flow makes no model call.
+
+Claude defaults use `opus` for coordination and independent review, `sonnet` for implementation, and `haiku` for bounded fixes, with high requested reasoning. These are [Claude Code model aliases](https://code.claude.com/docs/en/model-config), resolved by the provider rather than pinned model versions. For Codex, set `RIVET_CODEX_MODEL` to an exact model ID or enter it once when prompted; the initial proposal reuses it across the four routes. You can change the proposal before saving. Use `--harness=claude` or `--harness=codex` to select the initial harness when creating a policy; an existing policy still takes precedence.
+
+Or describe your preferences in plain language:
 
 ```sh
 rivet models configure "Use high reasoning throughout. Use Astra or Opus for coordination, technical decisions and independent review; Sol for substantial implementation and complex debugging; Luna for bounded fixes, focused tests and investigations."
@@ -169,7 +193,7 @@ Rivet uses an installed Claude Code or Codex CLI to propose the mapping. If both
 The flow is:
 
 1. Describe the policy.
-2. Resolve alternatives and any model names that need an exact harness/model ID. Existing configured profiles can be reused; Rivet does not guess a new model ID from a nickname.
+2. Resolve alternatives and any model names that need an exact harness/model ID. Existing configured profiles and the known Claude aliases can be reused. Rivet asks about unknown nicknames instead of substituting another model.
 3. Review all four routes, their exact models and reasoning levels, and any interpretation of your description.
 4. Approve the mapping to save it in `.rivet/orchestration.yaml`, or decline to leave configuration unchanged.
 

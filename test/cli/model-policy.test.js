@@ -57,3 +57,88 @@ test('models configure partial policy translation receives existing exact routin
  s.overrides.models.translatePolicy=async input=>{assert.equal(JSON.stringify(input.routing),JSON.stringify(previous.routing));assert.equal(input.profiles[input.routing.coordination].model,'existing-model');return {routes:routes.map(route=>({route,candidates:[{modelReference:previous.routing[route],harness:'codex',effort:'high'}],source:partial,rationale:'Preserve existing routed profile.'})),assumptions:[]};};
  assert.equal(await main(['models','configure',partial],s.overrides),0);
 });
+
+test('models configure without prose proposes detected Claude defaults without translation and requires approval',async t=>{
+ const root=await fixture(t),s=services(root);s.overrides.env={};s.overrides.harnesses.discover=async()=>[{kind:'claude',executable:'/opt/claude'}];
+ s.overrides.modelPolicyPrompt=async q=>{s.questions.push(q);if(q.id==='default-action')return 'keep';if(q.id==='approve-policy')return true;throw Error(q.id);};
+ assert.equal(await main(['models','configure'],s.overrides),0);assert.equal(s.calls,0);
+ const policy=YAML.parse(await readFile(join(root,'.rivet/orchestration.yaml'),'utf8')).executionPolicy;
+ assert.deepEqual(routes.map(r=>policy.profiles[policy.routing[r]].model),['opus','opus','sonnet','haiku']);
+ assert.ok(routes.every(r=>policy.profiles[policy.routing[r]].effort==='high'));
+ assert.match(s.messages.join('\n'),/provider-resolved aliases/);assert.ok(s.questions.some(q=>q.id==='approve-policy'));
+});
+test('models configure without prose reuses existing routes and limits even without installed harnesses',async t=>{
+ const root=await fixture(t),s=services(root),path=join(root,'.rivet/orchestration.yaml');
+ const previous=compileModelPolicy(Object.fromEntries(routes.map(route=>[route,{harness:'codex',model:'existing-model',effort:'medium'}])));
+ const document=YAML.parseDocument(await readFile(path,'utf8'));document.set('executionPolicy',previous);await writeFile(path,String(document));
+ s.overrides.harnesses.discover=async()=>[];s.overrides.modelPolicyPrompt=async q=>q.id==='default-action'?'keep':q.id==='approve-policy'?true:null;
+ assert.equal(await main(['models','configure'],s.overrides),0);assert.equal(s.calls,0);assert.deepEqual(YAML.parse(await readFile(path,'utf8')).executionPolicy,JSON.parse(JSON.stringify(previous)));
+});
+test('models configure Codex defaults request one exact model or use explicit Rivet model setting',async t=>{
+ for(const configured of [false,true]){const root=await fixture(t),s=services(root);s.overrides.env=configured?{RIVET_CODEX_MODEL:'configured-exact',OPENAI_MODEL:'wrong-provider'}:{};
+ s.overrides.modelPolicyPrompt=async q=>{s.questions.push(q);return q.id==='default-codex-model'?'entered-exact':q.id==='default-action'?'keep':q.id==='approve-policy'?true:null;};
+ assert.equal(await main(['models','configure'],s.overrides),0);assert.equal(s.calls,0);assert.equal(s.questions.filter(q=>q.id==='default-codex-model').length,configured?0:1);
+ const policy=YAML.parse(await readFile(join(root,'.rivet/orchestration.yaml'),'utf8')).executionPolicy;assert.ok(routes.every(r=>policy.profiles[policy.routing[r]].model===(configured?'configured-exact':'entered-exact')));
+ }
+});
+test('models configure default proposal can be edited or declined without translating',async t=>{
+ for(const approve of [false,true]){const root=await fixture(t),s=services(root),path=join(root,'.rivet/orchestration.yaml'),before=await readFile(path,'utf8');s.overrides.env={RIVET_CODEX_MODEL:'initial-exact'};
+ let editing=false;s.overrides.modelPolicyPrompt=async q=>{if(q.id==='default-action')return 'edit';if(q.id==='edit-route'){if(editing)return 'done';editing=true;return 'bounded-fix';}if(q.id==='edit-harness')return 'codex';if(q.id==='edit-model')return 'changed-exact';if(q.id==='edit-effort')return 'low';if(q.id==='approve-policy')return approve;throw Error(q.id);};
+ assert.equal(await main(['models','configure'],s.overrides),0);assert.equal(s.calls,0);
+ if(!approve)assert.equal(await readFile(path,'utf8'),before);else{const policy=YAML.parse(await readFile(path,'utf8')).executionPolicy;assert.equal(policy.profiles[policy.routing['bounded-fix']].model,'changed-exact');assert.equal(policy.profiles[policy.routing['bounded-fix']].effort,'low');}
+ }
+});
+test('models configure defaults refuse absent harnesses invalid model settings and interrupted approval',async t=>{
+ for(const mode of ['absent','invalid','interrupt']){const root=await fixture(t),s=services(root),path=join(root,'.rivet/orchestration.yaml'),before=await readFile(path,'utf8'),controller=new AbortController();s.overrides.env={RIVET_CODEX_MODEL:mode==='invalid'?'sk-ant-api03-'+ 'x'.repeat(100):'exact-model'};
+ if(mode==='absent')s.overrides.harnesses.discover=async()=>[];s.overrides.models.signal=controller.signal;
+ s.overrides.modelPolicyPrompt=async q=>{if(q.id==='default-action')return 'keep';if(q.id==='approve-policy'){controller.abort();return true;}return null;};
+ assert.notEqual(await main(['models','configure'],s.overrides),0);assert.equal(s.calls,0);assert.equal(await readFile(path,'utf8'),before);assert.doesNotMatch(s.messages.join('\n'),/sk-ant-api03-/);
+ }
+});
+
+test('models configure prose offers defaults only for unspecified models and high reasoning first',async t=>{
+ const root=await fixture(t),s=services(root),policyText='Use sensible defaults for all work.';
+ s.overrides.env={};s.overrides.harnesses.discover=async()=>[{kind:'claude',executable:'/opt/claude'}];s.overrides.harnesses.select=async()=>({kind:'claude',executable:'/opt/claude'});
+ s.overrides.models.translatePolicy=async()=>({routes:routes.map(route=>({route,candidates:[{modelReference:null,harness:null,effort:null}],source:policyText,rationale:'User requests defaults.'})),assumptions:[]});
+ s.overrides.modelPolicyPrompt=async q=>{if(q.id.startsWith('reference')){assert.equal(q.defaultValue,{'reference-coordination':'opus','reference-independent-review':'opus','reference-implementation':'sonnet','reference-bounded-fix':'haiku'}[q.id]);return q.defaultValue;}if(q.id.startsWith('effort')){assert.equal(q.choices[0].value,'high');return 'high';}if(q.id==='approve-policy')return true;throw Error(q.id);};
+ assert.equal(await main(['models','configure',policyText],s.overrides),0);
+});
+test('models configure prose never suggests an unrelated default for an explicit unknown alias',async t=>{
+ const root=await fixture(t),s=services(root);s.overrides.env={RIVET_CODEX_MODEL:'unrelated-default'};const prompt=s.overrides.modelPolicyPrompt;
+ s.overrides.modelPolicyPrompt=async q=>{if(q.id.startsWith('model'))assert.equal(q.defaultValue,undefined);return prompt(q);};
+ assert.equal(await main(['models','configure',prose],s.overrides),0);
+});
+test('models configure resolves recognized installed Claude aliases and preserves exact configured identity first',async t=>{
+ const root=await fixture(t),s=services(root),policyText='Use Opus with high reasoning for all work.';
+ s.overrides.env={};s.overrides.harnesses.discover=async()=>[{kind:'claude',executable:'/opt/claude'}];s.overrides.harnesses.select=async()=>({kind:'claude',executable:'/opt/claude'});
+ s.overrides.models.translatePolicy=async()=>({routes:routes.map(route=>({route,candidates:[{modelReference:'Opus',harness:'claude',effort:'high'}],source:policyText,rationale:'Requested Claude alias.'})),assumptions:[]});
+ s.overrides.modelPolicyPrompt=async q=>{assert.equal(q.id,'approve-policy');return true;};
+ assert.equal(await main(['models','configure',policyText],s.overrides),0);
+ const policy=YAML.parse(await readFile(join(root,'.rivet/orchestration.yaml'),'utf8')).executionPolicy;assert.ok(routes.every(r=>policy.profiles[policy.routing[r]].model==='opus'));
+});
+test('models configure both installed harnesses require a default choice unless explicitly selected',async t=>{
+ for(const flag of [false,true]){const root=await fixture(t),s=services(root);s.overrides.env={RIVET_CODEX_MODEL:'codex-exact'};s.overrides.harnesses.discover=async()=>[{kind:'claude',executable:'/opt/claude'},{kind:'codex',executable:'/opt/codex'}];
+ s.overrides.modelPolicyPrompt=async q=>{s.questions.push(q);return q.id==='default-harness'?'codex':q.id==='default-action'?'keep':q.id==='approve-policy'?true:null;};
+ assert.equal(await main(['models','configure',...(flag?['--harness=codex']:[])],s.overrides),0);assert.equal(s.questions.filter(q=>q.id==='default-harness').length,flag?0:1);assert.equal(s.calls,0);
+ const policy=YAML.parse(await readFile(join(root,'.rivet/orchestration.yaml'),'utf8')).executionPolicy;assert.ok(routes.every(r=>policy.profiles[policy.routing[r]].harness==='codex'));
+ }
+});
+test('models configure defaults preserve approval fencing for changed files and failed output',async t=>{
+ for(const mode of ['changed','output','eof']){const root=await fixture(t),s=services(root),path=join(root,'.rivet/orchestration.yaml'),before=await readFile(path,'utf8');s.overrides.env={RIVET_CODEX_MODEL:'codex-exact'};
+ s.overrides.modelPolicyPrompt=async q=>{if(q.id==='default-action')return 'keep';if(q.id==='approve-policy'){if(mode==='eof')return null;if(mode==='changed')await writeFile(path,before+'\n# concurrent edit\n');return true;}throw Error(q.id);};
+ if(mode==='output')s.overrides.output.log=()=>{throw Error('EPIPE');};
+ assert.notEqual(await main(['models','configure'],s.overrides),0);assert.equal(await readFile(path,'utf8'),before+(mode==='changed'?'\n# concurrent edit\n':''));
+ }
+});
+
+test('models configure recognized alias does not replace ambiguous configured identities',async t=>{
+ const root=await fixture(t),s=services(root),path=join(root,'.rivet/orchestration.yaml'),policyText='Use opus with high reasoning for all work.';
+ const previous=JSON.parse(JSON.stringify(compileModelPolicy(Object.fromEntries(routes.map(route=>[route,{harness:'claude',model:'opus',effort:'high'}])))));
+ previous.profiles.opus={harness:'claude',model:'another-exact-model',effort:'high',capabilities:['read']};
+ const document=YAML.parseDocument(await readFile(path,'utf8'));document.set('executionPolicy',previous);await writeFile(path,String(document));
+ s.overrides.env={};s.overrides.harnesses.discover=async()=>[{kind:'claude',executable:'/opt/claude'}];s.overrides.harnesses.select=async()=>({kind:'claude',executable:'/opt/claude'});
+ s.overrides.models.translatePolicy=async()=>({routes:routes.map(route=>({route,candidates:[{modelReference:'opus',harness:'claude',effort:'high'}],source:policyText,rationale:'Explicit ambiguous reference.'})),assumptions:[]});
+ s.overrides.modelPolicyPrompt=async q=>{s.questions.push(q);if(q.id.startsWith('model'))return 'chosen-exact';if(q.id.startsWith('harness'))return 'claude';if(q.id==='approve-policy')return true;throw Error(q.id);};
+ assert.equal(await main(['models','configure',policyText],s.overrides),0,s.messages.join('\n'));assert.equal(s.questions.filter(q=>q.id.startsWith('model')).length,1);
+ const policy=YAML.parse(await readFile(path,'utf8')).executionPolicy;assert.ok(routes.every(r=>policy.profiles[policy.routing[r]].model==='chosen-exact'));
+});

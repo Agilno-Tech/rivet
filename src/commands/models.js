@@ -1,4 +1,6 @@
 import { configureModelPolicy } from './model-policy.js';
+import { detectModelProviders, providerDetectionSummary } from '../models/detection.js';
+import { discoverHarnesses } from '../runtime/harness-discovery.js';
 import { resolveRoleProfile } from '../models/profiles.js';
 import { humanRunCommand } from './human-run.js';
 import { resolve } from 'node:path';
@@ -50,7 +52,12 @@ export async function modelsCommand(parsed, dependencies) {
   }
   const registry = createModelRegistry();
   let result;
-  if (subcommand === 'list') result = { providers: registry.list() };
+  if (subcommand === 'list') {
+    const projectRoot = dependencies.cwd();
+    const harnesses = dependencies.harnesses ? await dependencies.harnesses.discover(projectRoot)
+      : await discoverHarnesses({ env: dependencies.env, projectRoot });
+    result = { providers: detectModelProviders({ environment: dependencies.env, harnesses }, registry) };
+  }
   else {
     const input = await readProfile(resolve(dependencies.cwd(), flags.profile));
     try { result = registry.resolve(input); }
@@ -58,7 +65,7 @@ export async function modelsCommand(parsed, dependencies) {
   }
   if (flags.json) dependencies.output.json({ ok: true, result });
   else if (subcommand === 'list') {
-    dependencies.output.log(result.providers.map(provider => `${provider.id}: ${provider.label} (${provider.kind}; ${provider.execution}; not live verified)`).join('\n'));
+    dependencies.output.log(providerDetectionSummary(result.providers));
   } else {
     dependencies.output.log(`Profile valid: ${result.profile.provider} / ${result.profile.model}. Execution is not ready: ${result.reasons.join(', ')}. No model was called.`);
   }
