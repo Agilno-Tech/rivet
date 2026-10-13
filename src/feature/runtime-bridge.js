@@ -1,3 +1,4 @@
+import {admitted,admissionKey} from '../runtime/machine-admission.js';
 import {captureCheckpoint,verifyCheckpoint} from './checkpoints.js';
 import { renderBranchName } from './branch-naming.js';
 import { requireGovernance } from './governance.js';
@@ -598,7 +599,7 @@ export function createFeatureExecutor(input) {
           const { version, ...sealedInput } = payload;
           const protocolContext = run.workRequest.contextRefs.some(ref => ref.startsWith('protocol:'))
             ? createProtocolPresentation({sourceRoot: project, refs: run.workRequest.contextRefs}) : undefined;
-          return await selected.launch(sealedInput, {...options, ...(protocolContext ? {protocolContext} : {})});
+          return await admitted('agentExecutions',`worker-${admissionKey([run.runId,payload.nodeId,payload.session?.id??payload.worktree.reservationId])}`,{...options,generation:payload.session?.generation??1},admission=>{const {generation,...launchOptions}=admission;return selected.launch(sealedInput,{...launchOptions,...(protocolContext?{protocolContext}:{})});});
         }
         catch (error) {
           const detail = typeof error?.details?.reason === 'string' ? `:${error.details.reason}` : '';

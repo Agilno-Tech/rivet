@@ -40,7 +40,7 @@ test('constructs one inert narrow application surface with explicit host work ca
 
   assert.equal(effects, 0);
   assert.deepEqual(Object.keys(application).sort(), [
-    'cwd', 'env', 'feature', 'fetch', 'fs', 'harnesses', 'resolveCommandExecutable', 'work',
+    'cwd', 'env', 'feature', 'fetch', 'fs', 'harnesses', 'machine','orchestration','resolveCommandExecutable', 'work',
   ]);
   assert.equal(typeof application.resolveCommandExecutable, 'function');
   assert.deepEqual(Object.keys(application.harnesses).sort(), ['discover', 'select']);
@@ -50,7 +50,7 @@ test('constructs one inert narrow application surface with explicit host work ca
     'start', 'status', 'watch',
   ]);
   assert.deepEqual(Object.keys(application.work).sort(), [
-    'nextAction', 'prepare', 'recover', 'status', 'submitResult', 'verify',
+    'checkpoint','handoff','nextAction', 'prepare', 'recover', 'status', 'submitResult', 'verify',
   ]);
   for (const retained of ['push', 'merge', 'mergeDefault', 'deploy', 'providerWrite', 'trackerWrite']) {
     assert.equal(Object.hasOwn(application.feature, retained), false);
@@ -175,7 +175,8 @@ test('exposes one injected high-level feature workflow through the same applicat
   assert.deepEqual(await application.feature.propose({ source: 'fixture' }), { method: 'propose' });
   assert.deepEqual(calls, [{ method: 'propose', input: { source: 'fixture' } }]);
   for (const method of ['propose', 'start', 'watch', 'status', 'resume', 'cancel']) {
-    assert.equal(application.feature[method], featureWorkflow[method]);
+    if(['watch','resume','cancel'].includes(method))assert.notEqual(application.feature[method], featureWorkflow[method]);
+    else assert.equal(application.feature[method], featureWorkflow[method]);
   }
 });
 
@@ -203,4 +204,26 @@ test('default workflow reaches only the selected live planning adapter without c
     );
     await assert.rejects(() => import('node:fs/promises').then(({ lstat }) => lstat(join(root, '.git', 'rivet'))));
   }
+});
+
+test('concurrent enrolled calls own one run task slot and release it after settlement',async t=>{
+ const parent=await realpath(await mkdtemp(join(tmpdir(),'rivet-task-owner-')));const root=join(parent,'project');await mkdir(root);t.after(()=>import('node:fs/promises').then(fs=>fs.rm(parent,{recursive:true,force:true})));
+ let finish;const barrier=new Promise(resolve=>{finish=resolve;});let calls=0;
+ const featureWorkflow=Object.fromEntries(['propose','start','watch','status','resume','cancel'].map(method=>[method,async()=>{if(method==='resume'){calls++;await barrier;}return {status:'blocked'};}]));
+ const app=createRivetApplication({env:{RIVET_MACHINE_STATE_ROOT:join(parent,'machine')},featureWorkflow});await app.machine.register({projectRoot:root,runId:'same-run',deadlineMs:Date.now()+30000});
+ const attempts=Promise.allSettled([app.feature.resume({project:root,runId:'same-run'}),app.feature.resume({project:root,runId:'same-run'})]);
+ await new Promise(resolve=>setTimeout(resolve,150));finish();const outcomes=await attempts;
+ assert.equal(calls,1);assert.equal(outcomes.filter(x=>x.status==='fulfilled').length,1);assert.equal((await app.machine.inspect()).claims.filter(c=>c.resource==='activeTasks'&&c.status==='held').length,0);
+ await app.feature.resume({project:root,runId:'same-run'});assert.equal(calls,2);assert.equal((await app.machine.inspect()).claims.filter(c=>c.resource==='activeTasks'&&c.status==='held').length,0);
+});
+
+test('public cancel cleans queued and undispatched claims while preserving unknown writers',async t=>{
+ const parent=await realpath(await mkdtemp(join(tmpdir(),'rivet-task-cancel-')));const root=join(parent,'project');await mkdir(root);t.after(()=>import('node:fs/promises').then(fs=>fs.rm(parent,{recursive:true,force:true})));
+ const featureWorkflow=Object.fromEntries(['propose','start','watch','status','resume','cancel'].map(method=>[method,async()=>({status:method==='cancel'?'cancelled':'running'})]));
+ const app=createRivetApplication({env:{RIVET_MACHINE_STATE_ROOT:join(parent,'machine')},featureWorkflow});const r=await app.machine.register({projectRoot:root,runId:'cancel-run',deadlineMs:Date.now()+30000,machineLimits:{activeTasks:4,agentExecutions:1,heavyVerification:1,dependencyInstalls:1}});
+ const request=(resource,key)=>app.machine.request({registrationId:r.id,resource,idempotencyKey:key,generation:1});
+ const task=await request('activeTasks','task');const writer=await request('agentExecutions','writer');await app.machine.dispatch({claimId:writer.id,generation:1});const queued=await request('agentExecutions','queued');const safe=await request('heavyVerification','safe');
+ assert.equal((await app.feature.cancel({project:root,runId:r.runId})).status,'cancelled');const claims=(await app.machine.inspect()).claims;
+ assert.equal(claims.find(c=>c.id===writer.id).status,'held');assert.equal(claims.find(c=>c.id===task.id).status,'held');assert.equal(claims.find(c=>c.id===queued.id).status,'cancelled');assert.equal(claims.find(c=>c.id===safe.id).status,'released');
+ await assert.rejects(request('dependencyInstalls','new'));
 });

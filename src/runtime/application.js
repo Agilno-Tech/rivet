@@ -1,3 +1,6 @@
+import {homedir} from 'node:os';
+import {createManagedOrchestration} from './managed-orchestration.js';
+import {withMachineContext,admitted,admissionKey,taskAdmission} from './machine-admission.js';
 import { isExecutionCompatibleCwd, isProjectExecutable } from '../config/commands.js';
 import { createTrackerProviderFactory } from '../adapters/factory.js';
 import { createNodeProviderTransport } from '../adapters/node-transport.js';
@@ -186,7 +189,7 @@ export function createRivetApplication(input = {}) {
     const value = env[`RIVET_${kind.toUpperCase()}_INTERPRETER`];
     return value === undefined ? {} : { interpreter: executable(value) };
   };
-  const planningClientFor = async request => {
+  const rawPlanningClientFor = async request => {
     if (!request || typeof request !== 'object' || Array.isArray(request)
       || Reflect.ownKeys(request).some(key => !['client','project','executionSelection'].includes(key))
       || !Object.hasOwn(request, 'client') || !Object.hasOwn(request, 'project')) fail();
@@ -212,6 +215,26 @@ export function createRivetApplication(input = {}) {
       });
     }
     fail();
+  };
+  const planningClientFor = async (request) => {
+    const client = await rawPlanningClientFor(request);
+    return {
+      ...client,
+      propose: (contract, options = {}) =>
+        withMachineContext(
+          managed.coordinator,
+          request.project,
+          null,
+          (signal) =>
+            admitted(
+              'agentExecutions',
+              `planning-${admissionKey(contract)}`,
+              { ...options, signal },
+              (admittedOptions) => client.propose(contract, admittedOptions),
+            ),
+          options,
+        ),
+    };
   };
   const agentClientFor = (kind, clientProfile, options = {}) => {
     const executionSelection = options.executionSelection;
@@ -309,28 +332,126 @@ export function createRivetApplication(input = {}) {
     }));
     return workflowPromise;
   };
-  const workflow = configured.featureWorkflow !== undefined
+  const rawWorkflow = configured.featureWorkflow !== undefined
     ? captureFeatureWorkflow(configured.featureWorkflow)
     : Object.freeze(Object.fromEntries(FEATURE_WORKFLOW_METHODS.map(method => [
       method, async (...args) => (await resolvedWorkflow())[method](...args),
     ])));
 
-  const hostExecution = Object.freeze(Object.fromEntries(
-    ['prepare', 'nextAction', 'status', 'submitResult', 'verify', 'recover', 'checkpoint', 'handoff'].map(method => [
-      method,
-      async (...args) => {
-        hostExecutionPromise ??= gitClient().then(client => createHostExecution({
-          gitClient: client,
-          now,
-          resolveCommandExecutable,
-          environment: clientEnvironment,
-        }));
-        const service = await hostExecutionPromise;
-        if (typeof service[method] !== 'function') fail();
-        return service[method](...args);
-      },
-    ]),
-  ));
+  const workflow = Object.freeze(
+    Object.fromEntries(
+      FEATURE_WORKFLOW_METHODS.map((method) => [
+        method,
+        !['resume', 'watch','cancel'].includes(method)
+          ? rawWorkflow[method]
+          : async (request, options = {}) => {
+              if(method==='cancel'){
+                const result=await rawWorkflow.cancel(request,options);
+                const registration=(await managed.coordinator.inspect()).registrations.find(r=>r.projectRoot===request.project&&r.runId===request.runId);
+                if(registration&&result.status==='cancelled')await managed.coordinator.cancelRegistration(registration.id);
+                return result;
+              }
+              return withMachineContext(
+                managed.coordinator,
+                request.project,
+                request.runId,
+                (signal) =>
+                  taskAdmission(() =>
+                    rawWorkflow[method](request, { ...options, signal }),
+                  ),
+                options,
+              );
+            },
+      ]),
+    ),
+  );
+
+  const hostExecution = Object.freeze(
+    Object.fromEntries(
+      [
+        'prepare',
+        'nextAction',
+        'status',
+        'submitResult',
+        'verify',
+        'recover',
+        'checkpoint',
+        'handoff',
+      ].map((method) => [
+        method,
+        async (...args) => {
+          hostExecutionPromise ??= gitClient().then((client) =>
+            createHostExecution({
+              gitClient: client,
+              now,
+              resolveCommandExecutable,
+              environment: clientEnvironment,
+              machine: managed.coordinator,
+            }),
+          );
+          const service = await hostExecutionPromise;
+          if (typeof service[method] !== 'function') fail();
+          if (
+            [
+              'prepare',
+              'nextAction',
+              'verify',
+              'handoff',
+              'submitResult',
+              'checkpoint',
+            ].includes(method)
+          )
+            return withMachineContext(
+              managed.coordinator,
+              args[0].project,
+              args[0].runId,
+              async () => {
+                let result;
+                let failed = false;
+                try {
+                  result = await service[method](...args);
+                  return result;
+                } catch (error) {
+                  failed = true;
+                  throw error;
+                } finally {
+                  if (
+                    failed || Date.now()>=(await managed.coordinator.inspect()).registrations.find(r=>r.projectRoot===args[0].project&&r.runId===args[0].runId)?.deadlineMs ||
+                    [
+                      'blocked',
+                      'awaiting-final-approval',
+                      'cancelled',
+                    ].includes(result?.status)
+                  ) {
+                    const state = await managed.coordinator.inspect();
+                    const registration = state.registrations.find(
+                      (r) =>
+                        r.projectRoot === args[0].project &&
+                        r.runId === args[0].runId,
+                    );
+                    for (const claim of state.claims.filter(
+                      (c) =>
+                        c.registrationId === registration?.id &&
+                        c.resource === 'activeTasks' &&
+                        c.status === 'held',
+                    ))
+                      await managed.coordinator
+                        .release({
+                          claimId: claim.id,
+                          generation: claim.generation,
+                          completed: true,
+                        })
+                        .catch(() => {});
+                  }
+                }
+              },
+              { nonblocking: true,cleanup:['nextAction','checkpoint','submitResult'].includes(method)||method==='handoff'&&['observe','fence','stop','release'].includes(args[0]?.input?.operation) },
+            );
+          return service[method](...args);
+        },
+      ]),
+    ),
+  );
 
   const feature = Object.freeze({
     ...workflow,
@@ -354,5 +475,6 @@ export function createRivetApplication(input = {}) {
     },
   });
 
-  return Object.freeze({ cwd, env, fs, fetch, feature, work: hostExecution, harnesses, resolveCommandExecutable });
+  const managed=createManagedOrchestration({root:env.RIVET_MACHINE_STATE_ROOT??join(env.HOME??homedir(),'.rivet-machine'),gitClient,workflow,work:hostExecution,now:()=>Date.parse(now())});
+  return Object.freeze({ cwd, env, fs, fetch, feature, work: hostExecution, harnesses, resolveCommandExecutable,orchestration:{managed},machine:managed.coordinator });
 }

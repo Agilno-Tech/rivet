@@ -1,3 +1,5 @@
+import {withTerminalInterruption} from '../cli/interrupt.js';
+import {resolve} from 'node:path';
 import { watchOrchestration } from '../runtime/supervisor.js';
 import { CliError, EXIT_CODES } from '../cli/output.js';
 
@@ -30,7 +32,92 @@ function emitCliResult(parsed, dependencies, result) {
   return EXIT_CODES.SUCCESS;
 }
 
+async function managedCommand(parsed, dependencies) {
+  const service = dependencies.orchestration.managed;
+  const { subcommand, flags, operands } = parsed;
+  const allowed = {
+    register: [
+      'project',
+      'run',
+      'deadline-ms',
+      'limits-json',
+      'machine-limits-json',
+      'json',
+    ],
+    status: ['json'],
+    watch: ['deadline-ms', 'max-ticks', 'interval-ms', 'json'],
+    pause: ['json'],
+    resume: ['json'],
+    limits: ['limits-json', 'json'],
+    renew: ['deadline-ms', 'json'],
+  };
+  if (
+    !allowed[subcommand] ||
+    Object.keys(flags).some((k) => !allowed[subcommand].includes(k))
+  )
+    cliFailure('Invalid managed orchestration options.');
+  const noId = ['register', 'limits'].includes(subcommand);
+  if (
+    noId
+      ? operands.length !== 0
+      : subcommand === 'status'
+        ? operands.length > 1
+        : operands.length !== 1
+  )
+    cliFailure('Supply exactly one registration ID for this operation.');
+  const json = (name) => {
+    try {
+      return JSON.parse(flags[name]);
+    } catch {
+      cliFailure(`Invalid ${name}.`);
+    }
+  };
+  let result;
+  if (subcommand === 'register')
+    result = await service.register({
+      projectRoot: resolve(dependencies.cwd(), flags.project ?? '.'),
+      ...(flags.run ? { runId: flags.run } : {}),
+      deadlineMs: cliInteger(flags['deadline-ms'], 'deadline-ms'),
+      ...(flags['limits-json'] ? { limits: json('limits-json') } : {}),
+      ...(flags['machine-limits-json']
+        ? { machineLimits: json('machine-limits-json') }
+        : {}),
+    });
+  else if (subcommand === 'limits')
+    result = await service.limits(json('limits-json'));
+  else if (subcommand === 'renew')
+    result = await service.renew(
+      operands[0],
+      cliInteger(flags['deadline-ms'], 'deadline-ms'),
+    );
+  else if (subcommand === 'watch')
+    result = await withTerminalInterruption((signal) =>
+      service.watch(operands[0], {
+        signal,
+        deadlineMs: cliInteger(flags['deadline-ms'], 'deadline-ms'),
+        maxTicks: cliInteger(flags['max-ticks'] ?? 1, 'max-ticks', {
+          minimum: 1,
+          maximum: 10000,
+        }),
+        intervalMs: cliInteger(flags['interval-ms'] ?? 1000, 'interval-ms', {
+          minimum: 1,
+          maximum: 60000,
+        }),
+      }),
+    );
+  else result = await service[subcommand](operands[0]);
+  if (flags.json)
+    dependencies.output.json({
+      ok: true,
+      command: 'orchestrate',
+      subcommand,
+      result,
+    });
+  else dependencies.output.log(JSON.stringify(result, null, 2));
+  return EXIT_CODES.SUCCESS;
+}
 export async function orchestrateCommand(parsed, dependencies) {
+  if(dependencies.orchestration?.managed && (parsed.subcommand!=='run') && !dependencies.orchestration?.runtime)return managedCommand(parsed,dependencies);
   const { context, instanceId } = cliInput(parsed, dependencies);
   const expectedVersion = cliInteger(parsed.flags['expected-version'], 'expected-version');
   let options;

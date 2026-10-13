@@ -1,3 +1,4 @@
+import { observeExecutionAttempt } from './execution-proof.js';
 import {randomUUID} from 'node:crypto';
 import { sessionTelemetry } from './session-capabilities.js';
 import { validateReviewPayload } from '../review/contract.js';
@@ -383,6 +384,10 @@ async function settleTermination(child, graceMs) {
 }
 
 export async function createProcessRunner(input) {
+  const beginChild = observeExecutionAttempt();
+  const unsettledProbes = new Set();
+  let activeProbes = 0;
+  let executionBegun = false;
   assertSupportedClientPlatform();
   const config = capture(input, CONFIG_KEYS, ['executable', 'worktree'], 'invalid-contract');
   const timeoutMs = boundedInteger(config.timeoutMs, 30_000, 10 * 60_000);
@@ -424,6 +429,7 @@ export async function createProcessRunner(input) {
   const executionEnvironment = environment(config.environment);
 
   async function probe(args, help = false) {
+    if (executionBegun) failAgent('provider-unavailable');
     let cancelled = signalAborted(boundSignal);
     if (cancelled) failAgent('aborted');
     let terminateChild;
@@ -432,6 +438,7 @@ export async function createProcessRunner(input) {
       terminateChild?.('aborted');
     });
     const guard = () => { if (cancelled || signalAborted(boundSignal)) failAgent('aborted'); };
+    activeProbes++;
     try {
       await verifyDirectory(worktree, worktreeIdentity, 'cwd-unsafe', guard);
       guard();
@@ -440,6 +447,8 @@ export async function createProcessRunner(input) {
       const command = invocation(currentTarget, args);
       return await new Promise((resolvePromise, rejectPromise) => {
         let child;
+        let proveStopped;
+        const probeIdentity = {};
         let classification;
         let cleanupDeadline;
         let settled = false;
@@ -453,7 +462,10 @@ export async function createProcessRunner(input) {
           settled = true;
           clearTimeout(timer); clearTimeout(killTimer); clearTimeout(hardTimer);
           if (error && classification && child) {
-            settleTermination(child, Math.max(0, cleanupDeadline - performance.now())).then(() => rejectPromise(error), () => rejectPromise(error));
+            settleTermination(child, Math.max(0, cleanupDeadline - performance.now())).then(stopped => {
+              if (stopped) proveStopped?.();
+              rejectPromise(error);
+            }, () => rejectPromise(error));
           } else if (error) rejectPromise(error); else resolvePromise(value);
         };
         terminateChild = reason => {
@@ -471,11 +483,17 @@ export async function createProcessRunner(input) {
         };
         if (cancelled) { finish(new AgentContractError('aborted')); return; }
         try {
+          const proveScopeStopped = beginChild();
+          unsettledProbes.add(probeIdentity);
+          proveStopped = () => {
+            unsettledProbes.delete(probeIdentity);
+            proveScopeStopped();
+          };
           child = spawn(command.executable, command.args, {
             cwd: worktree, shell: false, windowsHide: true, detached: true,
             env: executionEnvironment, stdio: ['ignore', 'pipe', 'pipe'],
           });
-        } catch { finish(new AgentContractError('provider-unavailable')); return; }
+        } catch { proveStopped?.(); finish(new AgentContractError('provider-unavailable')); return; }
         if (cancelled) terminateChild('aborted');
         const collect = (chunk, keep) => {
           if (classification) return;
@@ -488,15 +506,23 @@ export async function createProcessRunner(input) {
         child.stdout.on('data', chunk => collect(chunk, true));
         child.stderr.on('data', chunk => collect(chunk, false));
         child.once('error', () => {
+          if (!child.pid) proveStopped?.();
           if (classification) killTree(child, 'SIGKILL');
           finish(new AgentContractError(classification ?? 'provider-unavailable'));
         });
         child.once('close', code => {
+          if (child.pid) {
+            try { process.kill(-child.pid, 0); } catch (error) { if (error.code === 'ESRCH') proveStopped?.(); }
+          }
           if (classification) {
             // A detached adapter can exit before a descendant in its process
             // group. Kill the group before clearing the escalation timer.
             killTree(child, 'SIGKILL');
             finish(new AgentContractError(classification));
+            return;
+          }
+          if (unsettledProbes.has(probeIdentity)) {
+            finish(new AgentContractError('provider-unavailable'));
             return;
           }
           if (code !== 0) { finish(new AgentContractError('provider-unavailable')); return; }
@@ -510,12 +536,17 @@ export async function createProcessRunner(input) {
         timer.unref?.();
       });
     } finally {
+      activeProbes--;
       terminateChild = undefined;
       removeListener();
     }
   }
 
   async function execute(inputRequest, protocol) {
+    // A compatibility process may outlive its parent. Its unknown descendants
+    // must not be hidden by a later main-process stopped receipt.
+    if (activeProbes > 0 || unsettledProbes.size > 0) failAgent('provider-unavailable');
+    executionBegun = true;
     const request = capture(inputRequest, REQUEST_KEYS, ['args', 'cwd', 'payload'], 'invalid-contract');
     const args = snapshotArgs(request.args, config.allowOptionArgs === true);
     if (typeof request.payload !== 'string' || Buffer.byteLength(request.payload, 'utf8') > maxInputBytes || request.payload.includes('\0')) failAgent('invalid-contract');
@@ -556,6 +587,7 @@ export async function createProcessRunner(input) {
       const command = invocation(currentTarget, args);
       return await new Promise((resolvePromise, rejectPromise) => {
         let child;
+        let proveStopped;
         const stdout = [];
         let totalBytes = 0;
         let classification;
@@ -620,11 +652,12 @@ export async function createProcessRunner(input) {
         };
         if (cancelled) { finish(new AgentContractError('aborted')); return; }
         try {
+          proveStopped = beginChild();
           child = spawn(command.executable, command.args, {
             cwd, shell: false, windowsHide: true, detached: true,
             env: executionEnvironment, stdio: ['pipe', 'pipe', 'pipe'],
           });
-        } catch { finish(new AgentContractError('spawn-failed')); return; }
+        } catch { proveStopped?.(); finish(new AgentContractError('spawn-failed')); return; }
         const collect = (target, chunk) => {
           if (classification) return;
           const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -640,11 +673,15 @@ export async function createProcessRunner(input) {
         // makes the result depend on whether stdin or close wins the event race.
         child.stdin.on('error', () => terminateChild('provider-unavailable'));
         child.once('error', () => {
+          if (!child.pid) proveStopped?.();
           if (classification) killTree(child, 'SIGKILL');
           finish(new AgentContractError(classification ?? 'spawn-failed'));
         });
         child.once('spawn', () => clearTimeout(launchTimer));
         child.once('close', code => {
+          if (child.pid) {
+            try { process.kill(-child.pid, 0); } catch (error) { if (error.code === 'ESRCH') proveStopped?.(); }
+          }
           childClosed = true;
           if (classification) {
             finish(new AgentContractError(classification));

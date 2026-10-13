@@ -421,6 +421,7 @@ export async function runQualityGates(input, options = {}) {
       timestamp(endedMs);
       if (endedMs < startedMs) fail('clock-regressed');
     } catch (error) {
+      if(error?.queued)throw error;
       if (error instanceof QualityError) throw error;
       fail('gate-failed');
     }

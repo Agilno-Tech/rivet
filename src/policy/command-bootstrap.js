@@ -155,7 +155,7 @@ function startBootstrap() {
   }
 
   async function launch() {
-    if (!await verifyAnchor(config)) return shutdown('anchor-invalid');
+    if (!(await verifyAnchor(config))) return shutdown('anchor-invalid');
     try {
       target = spawn(config.executable, config.args, {
         env: config.environment,
@@ -167,21 +167,42 @@ function startBootstrap() {
     } catch {
       return shutdown('target-spawn-failed');
     }
+    if (target.pid) send('started', { processId: target.pid });
     target.once('error', () => shutdown('target-spawn-failed'));
     anchorTimer = setInterval(async () => {
       try {
-        if (!await verifyAnchor(config)) shutdown('anchor-changed');
+        if (!(await verifyAnchor(config))) shutdown('anchor-changed');
       } catch {
         shutdown('anchor-changed');
       }
     }, 5);
     anchorTimer.unref?.();
-    target.once('close', (code, signal) => {
+    target.once('close', async (code, signal) => {
       if (settled) return;
       settled = true;
       clearTimeout(killTimer);
       clearInterval(anchorTimer);
+      let stopped = false;
+      if (process.platform !== 'win32' && target.pid) {
+        try {
+          process.kill(-target.pid, 'SIGKILL');
+        } catch {}
+        const deadline = Date.now() + 1000;
+        while (Date.now() < deadline) {
+          try {
+            process.kill(-target.pid, 0);
+          } catch (error) {
+            if (error.code === 'ESRCH') {
+              stopped = true;
+              break;
+            }
+          }
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+      }
       send('result', {
+        processId: target.pid ?? null,
+        stopped,
         code: Number.isInteger(code) ? code : null,
         signal: typeof signal === 'string' ? signal : null,
       });

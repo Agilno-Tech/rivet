@@ -1309,3 +1309,116 @@ test('host handoff rejects checkpoint and stop observations older than latest ac
  state=await execution.handoff({...base,expectedRuntimeVersion:state.runtimeVersion,input:{operation:'stop',receipt:{...proof,observedAtMs:clock.now,status:'stopped'}}});
  assert.equal(state.status,'stopped');
 });
+
+test('enrolled host queues without poisoning state and requires observed stop before normal result',async t=>{
+ const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+ const {withMachineContext}=await import('../../src/runtime/machine-admission.js');
+ const {sessionTelemetry}=await import('../../src/clients/session-capabilities.js');
+ const {root,gitClient,approved}=await fixture(t,{managed:{maxMinutes:1}});
+ const machine=createResourceCoordinator({root:join(dirname(root),'machine')});
+ const registered=await machine.register({projectRoot:root,runId:approved.runId,deadlineMs:Date.now()+120000,machineLimits:{activeTasks:4,agentExecutions:1,heavyVerification:1,dependencyInstalls:1}});
+ const blocker=await machine.request({registrationId:registered.id,resource:'agentExecutions',idempotencyKey:'other-writer',generation:1});
+ let hostNow=Date.parse(NOW);
+ const execution=createHostExecution({gitClient,now:()=>new Date(hostNow).toISOString()});
+ const prepared=await execution.prepare({project:root,runId:approved.runId,expectedRunVersion:approved.version});
+ const base={project:root,runId:approved.runId};
+ const call=(method,input)=>withMachineContext(machine,root,approved.runId,()=>execution[method]({...base,...input}),{nonblocking:true});
+ const queued=await call('nextAction',{expectedRuntimeVersion:prepared.runtimeVersion});assert.equal(queued.status,'queued');assert.equal(queued.action,null);
+ hostNow+=61000;
+ await machine.release({claimId:blocker.id,generation:1,completed:true});
+ const next=await call('nextAction',{expectedRuntimeVersion:queued.runtimeVersion});assert.equal(next.status,'action');assert.ok(next.action);
+ const worktree=JSON.parse(next.action.payload).contract.worktree.path;await mkdir(join(worktree,'app'),{recursive:true});await writeFile(join(worktree,'app','agenda.js'),'export const agenda=true;\n');
+ await assert.rejects(call('submitResult',{expectedRuntimeVersion:next.runtimeVersion,action:next.action,result:resultFor(next.action)}));
+ const observation={sessionId:next.action.sessionId,generation:next.action.generation,nativeHandle:'native-one',actorId:'host-one',observedAtMs:hostNow,source:'host-observation',assurance:'host-reported',actions:1,telemetry:sessionTelemetry('host')};
+ const observed=await call('handoff',{expectedRuntimeVersion:next.runtimeVersion,input:{operation:'observe',receipt:observation}});
+ assert.equal(observed.status,'active');
+ const {actions,telemetry,...identity}=observation;
+ await call('handoff',{expectedRuntimeVersion:observed.runtimeVersion,input:{operation:'release',receipt:{...identity,status:'stopped'}}});
+ const stopped=await call('nextAction',{expectedRuntimeVersion:observed.runtimeVersion});assert.equal(stopped.status,'result-required');
+ assert.equal((await machine.inspect()).claims.filter(c=>c.resource==='activeTasks'&&c.status==='held').length,1);
+ const result=await call('submitResult',{expectedRuntimeVersion:stopped.runtimeVersion,action:stopped.action,result:resultFor(stopped.action)});assert.equal(result.status,'accepted');
+ assert.equal((await machine.inspect()).claims.filter(c=>c.resource==='agentExecutions'&&c.status==='held').length,0);
+ assert.equal((await execution.status(base)).runtime.usage.timeMinutes,0);
+ assert.equal((await machine.inspect()).registrations.find(r=>r.id===registered.id).deadlineMs,registered.deadlineMs);
+});
+
+test('enrolled host verification queues without recording failed checks then resumes',async t=>{
+ const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+ const {withMachineContext}=await import('../../src/runtime/machine-admission.js');
+ const {root,execution,verifyInput}=await completedWorker(t);const machine=createResourceCoordinator({root:join(dirname(root),'machine')});
+ const r=await machine.register({projectRoot:root,runId:verifyInput.runId,deadlineMs:Date.now()+60000});
+ const held=await machine.request({registrationId:r.id,resource:'heavyVerification',idempotencyKey:'occupied',generation:1});
+ const verify=()=>withMachineContext(machine,root,r.runId,()=>execution.verify(verifyInput),{nonblocking:true});
+ const queued=await verify();assert.equal(queued.status,'queued');
+ const status=await execution.status({project:root,runId:r.runId});assert.equal(status.run.status,'running');
+ await machine.release({claimId:held.id,generation:1,completed:true});assert.equal((await verify()).status,'awaiting-final-approval');
+});
+
+test('application permits stopped host reconciliation after deadline without new admission',async t=>{
+ const {createRivetApplication}=await import('../../src/runtime/application.js');
+ const {sessionTelemetry}=await import('../../src/clients/session-capabilities.js');
+ const {root,approved}=await fixture(t,{managed:true,now:new Date().toISOString()});
+ const app=createRivetApplication({env:{...process.env,RIVET_MACHINE_STATE_ROOT:join(dirname(root),'machine')}});
+ const registration=await app.machine.register({projectRoot:root,runId:approved.runId,deadlineMs:Date.now()+60000});const base={project:root,runId:approved.runId};
+ const prepared=await app.work.prepare({...base,expectedRunVersion:approved.version});const next=await app.work.nextAction({...base,expectedRuntimeVersion:prepared.runtimeVersion});
+ const worktree=JSON.parse(next.action.payload).contract.worktree.path;await mkdir(join(worktree,'app'),{recursive:true});await writeFile(join(worktree,'app','agenda.js'),'export const agenda=true;\n');
+ const identity={sessionId:next.action.sessionId,generation:next.action.generation,nativeHandle:'deadline-native',actorId:'host-one',observedAtMs:Date.now(),source:'host-observation',assurance:'host-reported'};
+ const observed=await app.work.handoff({...base,expectedRuntimeVersion:next.runtimeVersion,input:{operation:'observe',receipt:{...identity,actions:1,telemetry:sessionTelemetry('host')}}});
+ await app.machine.register({projectRoot:root,runId:approved.runId,deadlineMs:Date.now()+30});await new Promise(resolve=>setTimeout(resolve,60));
+ const released=await app.work.handoff({...base,expectedRuntimeVersion:observed.runtimeVersion,input:{operation:'release',receipt:{...identity,observedAtMs:Date.now(),status:'stopped'}}});assert.equal(released.status,'resource-released');
+ const resultAction=await app.work.nextAction({...base,expectedRuntimeVersion:observed.runtimeVersion});assert.equal(resultAction.status,'result-required');
+ const result=await app.work.submitResult({...base,expectedRuntimeVersion:resultAction.runtimeVersion,action:resultAction.action,result:resultFor(resultAction.action)});assert.equal(result.status,'accepted');
+ const after=await app.work.nextAction({...base,expectedRuntimeVersion:result.runtimeVersion});assert.equal(after.status,'deadline');assert.equal(after.action,null);
+ const claims=(await app.machine.inspect()).claims.filter(c=>c.registrationId===registration.id);assert.equal(claims.filter(c=>c.status==='held').length,0);
+});
+
+test('enrolled host successor starts its execution clock after queued admission',async t=>{
+ const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+ const {withMachineContext}=await import('../../src/runtime/machine-admission.js');
+ const {sessionTelemetry}=await import('../../src/clients/session-capabilities.js');
+ const {root,gitClient,approved}=await fixture(t,{managed:{maxMinutes:1}});
+ const machine=createResourceCoordinator({root:join(dirname(root),'machine')});
+ const registered=await machine.register({projectRoot:root,runId:approved.runId,deadlineMs:Date.now()+120000,machineLimits:{activeTasks:4,agentExecutions:1,heavyVerification:1,dependencyInstalls:1}});
+ const blocker=await machine.request({registrationId:registered.id,resource:'agentExecutions',idempotencyKey:'other-writer',generation:1});
+ let hostNow=Date.parse(NOW);
+ const execution=createHostExecution({gitClient,now:()=>new Date(hostNow).toISOString()});
+ const prepared=await execution.prepare({project:root,runId:approved.runId,expectedRunVersion:approved.version});
+ const base={project:root,runId:approved.runId};
+ const call=(method,input)=>withMachineContext(machine,root,approved.runId,()=>execution[method]({...base,...input}),{nonblocking:true});
+ const queued=await call('nextAction',{expectedRuntimeVersion:prepared.runtimeVersion});assert.equal(queued.status,'queued');assert.equal(queued.action,null);
+ hostNow+=61000;
+ await machine.release({claimId:blocker.id,generation:1,completed:true});
+ const next=await call('nextAction',{expectedRuntimeVersion:queued.runtimeVersion});assert.equal(next.status,'action');assert.ok(next.action);
+
+ const worktree=JSON.parse(next.action.payload).contract.worktree.path;
+ await mkdir(join(worktree,'app'),{recursive:true});await writeFile(join(worktree,'app','agenda.js'),'export const agenda=true;\n');
+ let state=await call('checkpoint',{expectedRuntimeVersion:next.runtimeVersion,action:next.action,input:{summary:'Continue remaining checks.',usage:{tokens:10,costUsd:0},nativeHandle:'native-one',actorId:'host-one',observedAtMs:hostNow}});
+ state=await call('handoff',{expectedRuntimeVersion:state.runtimeVersion,input:{operation:'fence'}});
+ state=await call('handoff',{expectedRuntimeVersion:state.runtimeVersion,input:{operation:'stop',receipt:{sessionId:next.action.sessionId,generation:1,nativeHandle:'native-one',actorId:'host-one',observedAtMs:hostNow,status:'stopped',source:'host-observation',assurance:'host-reported'}}});
+ state=await call('handoff',{expectedRuntimeVersion:state.runtimeVersion,input:{operation:'transfer'}});
+ const secondBlocker=await machine.request({registrationId:registered.id,resource:'agentExecutions',idempotencyKey:'second-blocker',generation:1});
+ const waiting=await call('nextAction',{expectedRuntimeVersion:state.runtimeVersion});assert.equal(waiting.status,'queued');
+ hostNow+=61000;
+ await machine.release({claimId:secondBlocker.id,generation:1,completed:true});
+ const successor=await call('nextAction',{expectedRuntimeVersion:waiting.runtimeVersion});assert.equal(successor.status,'action');assert.equal(successor.action.generation,2);
+ const observation={sessionId:successor.action.sessionId,generation:2,nativeHandle:'native-two',actorId:'host-one',observedAtMs:hostNow,source:'host-observation',assurance:'host-reported',actions:1,telemetry:sessionTelemetry('host')};
+ const observed=await call('handoff',{expectedRuntimeVersion:successor.runtimeVersion,input:{operation:'observe',receipt:observation}});assert.equal(observed.status,'active');
+ const {actions,telemetry,...identity}=observation;
+ await call('handoff',{expectedRuntimeVersion:observed.runtimeVersion,input:{operation:'release',receipt:{...identity,status:'stopped'}}});
+ const stopped=await call('nextAction',{expectedRuntimeVersion:observed.runtimeVersion});
+ assert.equal((await call('submitResult',{expectedRuntimeVersion:stopped.runtimeVersion,action:stopped.action,result:resultFor(stopped.action)})).status,'accepted');
+ assert.equal((await execution.status(base)).runtime.usage.timeMinutes,0);
+ assert.equal((await machine.inspect()).registrations.find(r=>r.id===registered.id).deadlineMs,registered.deadlineMs);
+});
+
+test('enrolled legacy host rejects before changing its approved run or checkout', async t => {
+ const {createRivetApplication}=await import('../../src/runtime/application.js');
+ const {root,approved,gitClient}=await fixture(t);
+ const app=createRivetApplication({env:{...process.env,RIVET_MACHINE_STATE_ROOT:join(dirname(root),'machine')}});
+ await app.machine.register({projectRoot:root,runId:approved.runId,deadlineMs:Date.now()+60000});
+ const before=await gitClient.listWorktrees(root);
+ await assert.rejects(app.work.prepare({project:root,runId:approved.runId,expectedRunVersion:approved.version}));
+ assert.equal((await app.feature.status({project:root,runId:approved.runId})).status,'approved');
+ assert.deepEqual(await gitClient.listWorktrees(root),before);
+ assert.equal((await app.machine.inspect()).claims.length,0);
+});

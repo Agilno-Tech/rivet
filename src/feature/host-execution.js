@@ -1,3 +1,5 @@
+import {currentMachineContext} from '../runtime/machine-admission.js';
+import {stopReceipt as validatedStopReceipt} from './sessions.js';
 import {captureCheckpoint,verifyCheckpoint} from './checkpoints.js';
 import {requireSession,turnoverReason} from './sessions.js';
 import { inspectGovernance, requireGovernance } from './governance.js';
@@ -117,7 +119,7 @@ function exactStrings(left, right) {
 export function createHostExecution(input) {
   const configured = capture(
     input,
-    new Set(['gitClient', 'now', 'resolveCommandExecutable', 'environment']),
+    new Set(['gitClient', 'now', 'resolveCommandExecutable', 'environment','machine']),
     new Set(['gitClient']),
   );
   try { assertGitClient(configured.gitClient); } catch { fail('invalid-input'); }
@@ -147,6 +149,13 @@ export function createHostExecution(input) {
       || repository.branch !== config.project.repository.defaultBranch
       || repository.headSha !== run.featurePlan.baselineCommit) fail('repository');
     assertSelectedProtocolRefs(project, run.workRequest.contextRefs);
+    if (currentMachineContext() &&
+      (!run.featurePlan.executionPolicy || !config.orchestration.executionPolicy)) {
+      const error = new Error('Enrolled host execution requires an approved execution policy. Create and approve a managed plan before preparing this run.');
+      error.code = 'ERR_HOST_MANAGED_POLICY_REQUIRED';
+      error.safeMessage = error.message;
+      throw error;
+    }
     const initialState = createFeatureRuntimeState({ config, run });
     const statePaths = await resolveStatePaths(project, run.runId);
     const integrationBranch = featureBranchFor(config, run.featurePlan, run.runId);
@@ -304,15 +313,58 @@ export function createHostExecution(input) {
     try {
       const { run } = await runRecord(value.project, value.runId);
       if (run.status !== 'running') fail('state-conflict');
-      await requireGovernance({project:value.project,run,gitClient,phase:'plan'});
+      await requireGovernance({
+        project: value.project,
+        run,
+        gitClient,
+        phase: 'plan',
+      });
       const { instance, runtime } = await runtimeContext(value.project, run);
-      const prepared = await runtime.prepareAction(instance, { expectedVersion: value.expectedRuntimeVersion });
-      if (prepared.action === null) {
-        return immutableJson({ status: 'idle', runtimeVersion: prepared.version, action: null });
+      const machine = currentMachineContext();
+      if(machine?.admissionClosed){
+        const current=await inspectFeatureRuntime(instance);
+        const running=current.graph.nodes.find(n=>n.status==='running');
+        const session=running&&current.sessions?.[running.id];
+        const claims=(await machine.coordinator.inspect()).claims;
+        const stopped=session&&claims.some(c=>c.registrationId===machine.registration.id&&c.idempotencyKey===session.id&&c.generation===session.generation&&c.status==='released');
+        if(!stopped)return immutableJson({status:'deadline',runtimeVersion:current.version,action:null});
       }
-      const protocolContext = run.workRequest.contextRefs.some(ref => ref.startsWith('protocol:'))
-        ? protocolLookupContext(createProtocolPresentation({sourceRoot: value.project, refs: run.workRequest.contextRefs})) : null;
-      const action = createWorkAction({
+      if (machine&&!machine.admissionClosed) {
+        const task = await machine.coordinator.request({
+          registrationId: machine.registration.id,
+          resource: 'activeTasks',
+          idempotencyKey: `host-task-${run.version}`,
+          generation: 1,
+        });
+        if (task.status !== 'held')
+          return immutableJson({
+            status: 'queued',
+            reason: task.reason,
+            runtimeVersion: value.expectedRuntimeVersion,
+            action: null,
+          });
+      }
+      let prepared = await runtime.prepareAction(instance, {
+        expectedVersion: value.expectedRuntimeVersion,
+      });
+      if (prepared.action === null) {
+        return immutableJson({
+          status: 'idle',
+          runtimeVersion: prepared.version,
+          action: null,
+        });
+      }
+      const protocolContext = run.workRequest.contextRefs.some((ref) =>
+        ref.startsWith('protocol:'),
+      )
+        ? protocolLookupContext(
+            createProtocolPresentation({
+              sourceRoot: value.project,
+              refs: run.workRequest.contextRefs,
+            }),
+          )
+        : null;
+      let action = createWorkAction({
         runId: run.runId,
         runtimeVersion: prepared.version,
         nodeId: prepared.action.node.id,
@@ -320,21 +372,82 @@ export function createHostExecution(input) {
         idempotencyKey: prepared.action.intent.idempotencyKey,
         reservationId: prepared.action.intent.reservationId,
         attempt: prepared.action.intent.attempt,
-        ...(prepared.action.intent.session ? {sessionId:prepared.action.intent.session.id,generation:prepared.action.intent.session.generation} : {}),
+        ...(prepared.action.intent.session
+          ? {
+              sessionId: prepared.action.intent.session.id,
+              generation: prepared.action.intent.session.generation,
+            }
+          : {}),
         payload: buildLaunchContract(prepared.action.launch),
       });
-      const wasAlreadyStarted = value.expectedRuntimeVersion === prepared.version;
-      const observed=await inspectFeatureRuntime(instance);
-      const session=observed.sessions?.[prepared.action.node.id];
-      const turnover=session?turnoverReason(session,featureNowMilliseconds(now)):null;
+      let newlyDispatched=false;
+      if (machine) {
+        if (!action.sessionId) fail('state-conflict');
+        const claim = machine.admissionClosed?(await machine.coordinator.inspect()).claims.find(c=>c.registrationId===machine.registration.id&&c.idempotencyKey===action.sessionId&&c.generation===action.generation):await machine.coordinator.request({
+          registrationId: machine.registration.id,
+          resource: 'agentExecutions',
+          idempotencyKey: action.sessionId,
+          generation: action.generation,
+        });
+        if(!claim)fail('state-conflict');
+        if (claim.status === 'released')
+          return immutableJson({
+            status: 'result-required',
+            runtimeVersion: prepared.version,
+            action,
+            nextAction:
+              'The labelled writer has stopped. Submit its result; do not execute this action again.',
+          });
+        if (claim.status !== 'held')
+          return immutableJson({
+            status: 'queued',
+            reason: claim.reason,
+            runtimeVersion: prepared.version,
+            action: null,
+          });
+        if (!claim.dispatched) {
+          const admitted = await runtime.sessionOperation(instance, {
+            expectedVersion: prepared.version,
+            nodeId: action.nodeId,
+            identity: {id: action.sessionId, generation: action.generation},
+            operation: 'admit',
+          });
+          prepared = {...prepared, version: admitted.version};
+          action = createWorkAction({...action, runtimeVersion: admitted.version});
+          newlyDispatched = true;
+          await machine.coordinator.dispatch({
+            claimId: claim.id,
+            generation: action.generation,
+          });
+        }
+      }
+      const wasAlreadyStarted =
+        machine?!newlyDispatched:value.expectedRuntimeVersion === prepared.version;
+      const observed = await inspectFeatureRuntime(instance);
+      const session = observed.sessions?.[prepared.action.node.id];
+      const turnover = session
+        ? turnoverReason(session, featureNowMilliseconds(now))
+        : null;
       return immutableJson({
-        status: turnover?'checkpoint-required':wasAlreadyStarted ? 'waiting-for-result' : 'action',
-        ...(turnover?{turnoverReason:turnover,nextAction:'Request a cooperative checkpoint from the existing writer. Do not launch another writer.'}:{}),
-        ...(protocolContext ? {protocolContext} : {}),
+        status: turnover
+          ? 'checkpoint-required'
+          : wasAlreadyStarted
+            ? 'waiting-for-result'
+            : 'action',
+        ...(turnover
+          ? {
+              turnoverReason: turnover,
+              nextAction:
+                'Request a cooperative checkpoint from the existing writer. Do not launch another writer.',
+            }
+          : {}),
+        ...(protocolContext ? { protocolContext } : {}),
         runtimeVersion: prepared.version,
         action,
       });
-    } finally { await hostLock.release(); }
+    } finally {
+      await hostLock.release();
+    }
   }
 
   async function submitResult(inputValue) {
@@ -372,6 +485,8 @@ export function createHostExecution(input) {
         payload: buildLaunchContract(createFeatureLaunchInput(node, intent, planNode, run)),
       });
       if (JSON.stringify(action) !== JSON.stringify(expectedAction)) fail('state-conflict');
+      const machine=currentMachineContext();
+      if(machine){const claims=(await machine.coordinator.inspect()).claims;const claim=claims.find(c=>c.registrationId===machine.registration.id&&c.idempotencyKey===action.sessionId&&c.generation===action.generation);if(!claim||claim.status!=='released')fail('state-conflict');}
       const submitted = await runtime.submitAction(instance, {
         expectedVersion: value.expectedRuntimeVersion,
         nodeId: action.nodeId,
@@ -440,24 +555,130 @@ export function createHostExecution(input) {
   }
   function valueWithoutExtras(value) {return {project:value.project,runId:value.runId,expectedRuntimeVersion:value.expectedRuntimeVersion};}
   async function handoff(inputValue) {
-    const value=capture(inputValue,new Set(['project','runId','expectedRuntimeVersion','input']));
-    request(valueWithoutExtras(value),'expectedRuntimeVersion');
-    const operation=capture(value.input,new Set(['operation','receipt']),new Set(['operation']));
-    if(!['fence','stop','transfer','observe'].includes(operation.operation))fail('invalid-input');
-    const paths=await resolveFeatureRunPaths(value.project,value.runId);const lock=await acquireHostRunLock(paths);
+    const value = capture(
+      inputValue,
+      new Set(['project', 'runId', 'expectedRuntimeVersion', 'input']),
+    );
+    request(valueWithoutExtras(value), 'expectedRuntimeVersion');
+    const operation = capture(
+      value.input,
+      new Set(['operation', 'receipt']),
+      new Set(['operation']),
+    );
+    if (
+      !['fence', 'stop', 'transfer', 'observe', 'release'].includes(
+        operation.operation,
+      )
+    )
+      fail('invalid-input');
+    const paths = await resolveFeatureRunPaths(value.project, value.runId);
+    const lock = await acquireHostRunLock(paths);
     try {
-      const {run}=await runRecord(value.project,value.runId);if(run.status!=='running')fail('state-conflict');
-      await requireGovernance({project:value.project,run,gitClient,phase:'plan'});
-      const {instance,runtime}=await runtimeContext(value.project,run);
-      const current=await inspectFeatureRuntime(instance);if(current.version!==value.expectedRuntimeVersion)fail('state-conflict');
-      const sessions=Object.values(current.sessions??{}).filter(s=>(operation.operation==='observe'?['active']:['checkpoint-ready','stopping','stopped']).includes(s.phase));
-      if(sessions.length!==1)fail('state-conflict');const session=sessions[0];
-      if(operation.operation==='transfer')await verifyCheckpoint(gitClient,session.checkpoint,run,featureNowMilliseconds(now));
-      const state=await runtime.sessionOperation(instance,{expectedVersion:current.version,nodeId:session.nodeId,identity:session,...operation});
-      const updated=state.sessions[session.nodeId];
-      return immutableJson({status:turnoverReason(updated,featureNowMilliseconds(now))&&updated.phase==='active'?'checkpoint-required':updated.phase,turnoverReason:turnoverReason(updated,featureNowMilliseconds(now)),runtimeVersion:state.version,sessionId:updated.id,generation:updated.generation,
-        nextAction:updated.phase==='active'&&turnoverReason(updated,featureNowMilliseconds(now))?'Request a cooperative checkpoint from the owning host, then submit work checkpoint.':updated.phase==='stopping'?'Stop the exact native writer with its owning harness and submit the labelled stop receipt. Unknown ownership retains the checkout.':updated.phase==='stopped'?'Use handoff operation transfer to revalidate and transfer the checkout.':'Use work next for the fresh successor action; do not resume the old writer.'});
-    } finally {await lock.release();}
+      const { run } = await runRecord(value.project, value.runId);
+      if (run.status !== 'running') fail('state-conflict');
+      await requireGovernance({
+        project: value.project,
+        run,
+        gitClient,
+        phase: 'plan',
+      });
+      const { instance, runtime } = await runtimeContext(value.project, run);
+      const current = await inspectFeatureRuntime(instance);
+      if (current.version !== value.expectedRuntimeVersion)
+        fail('state-conflict');
+      const sessions = Object.values(current.sessions ?? {}).filter((s) =>
+        (['observe', 'release'].includes(operation.operation)
+          ? ['active']
+          : ['checkpoint-ready', 'stopping', 'stopped']
+        ).includes(s.phase),
+      );
+      if (sessions.length !== 1) fail('state-conflict');
+      const session = sessions[0];
+      if (operation.operation === 'release') {
+        const machine = currentMachineContext();
+        if (!machine) fail('state-conflict');
+        const receipt = validatedStopReceipt(operation.receipt, session);
+        if (receipt.status !== 'stopped') fail('state-conflict');
+        const claims = (await machine.coordinator.inspect()).claims;
+        const claim = claims.find(
+          (c) =>
+            c.registrationId === machine.registration.id &&
+            c.idempotencyKey === session.id &&
+            c.generation === session.generation,
+        );
+        if (!claim) fail('state-conflict');
+        await machine.coordinator.hostStop({
+          claimId: claim.id,
+          generation: session.generation,
+          receipt,
+          sessionId: session.id,
+        });
+        return immutableJson({
+          status: 'resource-released',
+          runtimeVersion: current.version,
+          sessionId: session.id,
+          generation: session.generation,
+        });
+      }
+      if (operation.operation === 'transfer')
+        await verifyCheckpoint(
+          gitClient,
+          session.checkpoint,
+          run,
+          featureNowMilliseconds(now),
+        );
+      const state = await runtime.sessionOperation(instance, {
+        expectedVersion: current.version,
+        nodeId: session.nodeId,
+        identity: session,
+        ...operation,
+      });
+      const updated = state.sessions[session.nodeId];
+      if (
+        operation.operation === 'stop' &&
+        updated.stopReceipt?.status === 'stopped'
+      ) {
+        const machine = currentMachineContext();
+        if (machine) {
+          const claim = (await machine.coordinator.inspect()).claims.find(
+            (c) =>
+              c.registrationId === machine.registration.id &&
+              c.idempotencyKey === session.id &&
+              c.generation === session.generation,
+          );
+          if (claim)
+            await machine.coordinator.hostStop({
+              claimId: claim.id,
+              generation: session.generation,
+              receipt: updated.stopReceipt,
+              sessionId: session.id,
+            });
+        }
+      }
+
+      return immutableJson({
+        status:
+          turnoverReason(updated, featureNowMilliseconds(now)) &&
+          updated.phase === 'active'
+            ? 'checkpoint-required'
+            : updated.phase,
+        turnoverReason: turnoverReason(updated, featureNowMilliseconds(now)),
+        runtimeVersion: state.version,
+        sessionId: updated.id,
+        generation: updated.generation,
+        nextAction:
+          updated.phase === 'active' &&
+          turnoverReason(updated, featureNowMilliseconds(now))
+            ? 'Request a cooperative checkpoint from the owning host, then submit work checkpoint.'
+            : updated.phase === 'stopping'
+              ? 'Stop the exact native writer with its owning harness and submit the labelled stop receipt. Unknown ownership retains the checkout.'
+              : updated.phase === 'stopped'
+                ? 'Use handoff operation transfer to revalidate and transfer the checkout.'
+                : 'Use work next for the fresh successor action; do not resume the old writer.',
+      });
+    } finally {
+      await lock.release();
+    }
   }
 
   async function verify(inputValue) {
@@ -510,6 +731,7 @@ export function createHostExecution(input) {
         }, { gitClient, now: () => featureNowMilliseconds(now) });
         if(quality.status==='pass') await requireGovernance({project:value.project,run,gitClient,config,phase:'final',checkout:{path:integration.path,branch:integration.branch,commitSha:integrated.headSha}});
       } catch (error) {
+        if(error?.queued)return immutableJson({status:'queued',reason:error.claim?.reason,runtimeVersion:value.expectedRuntimeVersion});
         failure = typeof error?.safeMessage === 'string' ? error.safeMessage : 'Verification could not complete safely.';
       }
       const afterChecks = await gitClient.inspectRepository(integration.path);

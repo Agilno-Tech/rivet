@@ -409,3 +409,106 @@ test('hanging startup ownership receipt is bounded and never dispatches stdin',a
  const runner=await createProcessRunner({executable:f.executable,interpreter:f.interpreter,worktree:f.worktree,timeoutMs:100,termGraceMs:10,killGraceMs:10,onExecution:()=>new Promise(()=>{})});
  const input=await payload(f);await assert.rejects(()=>runner.run({args:[],cwd:'.',payload:input}),error=>['ERR_AGENT_TIMEOUT','ERR_AGENT_OUTPUT_INVALID'].includes(error.code));
 });
+
+test('managed watch cancellation awaits real owned process settlement before capacity release',async t=>{
+ const {createManagedOrchestration}=await import('../../src/runtime/managed-orchestration.js');
+ const {withMachineContext,taskAdmission,admitted}=await import('../../src/runtime/machine-admission.js');
+ const f=await fixture(t,'cat >/dev/null\nsleep 30');const receipts=[];let service;
+ const controller=new AbortController();t.after(()=>controller.abort());
+ let started;const startup=new Promise(resolve=>{started=resolve;});
+ const workflow={status:async()=>({status:'approved',version:1}),resume:async(request,{signal})=>withMachineContext(service.coordinator,f.worktree,'cancel-run',()=>taskAdmission(()=>admitted('agentExecutions','cancel-worker',{signal},async options=>{
+  const runner=await createProcessRunner({executable:f.executable,interpreter:f.interpreter,worktree:f.worktree,signal:options.signal,termGraceMs:20,killGraceMs:1000,onExecution:async r=>{receipts.push(r);await options.onExecution(r);if(r.status==='started')started();}});
+  await runner.run({args:[],cwd:'.',payload:await payload(f)});return {status:'completed'};
+ })),{signal})};
+ service=createManagedOrchestration({root:join(f.root,'machine'),gitClient:async()=>null,workflow});
+ const r=await service.coordinator.register({projectRoot:f.worktree,runId:'cancel-run',deadlineMs:Date.now()+30000});
+ const watching=service.watch(r.id,{deadlineMs:Date.now()+30000,signal:controller.signal});
+ await Promise.race([startup,watching.then(()=>{throw new Error('Watch settled before startup');})]);
+ controller.abort();
+ const result=await watching;assert.equal(result.terminal,'cancelled');assert.equal(receipts[0].status,'started');assert.ok(['stopped','unknown'].includes(receipts.at(-1).status));
+ const claims=(await service.coordinator.inspect()).claims;
+ const agent=claims.find(c=>c.resource==='agentExecutions');assert.equal(agent.status,receipts.at(-1).status==='stopped'?'released':'held');
+ if(agent.status==='released')assert.throws(()=>process.kill(-receipts[0].processGroupId,0),error=>error.code==='ESRCH');
+});
+
+test('managed successful provider with surviving descendant retains unknown machine capacity',async t=>{
+ const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+ const {withMachineContext,admitted}=await import('../../src/runtime/machine-admission.js');
+ const f=await fixture(t,`cat >/dev/null\nsleep 30 </dev/null >/dev/null 2>&1 &\nprintf '%s' '${envelope()}'`);
+ const coordinator=createResourceCoordinator({root:join(f.root,'machine')});await coordinator.register({projectRoot:f.worktree,runId:'unknown-run',deadlineMs:Date.now()+30000});let group;
+ t.after(()=>{if(group)try{process.kill(-group,'SIGKILL');}catch{}});
+ await withMachineContext(coordinator,f.worktree,'unknown-run',()=>admitted('agentExecutions','unknown-worker',{},async options=>{
+  const runner=await createProcessRunner({executable:f.executable,interpreter:f.interpreter,worktree:f.worktree,onExecution:async r=>{group=r.processGroupId;await options.onExecution(r);}});return runner.run({args:[],cwd:'.',payload:await payload(f)});
+ }));
+ const claim=(await coordinator.inspect()).claims[0];assert.equal(claim.status,'held');assert.equal(claim.execution.status,'unknown');
+});
+
+test('actual Codex preflight without a child releases only its current machine attempt', async t => {
+ const {createCodexClient,CODEX_ADAPTER_SYNTAX}=await import('../../src/clients/codex.js');
+ const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+ const {withMachineContext,admitted}=await import('../../src/runtime/machine-admission.js');
+ const {validateLaunchPayload}=await import('../../src/prompts/launch-contract.js');
+ const f=await fixture(t,'exit 0');
+ const coordinator=createResourceCoordinator({root:join(f.root,'machine')});
+ await coordinator.register({projectRoot:f.worktree,runId:'preflight-run',deadlineMs:Date.now()+30000});
+ const client=createCodexClient({executable:join(f.root,'missing'),args:CODEX_ADAPTER_SYNTAX.args});
+ const {version,...contract}=validateLaunchPayload(await payload(f));
+ await assert.rejects(withMachineContext(coordinator,f.worktree,'preflight-run',()=>admitted('agentExecutions','preflight',{},options=>client.launch(contract,options))), e => e.code === 'ERR_AGENT_PROVIDER_UNAVAILABLE');
+ assert.equal((await coordinator.inspect()).claims[0].status,'released');
+ await assert.rejects(withMachineContext(coordinator,f.worktree,'preflight-run',()=>admitted('agentExecutions','unproven',{},()=>{throw new Error('no proof');})));
+ assert.equal((await coordinator.inspect()).claims[1].status,'held');
+});
+
+test('surviving compatibility probe blocks main execution and retains machine capacity', async t => {
+  const {readFile}=await import('node:fs/promises');
+  const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+  const {withMachineContext,admitted}=await import('../../src/runtime/machine-admission.js');
+  const f=await fixture(t,`if [ "$1" = --version ]; then echo $$ > probe-pid; sleep 30 </dev/null >/dev/null 2>&1 & printf version; exit 0; fi\necho started > main-started\ncat >/dev/null\nprintf '%s' '${envelope()}'`);
+  let probeGroup;
+  t.after(()=>{if(probeGroup)try{process.kill(-probeGroup,'SIGKILL');}catch{}});
+  const c=createResourceCoordinator({root:join(f.root,'machine')});
+  await c.register({projectRoot:f.worktree,runId:'probe-run',deadlineMs:Date.now()+30000});
+  await withMachineContext(c,f.worktree,'probe-run',()=>admitted('agentExecutions','probe',{},async options=>{
+    const runner=await createProcessRunner({executable:f.executable,interpreter:f.interpreter,worktree:f.worktree,onExecution:options.onExecution});
+    try { await assert.rejects(runner.probeVersion(),{code:'ERR_AGENT_PROVIDER_UNAVAILABLE'}); }
+    finally { probeGroup=Number(await readFile(join(f.worktree,'probe-pid'),'utf8')); }
+    // Even a caller that handles the probe error cannot start the main child.
+    await assert.rejects(runner.run({args:[],cwd:'.',payload:await payload(f)}),{code:'ERR_AGENT_PROVIDER_UNAVAILABLE'});
+  }));
+  assert.equal((await c.inspect()).claims[0].status,'held');
+  await assert.rejects(readFile(join(f.worktree,'main-started')),{code:'ENOENT'});
+});
+
+test('stopped compatibility probe permits the admitted main execution', async t => {
+  const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+  const {withMachineContext,admitted}=await import('../../src/runtime/machine-admission.js');
+  const f=await fixture(t,`if [ "$1" = --version ]; then printf version; exit 0; fi\ncat >/dev/null\nprintf '%s' '${envelope()}'`);
+  const c=createResourceCoordinator({root:join(f.root,'machine')});
+  await c.register({projectRoot:f.worktree,runId:'clean-probe',deadlineMs:Date.now()+30000});
+  await withMachineContext(c,f.worktree,'clean-probe',()=>admitted('agentExecutions','probe',{},async options=>{
+    const runner=await createProcessRunner({executable:f.executable,interpreter:f.interpreter,worktree:f.worktree,onExecution:options.onExecution});
+    assert.equal(await runner.probeVersion(),'version');
+    await runner.run({args:[],cwd:'.',payload:await payload(f)});
+  }));
+  assert.equal((await c.inspect()).claims[0].status,'released');
+});
+
+test('settled execution scope fences saved runners and opaque success retains capacity', async t => {
+ const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+ const {withMachineContext,admitted}=await import('../../src/runtime/machine-admission.js');
+ const f=await fixture(t,`echo started > late-started\ncat >/dev/null\nprintf '%s' '${envelope()}'`);
+ const c=createResourceCoordinator({root:join(f.root,'machine')});
+ await c.register({projectRoot:f.worktree,runId:'late-runner',deadlineMs:Date.now()+30000});
+ let runner;
+ await withMachineContext(c,f.worktree,'late-runner',()=>admitted('agentExecutions','construction',{},async options=>{
+  runner=await createProcessRunner({executable:f.executable,interpreter:f.interpreter,worktree:f.worktree,onExecution:options.onExecution});
+ }));
+ assert.equal((await c.inspect()).claims[0].status,'released');
+ const request={args:[],cwd:'.',payload:await payload(f)};
+ await assert.rejects(runner.run(request));
+ await assert.rejects(withMachineContext(c,f.worktree,'late-runner',()=>admitted('agentExecutions','reuse',{},()=>runner.run(request))));
+ await assert.rejects(lstat(join(f.worktree,'late-started')),{code:'ENOENT'});
+ await withMachineContext(c,f.worktree,'late-runner',()=>admitted('agentExecutions','opaque',{},()=>({status:'aborted'})));
+ const claims=(await c.inspect()).claims;
+ assert.equal(claims[1].status,'held');assert.equal(claims[2].status,'held');
+});

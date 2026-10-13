@@ -1194,7 +1194,17 @@ export function createOrchestrator(input) {
       const session=requireSession(state,nodeId,identity,['active','checkpoint-requested','checkpoint-ready','stopping','stopped']);
       const intent=state.launchIntents[nodeId];const node=state.graph.nodes.find(n=>n.id===nodeId);
       if(node.status!=='running'||intent.status!=='started')sessionFailure();
-      if(operation==='observe') {
+      if (operation === 'admit') {
+        // A queued host offer has no writer. Start its execution allowance only
+        // when machine capacity is held, immediately before first dispatch.
+        if (
+          session.phase !== 'active' || session.writer !== null ||
+          session.actions !== 0 || session.checkpoint !== null
+        ) sessionFailure();
+        session.startedAtMs = config.now();
+        session.observedAtMs = session.startedAtMs;
+        intent.startedAtMs = session.startedAtMs;
+      } else if(operation==='observe') {
         if(session.phase!=='active')sessionFailure();observeHostSession(session,receipt);
       } else if(operation==='request') {
         if(!['active','checkpoint-requested'].includes(session.phase))sessionFailure();

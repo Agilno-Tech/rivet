@@ -184,7 +184,7 @@ export function createClaudePlanningClient(input) {
   const worktree = config.worktree;
 
   async function propose(contract, optionInput = {}) {
-    const options = capture(optionInput, new Set(['signal']), []);
+    const options = capture(optionInput, new Set(['signal','onExecution']), []);
     const signal = options.signal;
     if (signal !== undefined && (!(signal instanceof AbortSignal) || Object.getPrototypeOf(signal) !== AbortSignal.prototype)) {
       failAgent('template-invalid');
@@ -196,7 +196,7 @@ export function createClaudePlanningClient(input) {
     const identity = Object.freeze({ dev: metadata.dev.toString(), ino: metadata.ino.toString() });
     const runner = await createProcessRunner({
       executable, interpreter, worktree, worktreeIdentity: identity, environment, signal,
-      timeoutMs: config.timeoutMs, maxInputBytes: 512 * 1024,
+      timeoutMs: config.timeoutMs, maxInputBytes: 512 * 1024, onExecution:options.onExecution,
       maxOutputBytes: config.maxOutputBytes ?? 512 * 1024, onTelemetry: config.onTelemetry, telemetryProvider: 'claude', allowOptionArgs: true,
     });
     await checkCompatibility(runner, 'claude', [...args, '--json-schema', '--max-budget-usd'], expectedVersion);

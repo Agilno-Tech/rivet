@@ -1,3 +1,4 @@
+import {withMachineContext,admitted,admissionKey} from '../runtime/machine-admission.js';
 import { resolveExecutionSelection } from '../models/execution-policy.js';
 import {redactSecrets} from '../state/redact.js';
 import {loadProjectConfig} from '../config/load.js';
@@ -68,7 +69,8 @@ async function executeReview(parsed,dependencies,signal) {
    if(!chosen)fail('No compatible review CLI is installed. Install/authenticate Claude or Codex, or use --context --json in your existing harness.','PROVIDER_UNAVAILABLE');
    const selected=await harnesses.select(chosen.kind,project.root,{signal});
    if(!flags.json)dependencies.output.log(`Reviewing with ${selected.kind}. The supplied diff is sent to this harness; project checks are not run.`);
-   report=await (dependencies.review?.run??runReviewClient)({selected,snapshot,environment:dependencies.env,signal,...(executionSelection===undefined?{}:{executionSelection})});
+   const execute=executionOptions=>(dependencies.review?.run??runReviewClient)({selected,snapshot,environment:dependencies.env,...executionOptions,...(executionSelection===undefined?{}:{executionSelection})});
+   report=dependencies.machine?await withMachineContext(dependencies.machine,project.root,null,managedSignal=>admitted('agentExecutions',`review-${admissionKey([snapshot.url,snapshot.headSha])}`,{signal:managedSignal},execute),{signal}):await execute({signal});
    report=validateReport(report,snapshot);
    await source.assertCurrent(snapshot);
   }

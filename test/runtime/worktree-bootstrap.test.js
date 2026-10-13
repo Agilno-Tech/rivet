@@ -110,3 +110,15 @@ test('refuses a checkout changed after the prompt and rejects installer source e
     confirm: async () => true,
   }), error => error instanceof WorktreeBootstrapError && error.details.reason === 'checkout-changed');
 });
+
+test('enrolled dependency setup queues without an agent lease and resumes the actual installer',async t=>{
+ const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+ const {withMachineContext}=await import('../../src/runtime/machine-admission.js');
+ const value=await fixture(t,{'package-lock.json':'{"lockfileVersion":3}\n'});
+ const coordinator=createResourceCoordinator({root:join(value.parent,'machine')});const r=await coordinator.register({projectRoot:value.input.projectRoot,runId:'install-run',deadlineMs:Date.now()+30000});
+ const held=await coordinator.request({registrationId:r.id,resource:'dependencyInstalls',idempotencyKey:'another-installer',generation:1});
+ let done=false;const pending=withMachineContext(coordinator,value.input.projectRoot,r.runId,()=>bootstrapWorktreeDependencies(value.input,{gitClient:value.gitClient,resolveCommandExecutable:async()=>value.installer,confirm:async()=>true})).then(result=>{done=true;return result;});
+ for(let i=0;i<100;i++){if((await coordinator.inspect()).claims.some(c=>c.status==='queued'))break;await new Promise(resolve=>setTimeout(resolve,10));}
+ assert.equal(done,false);const waiting=await coordinator.inspect();assert.equal(waiting.claims.filter(c=>c.resource==='agentExecutions'&&c.status==='held').length,0);assert.equal(waiting.claims.filter(c=>c.status==='queued').length,1);
+ await coordinator.release({claimId:held.id,generation:1,completed:true});assert.equal((await pending).status,'ready');assert.equal(await readFile(join(value.input.worktreePath,'node_modules','installed'),'utf8'),'ready');
+});

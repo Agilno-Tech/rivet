@@ -1,3 +1,4 @@
+import {withMachineContext} from '../runtime/machine-admission.js';
 import {readJson} from './work.js';
 import * as filesystem from 'node:fs';
 import { taskGovernanceCommand } from './task-governance.js';
@@ -128,7 +129,7 @@ async function dependencyCommand(project, record, dependencies) {
   return withTerminalInterruption(async signal => {
     let result;
     try {
-      result = await bootstrapWorktreeDependencies({
+      const install=()=>bootstrapWorktreeDependencies({
         projectRoot: project.root,
         worktreePath: target.path,
         expectedCommit: target.commit,
@@ -140,6 +141,7 @@ async function dependencyCommand(project, record, dependencies) {
         confirm: confirmIsolatedDependencyInstall(dependencies, signal),
         signal,
       });
+      result=dependencies.machine?await withMachineContext(dependencies.machine,project.root,record.runId,install,{signal}):await install();
     } catch (error) {
       fail(error?.safeMessage ?? 'Dependency setup failed safely.', 'FAILED_GATE');
     }

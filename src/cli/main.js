@@ -172,6 +172,12 @@ Usage:
   rivet init --project <path> --write [--overwrite] [--remote=<name>] [--checks-json='<json>'] [--dependencies-json='<json>']
   rivet doctor [--project <path>] [--json]
   rivet support [--project=<path>] [--probe-harnesses] [--save] [--json]
+  rivet orchestrate register --project=<path> [--run=<id>] --deadline-ms=<epoch-ms> [--machine-limits-json=<json>] [--limits-json=<json>] [--json]
+  rivet orchestrate status [registration-id] [--json]
+  rivet orchestrate watch <registration-id> --deadline-ms=<epoch-ms> [--max-ticks=<n>] [--interval-ms=<ms>] [--json]
+  rivet orchestrate pause|resume <registration-id> [--json]
+  rivet orchestrate limits --limits-json=<json> [--json]
+  rivet orchestrate renew <project-registration-id> --deadline-ms=<epoch-ms> [--json]
   rivet preflight [--project <path>] [--mode=host|orchestration] [--json]
   rivet verify [--json]
   rivet evidence [--json]
@@ -302,6 +308,7 @@ function resolveDependencies(overrides = {}) {
     maxUpdateResponseBytes: overrides.maxUpdateResponseBytes,
     updateCheckTimeoutMs: overrides.updateCheckTimeoutMs,
     orchestration: overrides.orchestration,
+    machine: overrides.machine,
     evidence: overrides.evidence,
     quality: overrides.quality,
     feature: overrides.feature,

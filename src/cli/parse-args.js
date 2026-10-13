@@ -43,6 +43,7 @@ const LEGACY_OPTIONS = {
   },
 };
 const STRICT_OPTIONS = {
+  orchestrate:{boolean:new Set(['json']),valued:new Set(['project','run','deadline-ms','max-ticks','interval-ms','expected-version','max-active-nodes','limits-json','machine-limits-json'])},
   update: { boolean: new Set(['global', 'project', 'check', 'json']), valued: new Set() },
   review: { boolean: new Set(['json', 'context', 'publish']), valued: new Set(['project', 'remote', 'provider', 'harness', 'input']) },
   delivery: { boolean: new Set(['json']), valued: new Set(['project', 'run', 'remote', 'provider', 'method', 'title', 'body']) },
