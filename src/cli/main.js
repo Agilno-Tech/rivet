@@ -76,6 +76,7 @@ Everyday commands:
   rivet review <PR-URL>            Review someone’s pull request locally
   rivet task status               Inspect work and the next step
   rivet task resume               Continue a saved task or final review
+  rivet task pause                Pause new work in a managed task
   rivet task start                Reopen an unapproved plan
   rivet task approve              Review and finish verified work
   rivet task deps                 Approve configured dependency setup
@@ -120,14 +121,15 @@ Usage:
   rivet install --all              Install all skills (project)
   rivet setup [--project=<path>|--global] [--remote=<name>] [--target=claude|codex|both] [--checks-json='<json>'] [--dependencies-json='<json>'] [--write] [--json]
                                   Project checks are exact argv arrays; unknown projects prompt with --write
-  rivet run "task" [--harness=claude|codex] [--project=<path>] [--details]
+  rivet run "task" [--harness=claude|codex] [--project=<path>] [--for=1h] [--details]
   rivet task checkpoint --input=<session.json> [--project=<path>] [--run=<id>]
   rivet task handoff --input=<session.json> [--project=<path>] [--run=<id>]
   rivet task recover [--project=<path>] [--run=<id>]
   rivet task status [--project=<path>] [--run=<id>]
-  rivet task start [--project=<path>] [--run=<id>]
+  rivet task start [--project=<path>] [--run=<id>] [--for=1h]
   rivet task approve [--project=<path>] [--run=<id>]
-  rivet task resume [--project=<path>] [--run=<id>]
+  rivet task resume [--project=<path>] [--run=<id>] [--for=1h]
+  rivet task pause [--project=<path>] [--run=<id>]
   rivet task decisions [--project=<path>] [--run=<id>]
   rivet task decide --input=<decision.json> [--project=<path>] [--run=<id>]
   rivet task approve-decision --decision=<id> [--project=<path>] [--run=<id>]
@@ -172,12 +174,8 @@ Usage:
   rivet init --project <path> --write [--overwrite] [--remote=<name>] [--checks-json='<json>'] [--dependencies-json='<json>']
   rivet doctor [--project <path>] [--json]
   rivet support [--project=<path>] [--probe-harnesses] [--save] [--json]
-  rivet orchestrate register --project=<path> [--run=<id>] --deadline-ms=<epoch-ms> [--machine-limits-json=<json>] [--limits-json=<json>] [--json]
-  rivet orchestrate status [registration-id] [--json]
-  rivet orchestrate watch <registration-id> --deadline-ms=<epoch-ms> [--max-ticks=<n>] [--interval-ms=<ms>] [--json]
-  rivet orchestrate pause|resume <registration-id> [--json]
+  rivet orchestrate status [--json]
   rivet orchestrate limits --limits-json=<json> [--json]
-  rivet orchestrate renew <project-registration-id> --deadline-ms=<epoch-ms> [--json]
   rivet preflight [--project <path>] [--mode=host|orchestration] [--json]
   rivet verify [--json]
   rivet evidence [--json]
@@ -190,8 +188,6 @@ Usage:
   rivet status <instance> [--fixture=<path>] [--port=<n>] [--json]
   rivet goals status <instance> [--json]
   rivet goals events <instance> [--limit=<n>] [--json]
-  rivet orchestrate run <instance> --expected-version=<n> [--json]
-  rivet orchestrate watch <instance> --expected-version=<n> --interval-ms=<n> --max-ticks=<n> --deadline-ms=<n> [--json]
 `;
 
 async function defaultConfirmOverwrite() {

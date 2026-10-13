@@ -166,8 +166,8 @@
       "file": "test/cli/managed-orchestration.test.js",
       "criteria": [
         {
-          "id": "explicit-enrollment",
-          "test": "normal CLI persists explicit registration pause resume limits and planning renewal"
+          "id": "machine-diagnostics",
+          "test": "normal CLI exposes only machine diagnostics and limits without registration IDs"
         },
         {
           "id": "durable-deadline",
@@ -234,6 +234,14 @@
           "test": "enrolled host successor starts its execution clock after queued admission"
         },
         {
+          "id": "automatic-host-enrollment",
+          "test": "application automatically enrolls approved host execution while status and invalid prepare remain inert"
+        },
+        {
+          "id": "prepared-host-admission",
+          "test": "application enrolls a previously prepared managed host at first valid next action"
+        },
+        {
           "id": "legacy-admission-guard",
           "test": "enrolled legacy host rejects before changing its approved run or checkout"
         },
@@ -258,6 +266,50 @@
         {
           "id": "cancel-safe-claims",
           "test": "public cancel cleans queued and undispatched claims while preserving unknown writers"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-task-interface",
+      "file": "test/runtime/task-orchestration.test.js",
+      "criteria": [
+        {
+          "id": "approved-only",
+          "test": "task enrollment is approved only and legacy cannot acquire an allowance"
+        },
+        {
+          "id": "host-executor-boundary",
+          "test": "owned execution entry points reject managed host requests before enrolling"
+        },
+        {
+          "id": "strict-request-boundary",
+          "test": "hidden request and option keys cannot enroll a managed execution"
+        },
+        {
+          "id": "durable-allowance",
+          "test": "task allowance survives restart and resume, can shorten, and keeps capacity IDs internal"
+        },
+        {
+          "id": "policy-binding",
+          "test": "changed policy cannot silently enroll an existing approval"
+        },
+        {
+          "id": "automatic-dispatch-admission",
+          "test": "application enrolls approved execution before dispatch and leaves stale requests unenrolled"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-human-controls",
+      "file": "test/cli/human-task.test.js",
+      "criteria": [
+        {
+          "id": "task-controls",
+          "test": "task pause and host resume select the task and retain writer ownership without exposing registration IDs"
+        },
+        {
+          "id": "invalid-duration-inert",
+          "test": "invalid task allowance is rejected before task selection or state mutation"
         }
       ]
     },

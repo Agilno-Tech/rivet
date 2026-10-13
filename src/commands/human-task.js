@@ -1,3 +1,5 @@
+import {taskAllowance,requireManagedAllowance,activateTaskAdmission,taskCapacity} from '../runtime/task-orchestration.js';
+import {findRegistration} from '../runtime/machine-admission.js';
 import {withMachineContext} from '../runtime/machine-admission.js';
 import {readJson} from './work.js';
 import * as filesystem from 'node:fs';
@@ -177,13 +179,26 @@ function renderWorkerCheckouts(status, output) {
 
 
 export async function humanTaskCommand(parsed, dependencies) {
-  if (parsed.command !== 'task' || !['status', 'start', 'approve', 'resume', 'deps', 'recover', 'decisions', 'decide', 'approve-decision', 'review', 'checkpoint', 'handoff'].includes(parsed.subcommand)
-    || parsed.operands.length !== 0 || Object.keys(parsed.flags).some(key => !['project', 'run', 'details', 'input', 'input-json', 'phase', 'decision'].includes(key))) {
+  if (parsed.command !== 'task' || !['status', 'start', 'approve', 'pause', 'resume', 'deps', 'recover', 'decisions', 'decide', 'approve-decision', 'review', 'checkpoint', 'handoff'].includes(parsed.subcommand)
+    || parsed.operands.length !== 0 || Object.keys(parsed.flags).some(key => !['project', 'run', 'for', 'details', 'input', 'input-json', 'phase', 'decision'].includes(key))) {
     fail('Use rivet task status|start|approve|resume|deps|recover [--project=<path>] [--run=<id>].');
   }
+  const allowanceMs=taskAllowance(parsed.flags.for);
+  if(allowanceMs!==undefined&&!['start','resume'].includes(parsed.subcommand))fail('--for is available on task start or resume.');
   const project = await resolveConfiguredProject(dependencies.cwd(), parsed.flags.project, { env: dependencies.env });
   const record = await selectedRun(project.root, parsed.flags.run, parsed.subcommand, dependencies);
   if (!record) {dependencies.output.log('Task selection cancelled. No task action was taken.');return EXIT_CODES.SUCCESS;}
+  if (!['checkpoint','handoff','decisions','decide','approve-decision','review'].includes(parsed.subcommand)
+      && ['input','input-json','phase','decision'].some(key=>parsed.flags[key]!==undefined))
+    fail('Evidence options require a decision or review command.');
+  requireManagedAllowance(record,allowanceMs);
+  if(parsed.subcommand==='pause') {
+    const registration=dependencies.machine&&await findRegistration(dependencies.machine,project.root,record.runId);
+    if(!registration)fail('This task has no active managed execution allowance.','REPOSITORY_CONFLICT');
+    await dependencies.machine.pause(registration.id);
+    dependencies.output.log('Task paused. Running work can settle; new work waits until task resume.');
+    return EXIT_CODES.SUCCESS;
+  }
   if (['checkpoint','handoff'].includes(parsed.subcommand)) {
     if(record.featurePlan.client!=='host')fail('Owned CLI sessions checkpoint at bounded call boundaries. A running process cannot be reset from this command; inspect task status.','REPOSITORY_CONFLICT');
     const keys=['input','input-json'].filter(key=>parsed.flags[key]!==undefined);
@@ -211,6 +226,12 @@ export async function humanTaskCommand(parsed, dependencies) {
   if (parsed.subcommand === 'status') {
     if (typeof dependencies.work?.status !== 'function') fail('Task status is unavailable.', 'MISSING_CONFIGURATION');
     const status = await invokeFeature(dependencies.work, 'status', { project: project.root, runId: record.runId });
+    const capacity=dependencies.machine&&await taskCapacity(dependencies.machine,project.root,record.runId);
+    if(capacity){
+      dependencies.output.log(`Execution: ${capacity.paused?'paused':'managed'}; deadline ${new Date(capacity.deadlineMs).toISOString()}.`);
+      if(capacity.waiting.length)dependencies.output.log(`Waiting: ${capacity.waiting.join(', ')}.`);
+      dependencies.output.log(`Machine capacity: ${Object.entries(capacity.capacity).map(([name,value])=>`${name} ${value.held}/${value.limit}`).join('; ')}.`);
+    }
     dependencies.output.log(`Run: ${record.runId}`);
     dependencies.output.log(`Project: ${visible(project.root)} (run the next command from this project)`);
     dependencies.output.log(`Task: ${visible(record.workRequest.acceptanceCriteria[0] ?? record.workRequest.title)}`);
@@ -261,12 +282,13 @@ export async function humanTaskCommand(parsed, dependencies) {
           if (client === record.featurePlan.client) selected = available;
         } catch { fail(`The saved harness ${client} is unavailable or incompatible. Restore it before starting.`, 'PROVIDER_UNAVAILABLE'); }
       }
-      return activateProposal(project, record.workRequest.description, selected, record, dependencies, signal, {details:parsed.flags.details});
+      return activateProposal(project, record.workRequest.description, selected, record, dependencies, signal, {details:parsed.flags.details,allowanceMs});
     });
   }
   if (record.status === 'awaiting-final-approval') return finishTask(project, record, dependencies);
   if (record.status === 'completed') {dependencies.output.log('This task is completed. Inspect its recorded evidence and any separate delivery status.');return EXIT_CODES.SUCCESS;}
   if (record.featurePlan.client === 'host') {
+    if(dependencies.machine)await activateTaskAdmission(dependencies.machine,record,project.root,{allowanceMs,resume:true});
     const status = await invokeFeature(dependencies.work, 'status', { project: project.root, runId: record.runId });
     renderWorkerCheckouts(status, dependencies.output);
     dependencies.output.log(`Run: ${record.runId}`);
@@ -275,6 +297,10 @@ export async function humanTaskCommand(parsed, dependencies) {
     return EXIT_CODES.SUCCESS;
   }
   if (record.status === 'running') {
+    if(dependencies.machine){
+      const registration=await findRegistration(dependencies.machine,project.root,record.runId);
+      if(registration?.paused){await activateTaskAdmission(dependencies.machine,record,project.root,{allowanceMs,resume:true});dependencies.output.log('Task admission resumed. The existing worker remains its owner; no second worker was launched.');return EXIT_CODES.SUCCESS;}
+    }
     fail('This spawned run is already marked running. Rivet cannot prove its worker stopped, so it will not launch a duplicate. Inspect its process and state.', 'REPOSITORY_CONFLICT');
   }
   if (!['approved', 'blocked'].includes(record.status)) {
@@ -291,7 +317,7 @@ export async function humanTaskCommand(parsed, dependencies) {
     }
     const result = await invokeFeature(dependencies.feature, 'resume', {
       project: project.root, runId: record.runId, expectedVersion: record.version,
-    }, { signal, confirmDependencyInstall: confirmIsolatedDependencyInstall(dependencies, signal) });
+    }, { signal, ...(allowanceMs===undefined?{}:{allowanceMs}), confirmDependencyInstall: confirmIsolatedDependencyInstall(dependencies, signal) });
     dependencies.output.log(`Task: ${taskState(result.status)}.`);
     if (result.summary) dependencies.output.log(visible(result.summary));
     if (result.status === 'awaiting-final-approval') return finishTask(project, {...record,status:result.status}, dependencies, {signal});

@@ -1,3 +1,4 @@
+import {taskAllowance,requireManagedAllowance} from '../runtime/task-orchestration.js';
 import { taskState } from '../cli/task-presentation.js';
 import { finishTask } from './task-completion.js';
 import { createHash } from 'node:crypto';
@@ -106,9 +107,10 @@ function resultCode(result) {
 
 export async function humanRunCommand(parsed, dependencies) {
   if (parsed.command !== 'run' || parsed.subcommand !== null || parsed.operands.length !== 1
-    || Object.keys(parsed.flags).some(key => !['project', 'harness', 'details'].includes(key))) {
+    || Object.keys(parsed.flags).some(key => !['project', 'harness', 'details', 'for'].includes(key))) {
     fail('Use rivet run "task" [--harness=claude|codex] [--project=<path>].');
   }
+  taskAllowance(parsed.flags.for);
   if (dependencies.terminalIsInteractive?.() !== true) {
     fail('rivet run needs an interactive terminal for plan review and approval. Use feature/work JSON commands for automation.');
   }
@@ -117,6 +119,7 @@ export async function humanRunCommand(parsed, dependencies) {
 
 async function runInteractive(parsed, dependencies, signal) {
   const project = await resolveConfiguredProject(dependencies.cwd(), parsed.flags.project, { env: dependencies.env });
+  requireManagedAllowance({featurePlan:{executionPolicy:project.config.orchestration.executionPolicy}},taskAllowance(parsed.flags.for));
   const harnesses = dependencies.harnesses;
   if (!harnesses || typeof harnesses.discover !== 'function' || typeof harnesses.select !== 'function') {
     fail('Harness discovery is unavailable.', 'MISSING_CONFIGURATION');
@@ -168,10 +171,11 @@ async function runInteractive(parsed, dependencies, signal) {
     try { await harnesses.select(kind, project.root, { signal }); }
     catch { fail(`The selected worker harness ${kind} is unavailable or incompatible. Install and authenticate it before activation.`, 'PROVIDER_UNAVAILABLE'); }
   }
-  return activateProposal(project, parsed.operands[0], selected, proposal, dependencies, signal, {details:parsed.flags.details});
+  return activateProposal(project, parsed.operands[0], selected, proposal, dependencies, signal, {details:parsed.flags.details,allowanceMs:taskAllowance(parsed.flags.for)});
 }
 
-export async function activateProposal(project, task, selected, proposal, dependencies, signal, {details = false} = {}) {
+export async function activateProposal(project, task, selected, proposal, dependencies, signal, {details = false, allowanceMs} = {}) {
+  requireManagedAllowance(proposal, allowanceMs);
   const reviewedConfig = createHash('sha256').update(JSON.stringify(project.config)).digest('hex');
   const feature = dependencies.feature;
   if (!feature || typeof feature.start !== 'function' || typeof feature.watch !== 'function'
@@ -202,7 +206,7 @@ export async function activateProposal(project, task, selected, proposal, depend
   });
   const result = await invokeFeature(feature, 'watch', {
     project: project.root, runId: proposal.runId, expectedVersion: started.version,
-  }, { signal, confirmDependencyInstall: confirmIsolatedDependencyInstall(dependencies, signal) });
+  }, { signal, ...(allowanceMs===undefined?{}:{allowanceMs}), confirmDependencyInstall: confirmIsolatedDependencyInstall(dependencies, signal) });
   dependencies.output.log(`Rivet task: ${taskState(result.status)}.`);
   if (result.summary) dependencies.output.log(visible(result.summary));
   dependencies.output.log('Use rivet task status to inspect the checkout and verification evidence.');

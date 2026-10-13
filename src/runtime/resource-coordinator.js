@@ -504,12 +504,11 @@ export function createResourceCoordinator({ root, now = Date.now }) {
   async function configure(value) {
     const next = limits(value);
     return transaction((s) => {
-      if (!s) fail('unconfigured');
       if (s.claims.some((x) => x.status === 'held')) fail('active-claims');
       s.limits = next;
       refresh(s, now());
       return s.limits;
-    });
+    }, {create:true});
   }
   async function renew(idValue, deadlineMs) {
     if (!Number.isSafeInteger(deadlineMs) || deadlineMs <= now())

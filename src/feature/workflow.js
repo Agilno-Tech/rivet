@@ -69,6 +69,8 @@ function capture(input, allowed, required = allowed) {
   }
 }
 
+export { capture as captureFeatureWorkflowInput };
+
 function absolute(value) {
   if (typeof value !== 'string' || value.length < 2 || value.length > 4096 || !isAbsolute(value)
     || resolve(value) !== value || /[\u0000\r\n]/.test(value)) fail('invalid-input');

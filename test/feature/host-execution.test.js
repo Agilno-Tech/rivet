@@ -1459,3 +1459,29 @@ test('application forwards host cancellation and preserves previously dispatched
  assert.equal(claims.find(x=>x.resource==='agentExecutions').status,'held');
  assert.equal(claims.find(x=>x.resource==='activeTasks').status,'held');
 });
+
+test('application automatically enrolls approved host execution while status and invalid prepare remain inert',async t=>{
+ const {createRivetApplication}=await import('../../src/runtime/application.js');
+ const {root,approved}=await fixture(t,{managed:true,now:new Date().toISOString()});
+ const app=createRivetApplication({env:{...process.env,RIVET_MACHINE_STATE_ROOT:join(dirname(root),'machine')}});
+ const base={project:root,runId:approved.runId};
+ await app.work.status(base);assert.equal((await app.machine.inspect()).configured,false);
+ await assert.rejects(app.work.prepare({...base,expectedRunVersion:approved.version+1}));assert.equal((await app.machine.inspect()).configured,false);
+ await assert.rejects(app.work.prepare({...base,expectedRunVersion:approved.version,unexpected:true}));assert.equal((await app.machine.inspect()).configured,false);
+ for(const key of ['hidden',Symbol('hidden')]){await assert.rejects(app.work.prepare(Object.defineProperty({...base,expectedRunVersion:approved.version},key,{value:true})));assert.equal((await app.machine.inspect()).configured,false);}
+ const before=Date.now();const ready=await app.work.prepare({...base,expectedRunVersion:approved.version});assert.equal(ready.status,'ready');
+ const registered=(await app.machine.inspect()).registrations;assert.equal(registered.length,1);assert.equal(registered[0].runId,approved.runId);assert.ok(registered[0].deadlineMs>=before+3600000);
+ const next=await app.work.nextAction({...base,expectedRuntimeVersion:ready.runtimeVersion});assert.ok(next.action);
+ const again=await app.work.nextAction({...base,expectedRuntimeVersion:next.runtimeVersion});assert.equal(again.status,'waiting-for-result');assert.equal((await app.machine.inspect()).registrations[0].deadlineMs,registered[0].deadlineMs);
+});
+
+test('application enrolls a previously prepared managed host at first valid next action',async t=>{
+ const {createRivetApplication}=await import('../../src/runtime/application.js');
+ const {root,approved,gitClient}=await fixture(t,{managed:true,now:new Date().toISOString()});
+ const execution=createHostExecution({gitClient});
+ const base={project:root,runId:approved.runId};const prepared=await execution.prepare({...base,expectedRunVersion:approved.version});
+ const app=createRivetApplication({env:{...process.env,RIVET_MACHINE_STATE_ROOT:join(dirname(root),'machine')}});
+ await assert.rejects(app.work.nextAction({...base,expectedRuntimeVersion:prepared.runtimeVersion+1}));assert.equal((await app.machine.inspect()).configured,false);
+ for(const key of ['hidden',Symbol('hidden')]){await assert.rejects(app.work.nextAction(Object.defineProperty({...base,expectedRuntimeVersion:prepared.runtimeVersion},key,{value:true})));assert.equal((await app.machine.inspect()).configured,false);}
+ const next=await app.work.nextAction({...base,expectedRuntimeVersion:prepared.runtimeVersion});assert.ok(next.action);assert.equal((await app.machine.inspect()).registrations.length,1);
+});

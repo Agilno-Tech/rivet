@@ -98,6 +98,8 @@ function request(input, versionName = null) {
   return value;
 }
 
+export { request as captureHostExecutionRequest };
+
 function runtimeSummary(state) {
   return immutableJson({
     version: state.version,

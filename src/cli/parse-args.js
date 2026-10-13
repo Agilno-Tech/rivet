@@ -62,11 +62,11 @@ const STRICT_OPTIONS = {
   },
   run: {
     boolean: new Set(['details']),
-    valued: new Set(['project', 'harness']),
+    valued: new Set(['project', 'harness', 'for']),
   },
   task: {
     boolean: new Set(['details']),
-    valued: new Set(['project', 'run', 'input', 'input-json', 'phase', 'decision']),
+    valued: new Set(['project', 'run', 'for', 'input', 'input-json', 'phase', 'decision']),
   },
   setup: {
     boolean: new Set(['global', 'write', 'json']),
@@ -245,7 +245,7 @@ export function parseArgs(argv) {
   if (command === 'work' && !['propose', 'prepare', 'next', 'status', 'submit', 'verify', 'recover', 'checkpoint', 'handoff'].includes(positionals[0])) {
     throw new ArgumentError('Unsupported work subcommand');
   }
-  if (command === 'task' && !['status', 'start', 'approve', 'resume', 'deps', 'recover', 'decisions', 'decide', 'approve-decision', 'review', 'checkpoint', 'handoff'].includes(positionals[0])) {
+  if (command === 'task' && !['status', 'start', 'approve', 'pause', 'resume', 'deps', 'recover', 'decisions', 'decide', 'approve-decision', 'review', 'checkpoint', 'handoff'].includes(positionals[0])) {
     throw new ArgumentError('Unsupported task subcommand');
   }
 

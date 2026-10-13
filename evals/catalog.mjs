@@ -49,7 +49,7 @@ export const catalog = {
       ['attempt-bound-no-execution', 'no-execution proof is bound to one dispatched attempt and rejects fabricated evidence'],
     ]),
     scenario('orchestration-supervision', 'test/cli/managed-orchestration.test.js', [
-      ['explicit-enrollment', 'normal CLI persists explicit registration pause resume limits and planning renewal'],
+      ['machine-diagnostics', 'normal CLI exposes only machine diagnostics and limits without registration IDs'],
       ['durable-deadline', 'managed watch preserves run deadline across restarted services and stops at decisions'],
       ['host-prepare-deadline', 'managed host watch stops after preparation crosses its own cutoff'],
       ['host-prepare-cancellation', 'managed host watch honors explicit cancellation during slow preparation'],
@@ -67,6 +67,8 @@ export const catalog = {
       ['queued-verification', 'enrolled host verification queues without recording failed checks then resumes'],
       ['expired-stop-reconciliation', 'application permits stopped host reconciliation after deadline without new admission'],
       ['queued-successor-clock', 'enrolled host successor starts its execution clock after queued admission'],
+      ['automatic-host-enrollment', 'application automatically enrolls approved host execution while status and invalid prepare remain inert'],
+      ['prepared-host-admission', 'application enrolls a previously prepared managed host at first valid next action'],
       ['legacy-admission-guard', 'enrolled legacy host rejects before changing its approved run or checkout'],
       ['cancel-before-dispatch', 'host admission cancellation before durable dispatch retains no new writer'],
       ['cancel-retains-owner', 'application forwards host cancellation and preserves previously dispatched owners'],
@@ -74,6 +76,18 @@ export const catalog = {
     scenario('orchestration-task-ownership', 'test/runtime/application.test.js', [
       ['single-task-owner', 'concurrent enrolled calls own one run task slot and release it after settlement'],
       ['cancel-safe-claims', 'public cancel cleans queued and undispatched claims while preserving unknown writers'],
+    ]),
+    scenario('orchestration-task-interface', 'test/runtime/task-orchestration.test.js', [
+      ['approved-only', 'task enrollment is approved only and legacy cannot acquire an allowance'],
+      ['host-executor-boundary', 'owned execution entry points reject managed host requests before enrolling'],
+      ['strict-request-boundary', 'hidden request and option keys cannot enroll a managed execution'],
+      ['durable-allowance', 'task allowance survives restart and resume, can shorten, and keeps capacity IDs internal'],
+      ['policy-binding', 'changed policy cannot silently enroll an existing approval'],
+      ['automatic-dispatch-admission', 'application enrolls approved execution before dispatch and leaves stale requests unenrolled'],
+    ]),
+    scenario('orchestration-human-controls', 'test/cli/human-task.test.js', [
+      ['task-controls', 'task pause and host resume select the task and retain writer ownership without exposing registration IDs'],
+      ['invalid-duration-inert', 'invalid task allowance is rejected before task selection or state mutation'],
     ]),
     scenario('orchestration-command-admission', 'test/core/commands.test.js', [
       ['observed-command-stop', 'command lifecycle awaits observed process-group stop before release'],

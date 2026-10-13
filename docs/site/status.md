@@ -13,7 +13,7 @@ Rivet is available on [npm](https://www.npmjs.com/package/@agilno-tech/rivet) as
 | Project procedures | Create, publish, discover, update and retire versioned protocols. |
 | Context integrations | Configure Jira/Linear requests and linked Figma/Confluence context through supported transports. |
 | Models | Select Claude/Codex workers or explicitly delegate advisory text to supported API/local models. |
-| Managed orchestration | Opt into approved model profiles, bounded session handoffs and shared admission for explicitly enrolled projects. See [orchestration](./orchestration.md) for scope and qualification. |
+| Managed orchestration | Opt into approved model profiles, bounded session handoffs and automatic shared admission for approved managed tasks. See [orchestration](./orchestration.md) for scope and qualification. |
 | Repository delivery | Inspect GitHub, GitLab and Bitbucket; publish verified branches and create or update reviews. GitHub/GitLab merges support the documented policy subsets. |
 | Deployment and trackers | Separately approve a configured GitHub Actions deployment or Jira/Linear delivery updates. |
 | Troubleshooting | Inspect task/checkouts, collect a redacted support bundle and recover eligible abandoned host locks. |

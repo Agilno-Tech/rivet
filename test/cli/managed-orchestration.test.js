@@ -63,45 +63,12 @@ async function fixture(t) {
     call,
   };
 }
-test('normal CLI persists explicit registration pause resume limits and planning renewal', async (t) => {
-  const { root, call } = await fixture(t);
-  assert.equal((await call('status')).configured, false);
-  const deadline = Date.now() + 60000;
-  const registered = await call(
-    'register',
-    `--project=${root}`,
-    `--deadline-ms=${deadline}`,
-  );
-  assert.equal(
-    (await call('status', registered.id)).registration.projectRoot,
-    root,
-  );
-  assert.equal((await call('pause', registered.id)).paused, true);
-  assert.equal((await call('resume', registered.id)).paused, false);
-  assert.equal(
-    (
-      await call(
-        'register',
-        `--project=${root}`,
-        `--deadline-ms=${deadline + 5000}`,
-      )
-    ).deadlineMs,
-    deadline,
-  );
-  assert.equal(
-    (await call('renew', registered.id, `--deadline-ms=${deadline + 10000}`))
-      .deadlineMs,
-    deadline + 10000,
-  );
-  assert.equal(
-    (
-      await call(
-        'limits',
-        '--limits-json={"activeTasks":2,"agentExecutions":2,"heavyVerification":1,"dependencyInstalls":1}',
-      )
-    ).activeTasks,
-    2,
-  );
+test('normal CLI exposes only machine diagnostics and limits without registration IDs', async t => {
+ const {root,call}=await fixture(t);
+ const status=await call('status');assert.equal(status.configured,false);assert.deepEqual(status.tasks,[]);
+ for(const command of ['register','renew','watch','pause','resume'])await assert.rejects(call(command,'registration-example'));
+ assert.equal((await call('limits','--limits-json={"activeTasks":2,"agentExecutions":2,"heavyVerification":1,"dependencyInstalls":1}')).activeTasks,2);
+ assert.equal(JSON.stringify(await call('status')).includes('registration-'),false);
 });
 test('managed watch preserves run deadline across restarted services and stops at decisions', async (t) => {
   const { root, machine } = await fixture(t);

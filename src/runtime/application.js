@@ -1,6 +1,7 @@
+import {activateTaskAdmission} from './task-orchestration.js';
 import {homedir} from 'node:os';
 import {createManagedOrchestration} from './managed-orchestration.js';
-import {withMachineContext,admitted,admissionKey,taskAdmission} from './machine-admission.js';
+import {withMachineContext,admitted,admissionKey,taskAdmission,findRegistration} from './machine-admission.js';
 import { isExecutionCompatibleCwd, isProjectExecutable } from '../config/commands.js';
 import { createTrackerProviderFactory } from '../adapters/factory.js';
 import { createNodeProviderTransport } from '../adapters/node-transport.js';
@@ -28,9 +29,9 @@ import {
 import { collectEvidenceBundle } from '../evidence/collect.js';
 import { createFeatureRunStore } from '../feature/run-store.js';
 import { createFeatureExecutor } from '../feature/runtime-bridge.js';
-import { createHostExecution } from '../feature/host-execution.js';
+import { createHostExecution, captureHostExecutionRequest } from '../feature/host-execution.js';
 import { discoverHarnesses } from './harness-discovery.js';
-import { createFeatureWorkflow } from '../feature/workflow.js';
+import { createFeatureWorkflow, captureFeatureWorkflowInput } from '../feature/workflow.js';
 import { createGitClient } from '../git/client.js';
 import { createReservedWorktree } from '../git/worktrees.js';
 import { buildLaunchContract } from '../prompts/launch-contract.js';
@@ -351,13 +352,28 @@ export function createRivetApplication(input = {}) {
                 if(registration&&result.status==='cancelled')await managed.coordinator.cancelRegistration(registration.id);
                 return result;
               }
+              request = captureFeatureWorkflowInput(request,new Set(['project','runId','expectedVersion']),new Set(['project','runId']));
+              options = captureFeatureWorkflowInput(options,new Set(['signal','confirmDependencyInstall','allowanceMs']),new Set());
+              if (options.signal!==undefined && !(options.signal instanceof AbortSignal)
+                  || options.confirmDependencyInstall!==undefined && typeof options.confirmDependencyInstall!=='function')
+                throw Object.assign(new Error('Invalid execution request.'),{code:'ERR_FEATURE_WORKFLOW_INVALID_INPUT',safeMessage:'Invalid execution request.'});
+              options.signal?.throwIfAborted();
+              const record = await rawWorkflow.status({project:request.project,runId:request.runId});
+              if (record.featurePlan?.client === 'host')
+                throw Object.assign(new Error('Host tasks continue through the owning harness work commands.'), {code:'ERR_FEATURE_WORKFLOW_HOST_USE_WORK',safeMessage:'Host tasks continue through the owning harness work commands.'});
+              if (record.featurePlan?.executionPolicy) {
+                if (!['approved','blocked'].includes(record.status) || record.version !== request.expectedVersion)
+                  throw Object.assign(new Error('Task state changed; inspect task status.'), {code:'ERR_FEATURE_WORKFLOW_STATE_CONFLICT',safeMessage:'Task state changed; inspect task status.'});
+                await activateTaskAdmission(managed.coordinator,record,request.project,{allowanceMs:options.allowanceMs,resume:method==='resume'});
+              } else if(options.allowanceMs!==undefined) await activateTaskAdmission(managed.coordinator,record,request.project,options);
+              const {allowanceMs,...executionOptions}=options;
               return withMachineContext(
                 managed.coordinator,
                 request.project,
                 request.runId,
                 (signal) =>
                   taskAdmission(() =>
-                    rawWorkflow[method](request, { ...options, signal }),
+                    rawWorkflow[method](request, { ...executionOptions, signal }),
                   ),
                 options,
               );
@@ -391,6 +407,22 @@ export function createRivetApplication(input = {}) {
           );
           const service = await hostExecutionPromise;
           if (typeof service[method] !== 'function') fail();
+          args[1]?.signal?.throwIfAborted();
+          if (['prepare','nextAction'].includes(method))
+            args[0]=captureHostExecutionRequest(args[0],method==='prepare'?'expectedRunVersion':'expectedRuntimeVersion');
+          if (method === 'prepare') {
+            const record = await rawWorkflow.status({project:args[0].project,runId:args[0].runId});
+            if (record.featurePlan?.executionPolicy && record.featurePlan.client === 'host'
+                && record.version === args[0].expectedRunVersion && ['approved','running'].includes(record.status))
+              await activateTaskAdmission(managed.coordinator,record,args[0].project);
+          }
+
+          if (method === 'nextAction'
+              && !await findRegistration(managed.coordinator,args[0].project,args[0].runId)) {
+            const view=await service.status({project:args[0].project,runId:args[0].runId});
+            if(view.runtime?.version===args[0].expectedRuntimeVersion && view.run?.featurePlan?.client==='host')
+              await activateTaskAdmission(managed.coordinator,view.run,args[0].project);
+          }
           if (
             [
               'prepare',

@@ -327,3 +327,25 @@ test('final review output failure cannot proceed to local application',async t=>
     resolveCommandExecutable:async()=>assert.fail('no Git after failed review output'),
   }));assert.equal(code,EXIT_CODES.REPOSITORY_CONFLICT);
 });
+
+test('task pause and host resume select the task and retain writer ownership without exposing registration IDs',async t=>{
+ const root=await fixture(t);const {managedPolicy}=await import('../fixtures/execution-policy.js');const YAML=(await import('yaml')).default;
+ const path=join(root,'.rivet/orchestration.yaml');const config=YAML.parse(await readFile(path,'utf8'));config.executionPolicy=managedPolicy();await writeFile(path,YAML.stringify(config));
+ const {store,record}=await createRun(root,'managed-task','host');await store.update({status:'approved',updatedAt:NOW,activation:{approverId:'human',approvedAt:NOW,requestDigest:record.workRequest.digest,proposalDigest:record.proposalDigest},runtimeRefs:[],evidenceRefs:[]},{expectedVersion:record.version});
+ const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+ const parent=await realpath(await mkdtemp(join(tmpdir(),'rivet-task-machine-')));t.after(()=>rm(parent,{recursive:true,force:true}));
+ const machine=createResourceCoordinator({root:join(parent,'machine')});const registration=await machine.register({projectRoot:root,runId:'managed-task',deadlineMs:Date.now()+30000});
+ const writer=await machine.request({registrationId:registration.id,resource:'agentExecutions',idempotencyKey:'writer',generation:1});await machine.dispatch({claimId:writer.id,generation:1});
+ const messages=[];const services=overrides(root,messages,{machine});
+ assert.equal(await main(['task','pause','--input-json={}'],services),EXIT_CODES.INVALID_INPUT);assert.equal((await machine.inspect()).registrations[0].paused,false);
+ assert.equal(await main(['task','pause'],services),EXIT_CODES.SUCCESS);assert.equal((await machine.inspect()).registrations[0].paused,true);
+ assert.equal(await main(['task','resume'],services),EXIT_CODES.SUCCESS);assert.equal((await machine.inspect()).registrations[0].paused,false);
+ assert.equal((await machine.inspect()).claims.find(c=>c.id===writer.id).status,'held');
+ assert.equal(await main(['task','status'],services),EXIT_CODES.SUCCESS);assert.match(messages.join('\n'),/Machine capacity:/);assert.doesNotMatch(messages.join('\n'),/registration-/);
+});
+
+test('invalid task allowance is rejected before task selection or state mutation',async t=>{
+ const root=await fixture(t);const messages=[];
+ assert.equal(await main(['task','resume','--for=0h'],overrides(root,messages)),EXIT_CODES.INVALID_INPUT);
+ assert.match(messages.join('\n'),/positive duration/);
+});

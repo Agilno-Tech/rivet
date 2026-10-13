@@ -1,6 +1,6 @@
 # Managed orchestration
 
-Managed orchestration coordinates explicitly enrolled projects and approved tasks on one machine. It reuses Rivet's task plans, decision records, isolated worktrees and verification evidence. It does not create work or grant delivery authority on its own.
+Managed orchestration coordinates approved tasks on one machine through the normal `run` and `task` workflow. It reuses Rivet's task plans, decision records, isolated worktrees and verification evidence. It does not create work or grant delivery authority on its own.
 
 ## Scope
 
@@ -53,44 +53,43 @@ executionPolicy:
     contextThresholdPercent: 80
 ```
 
-This example allows three replacements per node. Action and time bounds remain available when native context occupancy is unknown. Existing role budgets still apply across all generations. The policy enables routing and session contracts; machine resource coordination additionally requires explicit project enrollment.
+This example allows three replacements per node. Action and time bounds remain available when native context occupancy is unknown. Existing role budgets still apply across all generations. An approved managed task participates in shared machine capacity automatically when execution starts. There is no separate registration step.
 
-## Enroll a project and inspect capacity
+## Start and continue a task
 
-Register each participating repository by its canonical root. Supply an absolute deadline in Unix milliseconds. For example, this enrolls the current repository for one hour:
+Use the existing task workflow. In a project with a managed execution policy:
 
 ```sh
-deadline=$(node -e 'console.log(Date.now() + 60 * 60 * 1000)')
-rivet orchestrate register --project="$PWD" --deadline-ms="$deadline" --json
+rivet run "Add a health endpoint with a regression test" --for=1h
+rivet task status
+rivet task pause
+rivet task resume
+```
+
+Review and approve the plan as usual. Rivet records the task's participation and shares capacity automatically. Proposing or declining a plan does not enroll it. Status is read-only. Tasks without a managed policy retain their existing behavior; `--for` requires a managed task.
+
+The default execution allowance is one hour. `--for` accepts a positive duration in seconds, minutes or hours, such as `90s`, `30m` or `2h`. It is available on `run`, `task start` and `task resume`. The deadline is saved when managed execution first starts. Restarting or resuming never extends it; an explicit shorter allowance may shorten it. An expired task needs a new approved task to receive a fresh execution allowance.
+
+`task status` shows the deadline, paused state, capacity and waiting reasons. Rivet selects the current task automatically. If several active tasks exist, the interactive chooser asks which one; scripts can select the existing task with `--run=<run-id>`. No registration ID is needed.
+
+Pause prevents new work from starting. It does not terminate an existing writer. Resume restores eligibility within the saved deadline and continues through the existing workflow. A host task stays with its owning coding harness; the terminal does not launch a second worker. The harness handles action and checkpoint receipts using Rivet's agent protocol.
+
+Deadline expiry prevents new execution. It still permits recording an exact stopped receipt or reconciling a result from already admitted work. Cancellation removes queued and safely undispatched claims; dispatched work with unknown liveness retains its capacity. A running terminal or coding harness is required; closing the desktop application does not leave an always-on execution service.
+
+Adding a managed policy to project configuration does not upgrade an older approval. Review a new plan before managed execution.
+
+## Machine-wide diagnostics
+
+For advanced inspection and machine ceilings:
+
+```sh
 rivet orchestrate status --json
-```
-
-Registration does not create or approve a task. Continue using `rivet run` or the host task workflow. Approved runs in an enrolled project receive durable run registrations; use the registration ID shown by orchestration status to inspect one. Existing runs can be registered explicitly with `--run=<run-id>`.
-
-Enrolled host work requires an approved plan with the managed session policy. Adding that policy to project configuration does not upgrade an older approval; review a new plan before managed host execution. Unenrolled legacy workflows keep their existing behavior.
-
-The private coordinator lives at `~/.rivet-machine`. `RIVET_MACHINE_STATE_ROOT` selects a different private root, primarily for isolated environments. All participating processes must use the same root to share capacity. Reading status before enrollment does not create coordinator state.
-
-```sh
-rivet orchestrate status <registration-id> --json
-rivet orchestrate pause <registration-id> --json
-rivet orchestrate resume <registration-id> --json
-rivet orchestrate watch <run-registration-id> --deadline-ms="$deadline" --max-ticks=10 --interval-ms=1000 --json
-```
-
-Pause prevents new admissions; it does not terminate an existing writer. Resume restores eligibility within the original deadline. A watch operates on one registered run, preserves existing plan and delivery approvals, and returns when it reaches a decision or another bounded stopping condition. It needs a running terminal process; closing the desktop application is not an always-on execution service.
-
-Re-registering a run cannot extend its deadline. A project registration can be renewed explicitly with `rivet orchestrate renew <project-registration-id> --deadline-ms=<new-deadline>` when it has no held or queued claims. Renewal applies to future work and does not renew existing run deadlines.
-
-Deadline expiry prevents new execution. It does not prevent recording an exact stopped receipt or reconciling a result from already admitted work. Cancellation removes queued and safely undispatched claims; dispatched work with unknown liveness retains its lease.
-
-Machine ceilings can be changed explicitly; project/run registration accepts lower limits with `--limits-json`. For example:
-
-```sh
 rivet orchestrate limits --limits-json='{"activeTasks":4,"agentExecutions":4,"heavyVerification":1,"dependencyInstalls":1}' --json
 ```
 
-Inspect outstanding claims before changing ceilings. Status reports queued work and retained owners. Expiry and parent-process death do not prove that child processes stopped, so an uncertain owner keeps its capacity until reconciled.
+These commands complement task status. Approved policy limits may lower machine ceilings. Inspect outstanding work before changing ceilings. Expiry and parent-process death do not prove child processes stopped, so an uncertain owner keeps its capacity until reconciled.
+
+The private coordinator lives at `~/.rivet-machine`. `RIVET_MACHINE_STATE_ROOT` selects a different private root, primarily for isolated environments. Participating processes must share the same root. Read-only inspection before the first managed task does not create coordinator state. Registrations and claim identities are implementation details; users operate on projects and tasks.
 
 ## Continue a task in a fresh session
 
@@ -102,7 +101,7 @@ Replacement sessions retain the task's spending limits, retry count and review h
 
 Reliable measured context occupancy can trigger turnover. When it is unavailable, Rivet uses configured time bounds and observed action boundaries. These count Rivet actions, not hidden provider tool calls. A timeout before a valid checkpoint is a recovery condition, not a successful handoff.
 
-Use `rivet task checkpoint --run=<id> --input=<file>` and `rivet task handoff --run=<id> --input=<file>` for host sessions. See the [exact input and receipt contracts](./runtime-reference.md#managed-session-checkpoints-and-handoffs). Owned CLI tasks yield at bounded call boundaries; these commands do not reset a running CLI process.
+The owning harness uses the checkpoint and handoff protocol for host sessions; normal users continue with `rivet task resume`. See the [exact input and receipt contracts](./runtime-reference.md#managed-session-checkpoints-and-handoffs). Owned CLI tasks yield at bounded call boundaries; these commands do not reset a running CLI process.
 
 ## Evidence and limits
 

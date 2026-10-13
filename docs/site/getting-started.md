@@ -70,6 +70,8 @@ rivet run "Add a GET /health endpoint with a regression test" --harness=codex
 
 Review the task, numbered acceptance criteria, proposed files, checks, permissions and limits before approving. Add `--details` to include full graph identifiers. The activation prompt waits while you read; closing it leaves a saved proposal. To review that proposal again, run `rivet task start` (or `rivet task resume`). Rivet works in isolated Git checkouts and asks separately before preparing their dependencies. Existing dependencies in your source checkout are not copied. Installing Rivet does not change your project's package manager; Yarn, pnpm, npm and Bun project scripts remain supported.
 
+If your project uses a [managed execution policy](./orchestration.md), approved tasks share machine capacity automatically. Optionally set their execution allowance with `--for=1h`; the default is one hour. Use `rivet task status` to inspect waiting work, `rivet task pause` to stop new admissions, and `rivet task resume` to continue within the original deadline. You do not need a separate registration command.
+
 ### In Claude Code, Codex or another coding harness
 
 Open your configured project, reload the harness if needed, and ask:
