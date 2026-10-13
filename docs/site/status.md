@@ -13,6 +13,7 @@ Rivet is available on [npm](https://www.npmjs.com/package/@agilno-tech/rivet) as
 | Project procedures | Create, publish, discover, update and retire versioned protocols. |
 | Context integrations | Configure Jira/Linear requests and linked Figma/Confluence context through supported transports. |
 | Models | Select Claude/Codex workers or explicitly delegate advisory text to supported API/local models. |
+| Managed orchestration | Opt into approved model profiles, bounded session handoffs and shared admission for explicitly enrolled projects. See [orchestration](./orchestration.md) for scope and qualification. |
 | Repository delivery | Inspect GitHub, GitLab and Bitbucket; publish verified branches and create or update reviews. GitHub/GitLab merges support the documented policy subsets. |
 | Deployment and trackers | Separately approve a configured GitHub Actions deployment or Jira/Linear delivery updates. |
 | Troubleshooting | Inspect task/checkouts, collect a redacted support bundle and recover eligible abandoned host locks. |
@@ -24,5 +25,6 @@ Rivet is available on [npm](https://www.npmjs.com/package/@agilno-tech/rivet) as
 - Context integrations, API/local model delegation and remote delivery have automated coverage; live validation across their supported providers is incomplete.
 - GitHub and GitLab merge support is limited to the policies documented in [delivery](./delivery.md). Merge Bitbucket reviews manually.
 - Shared cross-user memory is not available. Project protocols are available.
+- Managed orchestration has deterministic fixture coverage; the new handoff and shared-admission workflow still needs live-model and desktop qualification. Feature nodes remain sequential within each task.
 
 See [compatibility](./compatibility.md) for tested scope and [troubleshooting](./troubleshooting.md) for remedies.

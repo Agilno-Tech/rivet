@@ -25,6 +25,7 @@ export default defineConfig({
       ] },
       { text: 'Use Rivet', items: [
         { text: 'Task status and recovery', link: '/statuses' },
+        { text: 'Managed orchestration', link: '/orchestration' },
         { text: 'Project protocols', link: '/memory-and-protocols' },
         { text: 'Integrations', link: '/integrations' },
         { text: 'Models and harnesses', link: '/models' },

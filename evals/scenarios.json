@@ -84,6 +84,184 @@
           "test": "invalid profiles, prompts, credentials, spend limits and unsupported providers fail before network"
         }
       ]
+    },
+    {
+      "id": "orchestration-routing",
+      "file": "test/models/execution-policy.test.js",
+      "criteria": [
+        {
+          "id": "legacy-compatible",
+          "test": "accepts managed policy without changing legacy enabled:false"
+        },
+        {
+          "id": "bounded-profiles",
+          "test": "rejects unsafe profiles, unknown efforts, missing/ambiguous routes and advisory writes"
+        },
+        {
+          "id": "pinned-selection",
+          "test": "resolves immutable approved identity and never falls back to another route"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-telemetry",
+      "file": "test/runtime/session-capabilities.test.js",
+      "criteria": [
+        {
+          "id": "literal-arguments",
+          "test": "bounded selected model and effort become literal argv"
+        },
+        {
+          "id": "independent-selection",
+          "test": "independent review dispatches selection without duplicate legacy model"
+        },
+        {
+          "id": "unknown-measurements",
+          "test": "telemetry distinguishes unknown billing and context from measured zero"
+        },
+        {
+          "id": "bounded-codex-config",
+          "test": "Codex config escape hatches remain rejected"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-handoff",
+      "file": "test/feature/host-execution.test.js",
+      "criteria": [
+        {
+          "id": "dirty-work-continuity",
+          "test": "managed host checkpoint stopped successor completion preserves dirty work and rejects late results before integration"
+        },
+        {
+          "id": "uncertain-transfer-blocked",
+          "test": "managed host unknown stop and changed dirty bytes block successor without resetting cumulative budgets"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-capacity",
+      "file": "test/runtime/resource-coordinator.test.js",
+      "criteria": [
+        {
+          "id": "task-fairness",
+          "test": "lazy reads and five task FIFO admissions share four slots"
+        },
+        {
+          "id": "cross-project-cap",
+          "test": "independent processes contend for one agent without overadmission"
+        },
+        {
+          "id": "uncertain-owner-retained",
+          "test": "restart with reused parent PID cannot release dispatched unknown descendants"
+        },
+        {
+          "id": "attempt-bound-no-execution",
+          "test": "no-execution proof is bound to one dispatched attempt and rejects fabricated evidence"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-supervision",
+      "file": "test/cli/managed-orchestration.test.js",
+      "criteria": [
+        {
+          "id": "explicit-enrollment",
+          "test": "normal CLI persists explicit registration pause resume limits and planning renewal"
+        },
+        {
+          "id": "durable-deadline",
+          "test": "managed watch preserves run deadline across restarted services and stops at decisions"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-process-lifecycle",
+      "file": "test/runtime/process-runner.test.js",
+      "criteria": [
+        {
+          "id": "settled-cancellation",
+          "test": "managed watch cancellation awaits real owned process settlement before capacity release"
+        },
+        {
+          "id": "descendant-retention",
+          "test": "managed successful provider with surviving descendant retains unknown machine capacity"
+        },
+        {
+          "id": "proven-preflight-failure",
+          "test": "actual Codex preflight without a child releases only its current machine attempt"
+        },
+        {
+          "id": "probe-descendant-retention",
+          "test": "surviving compatibility probe blocks main execution and retains machine capacity"
+        },
+        {
+          "id": "stopped-probe-control",
+          "test": "stopped compatibility probe permits the admitted main execution"
+        },
+        {
+          "id": "settled-scope-fence",
+          "test": "settled execution scope fences saved runners and opaque success retains capacity"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-host-admission",
+      "file": "test/feature/host-execution.test.js",
+      "criteria": [
+        {
+          "id": "queued-first-dispatch",
+          "test": "enrolled host queues without poisoning state and requires observed stop before normal result"
+        },
+        {
+          "id": "queued-verification",
+          "test": "enrolled host verification queues without recording failed checks then resumes"
+        },
+        {
+          "id": "expired-stop-reconciliation",
+          "test": "application permits stopped host reconciliation after deadline without new admission"
+        },
+        {
+          "id": "queued-successor-clock",
+          "test": "enrolled host successor starts its execution clock after queued admission"
+        },
+        {
+          "id": "legacy-admission-guard",
+          "test": "enrolled legacy host rejects before changing its approved run or checkout"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-task-ownership",
+      "file": "test/runtime/application.test.js",
+      "criteria": [
+        {
+          "id": "single-task-owner",
+          "test": "concurrent enrolled calls own one run task slot and release it after settlement"
+        },
+        {
+          "id": "cancel-safe-claims",
+          "test": "public cancel cleans queued and undispatched claims while preserving unknown writers"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-command-admission",
+      "file": "test/core/commands.test.js",
+      "criteria": [
+        {
+          "id": "observed-command-stop",
+          "test": "command lifecycle awaits observed process-group stop before release"
+        },
+        {
+          "id": "heavy-queue",
+          "test": "enrolled heavy command waits for capacity then releases only its observed owner"
+        },
+        {
+          "id": "no-child-cancellation",
+          "test": "command cancellation after admission before spawn releases proven unused capacity"
+        }
+      ]
     }
   ],
   "deferred": [

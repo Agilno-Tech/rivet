@@ -295,14 +295,17 @@ for (const managed of [false,true]) test(`executes all Workers sequentially with
   const planner = createFeaturePlanner({ planningClient: { propose: async () => { const value=proposal(request); if(managed)value.workItems[0].executionClass='bounded-fix'; return value; } } });
   const featurePlan = await planner.propose({ config, workRequest: request, baselineCommit, client: 'claude' });
   const run = await persistedRunningRun(root, 'smart-agenda-live-run', request, featurePlan);
+  const gateLog = join(dirname(root), 'gate-invocations.log');
   const gateExecutable = join(dirname(root), 'bounded-gate');
-  await writeFile(gateExecutable, '#!/bin/sh\nif [ "$1" = ci ]; then mkdir -p node_modules; printf ready > node_modules/installed; exit 0; fi\n[ "$RIVET_GATE_ENV" = present ]\n', { mode: 0o700 });
+  await writeFile(gateExecutable, '#!/bin/sh\nif [ -n "$RIVET_GATE_LOG" ]; then printf "%s\\n" "$*" >> "$RIVET_GATE_LOG"; fi\nif [ "$1" = ci ]; then mkdir -p node_modules; printf ready > node_modules/installed; exit 0; fi\n[ "$RIVET_GATE_ENV" = present ]\n', { mode: 0o700 });
   await chmod(gateExecutable, 0o700);
   const launches = [];
+  let activeLaunches = 0;
+  let maxActiveLaunches = 0;
   let installsApproved = 0;
   const executor = createFeatureExecutor({
     gitClient,
-    environment: { RIVET_GATE_ENV: 'present', PATH: '/bin' },
+    environment: { RIVET_GATE_ENV: 'present', RIVET_GATE_LOG: gateLog, PATH: '/bin' },
     now: () => NOW,
     resolveCommandExecutable: async runner => {
       assert.equal(runner, 'npm');
@@ -314,6 +317,8 @@ for (const managed of [false,true]) test(`executes all Workers sequentially with
       return Object.freeze({
         provider: kind,
         async launch(contract,launchOptions) {
+          activeLaunches += 1;
+          maxActiveLaunches = Math.max(maxActiveLaunches, activeLaunches);
           assert.equal(await readFile(join(contract.worktree.path, 'node_modules/installed'), 'utf8'), 'ready');
           launches.push({
             nodeId: contract.nodeId,
@@ -327,6 +332,7 @@ for (const managed of [false,true]) test(`executes all Workers sequentially with
             await writeFile(target, `${contract.nodeId}\n`);
           }
           if(managed){const receipt={version:1,executionId:`execution-${contract.nodeId}`,processId:111,processGroupId:111,ownerProcessId:process.pid,processBirth:null,observedAtMs:Date.parse(NOW),source:'owned-process',assurance:'observed',status:'started'};await launchOptions.onExecution(receipt);await launchOptions.onExecution({...receipt,status:'stopped'});}
+          activeLaunches -= 1;
           return {
             version: 1, status: 'success',
             output: { summary: `Completed ${contract.nodeId}.`, evidence: [...contract.evidence] },
@@ -358,6 +364,12 @@ for (const managed of [false,true]) test(`executes all Workers sequentially with
   assert.equal(verification.commitSha, accepted.commitSha);
   assert.ok(verification.checks.some(check => check.status === 'passed'));
   assert.equal(launches.length, 2);
+  const observedCommands = (await readFile(gateLog, 'utf8')).trim().split('\n');
+  assert.deepEqual(observedCommands, ['run build', 'run test', 'run lint']);
+  assert.equal(maxActiveLaunches, 1);
+  t.diagnostic(JSON.stringify({ fixture: managed ? 'managed-profiles' : 'serial', workerCalls: launches.length,
+    maxConcurrentWorkers: maxActiveLaunches, dependencyInstalls: installsApproved, verificationCommands: observedCommands.length,
+    nativeUsageMeasured: false }));
   if(managed)assert.deepEqual(launches.map(item=>[item.selection.model,item.selection.effort]),[['sonnet','low'],['opus','high']]);
   assert.deepEqual(launches.map(launch => launch.maxCostUsd), [2, 2]);
   const integrationEntry = (await gitClient.listWorktrees(root)).find(item => item.branch === 'feature/smart-agenda-builder-smart-agenda-live-run');
@@ -408,14 +420,17 @@ test('managed one-shot checkpoint successor preserves dirty checkout and cumulat
   const planner = createFeaturePlanner({ planningClient: { propose: async () => { const value=proposal(request); if(managed)value.workItems[0].executionClass='bounded-fix'; return value; } } });
   const featurePlan = await planner.propose({ config, workRequest: request, baselineCommit, client: 'claude' });
   const run = await persistedRunningRun(root, 'smart-agenda-live-run', request, featurePlan);
+  const gateLog = join(dirname(root), 'gate-invocations.log');
   const gateExecutable = join(dirname(root), 'bounded-gate');
-  await writeFile(gateExecutable, '#!/bin/sh\nif [ "$1" = ci ]; then mkdir -p node_modules; printf ready > node_modules/installed; exit 0; fi\n[ "$RIVET_GATE_ENV" = present ]\n', { mode: 0o700 });
+  await writeFile(gateExecutable, '#!/bin/sh\nif [ -n "$RIVET_GATE_LOG" ]; then printf "%s\\n" "$*" >> "$RIVET_GATE_LOG"; fi\nif [ "$1" = ci ]; then mkdir -p node_modules; printf ready > node_modules/installed; exit 0; fi\n[ "$RIVET_GATE_ENV" = present ]\n', { mode: 0o700 });
   await chmod(gateExecutable, 0o700);
   const launches = [];
+  let activeLaunches = 0;
+  let maxActiveLaunches = 0;
   let installsApproved = 0;
   const executor = createFeatureExecutor({
     gitClient,
-    environment: { RIVET_GATE_ENV: 'present', PATH: '/bin' },
+    environment: { RIVET_GATE_ENV: 'present', RIVET_GATE_LOG: gateLog, PATH: '/bin' },
     now: () => NOW,
     resolveCommandExecutable: async runner => {
       assert.equal(runner, 'npm');
@@ -427,6 +442,8 @@ test('managed one-shot checkpoint successor preserves dirty checkout and cumulat
       return Object.freeze({
         provider: kind,
         async launch(contract, launchOptions) {
+          activeLaunches += 1;
+          maxActiveLaunches = Math.max(maxActiveLaunches, activeLaunches);
           assert.equal(await readFile(join(contract.worktree.path, 'node_modules/installed'), 'utf8'), 'ready');
           const generation=contract.session.generation;
           const receipt={version:1,executionId:`execution-${contract.nodeId}-${generation}`,processId:111,processGroupId:111,ownerProcessId:process.pid,processBirth:null,observedAtMs:Date.parse(NOW),source:'owned-process',assurance:'observed',status:'started'};
@@ -444,6 +461,7 @@ test('managed one-shot checkpoint successor preserves dirty checkout and cumulat
             await writeFile(target, `${contract.nodeId}\n`);
           }
           await launchOptions.onExecution({...receipt,status:'stopped'});
+          activeLaunches -= 1;
           return {
             version: 1, status: generation===1?'checkpoint':'success',
             output: { summary: `Completed ${contract.nodeId}.`, evidence: [...contract.evidence] },
@@ -475,6 +493,12 @@ test('managed one-shot checkpoint successor preserves dirty checkout and cumulat
   assert.equal(verification.commitSha, accepted.commitSha);
   assert.ok(verification.checks.some(check => check.status === 'passed'));
   assert.equal(launches.length, 4);
+  const observedCommands = (await readFile(gateLog, 'utf8')).trim().split('\n');
+  assert.deepEqual(observedCommands, ['run build', 'run test', 'run lint']);
+  assert.equal(maxActiveLaunches, 1);
+  t.diagnostic(JSON.stringify({ fixture: 'checkpoint-successors', workerCalls: launches.length,
+    maxConcurrentWorkers: maxActiveLaunches, dependencyInstalls: installsApproved, verificationCommands: observedCommands.length,
+    nativeUsageMeasured: false }));
   assert.deepEqual(launches.map(x=>x.generation),[1,2,1,2]);
   if(managed)assert.deepEqual(launches.map(item=>[item.selection.model,item.selection.effort]),[['sonnet','low'],['sonnet','low'],['opus','high'],['opus','high']]);
   assert.deepEqual(launches.map(launch => launch.maxCostUsd), [2, 2, 2, 2]);

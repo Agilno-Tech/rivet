@@ -28,6 +28,7 @@
       "additionalProperties": false,
       "required": ["objective", "ownedPaths", "acceptanceCriterionIndexes"],
       "properties": {
+        "executionClass": { "enum": ["bounded-fix", "implementation"] },
         "objective": { "type": "string", "minLength": 1, "maxLength": 2000 },
         "ownedPaths": {
           "type": "array",
