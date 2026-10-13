@@ -390,6 +390,8 @@ test('trailing punctuation framing cannot expose configured secret prefixes', as
   ]) {
     for (const target of ['stdout', 'stderr']) {
       const result = await runCommand(contract(worktree, framed, {
+        // This checks output handling, not scheduler-sensitive startup deadlines.
+        timeoutMs: 5_000,
         environment: {
           DEMO_API_TOKEN: scenario.marker,
           LABEL: scenario.label,
@@ -399,6 +401,7 @@ test('trailing punctuation framing cannot expose configured secret prefixes', as
         },
         commands: { test: { executable: framed, args: [], action: 'command.test' } },
       }), { actorId: 'worker-one', commandId: 'test', cwd: '.' });
+      assert.equal(result.status, 'success', JSON.stringify({ target, label: scenario.label, frame: scenario.frame, status: result.status, code: result.code, signal: result.signal, timedOut: result.timedOut, aborted: result.aborted }));
       assert.equal(result.stdout, '', `${target} exposed ${scenario.label}${scenario.prefix}${scenario.frame}`);
       assert.equal(result.stderr, '', `${target} exposed ${scenario.label}${scenario.prefix}${scenario.frame}`);
       assert.equal(result.redacted, true);
