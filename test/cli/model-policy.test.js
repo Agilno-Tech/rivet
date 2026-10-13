@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {cp,mkdtemp,realpath,rm,readFile,writeFile,chmod,symlink,link,rename,lstat} from 'node:fs/promises';
+import {cp,mkdir,mkdtemp,realpath,rm,readFile,writeFile,chmod,symlink,link,rename,lstat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import test from 'node:test';
@@ -14,7 +14,7 @@ const prose='Use high reasoning: Astra/Opus for coordination and independent rev
 const routes=['coordination','independent-review','implementation','bounded-fix'];
 function translation(){return {routes:routes.map((route,i)=>({route,candidates:(i<2?['Astra','Opus']:[i===2?'Sol':'Luna']).map(modelReference=>({modelReference,harness:null,effort:'high'})),source:prose,rationale:'Requested work category.'})),assumptions:[]};}
 async function fixture(t){const root=await realpath(await mkdtemp(join(tmpdir(),'rivet-policy-test-')));t.after(()=>rm(root,{recursive:true,force:true}));execFileSync('/usr/bin/git',['init','-q',root]);await cp(new URL('../fixtures/config/valid/.rivet/',import.meta.url),join(root,'.rivet'),{recursive:true});return root;}
-function services(root){const messages=[],questions=[];let calls=0;return {messages,questions,get calls(){return calls;},overrides:{cwd:()=>root,reportFailure:false,terminalIsInteractive:()=>true,output:{log:s=>messages.push(s),error:s=>messages.push(s)},harnesses:{discover:async()=>[{kind:'codex',executable:'/opt/codex',version:'1'}],select:async()=>({kind:'codex',executable:'/opt/codex',version:'1'})},models:{translatePolicy:async()=>{calls++;return translation();}},modelPolicyPrompt:async q=>{questions.push(q);if(q.type==='confirm')return true;if(q.id.startsWith('candidate'))return 0;if(q.id.startsWith('harness'))return 'codex';if(q.id.startsWith('model'))return `exact-${q.reference.toLowerCase()}`;throw Error(q.id);}}};}
+function services(root){const messages=[],questions=[];let calls=0;return {messages,questions,get calls(){return calls;},overrides:{env:{HOME:root},cwd:()=>root,reportFailure:false,terminalIsInteractive:()=>true,output:{log:s=>messages.push(s),error:s=>messages.push(s)},harnesses:{discover:async()=>[{kind:'codex',executable:'/opt/codex',version:'1'}],select:async()=>({kind:'codex',executable:'/opt/codex',version:'1'})},models:{translatePolicy:async()=>{calls++;return translation();}},modelPolicyPrompt:async q=>{questions.push(q);if(q.type==='confirm')return true;if(q.id.startsWith('candidate'))return 0;if(q.id.startsWith('harness'))return 'codex';if(q.id.startsWith('model'))return `exact-${q.reference.toLowerCase()}`;throw Error(q.id);}}};}
 
 test('plain policy rejects missing duplicate unsafe and authority-bearing translations',()=>{for(const mutate of [x=>x.routes.pop(),x=>x.routes[1].route='coordination',x=>x.limits={},x=>x.routes[0].candidates[0].effort='turbo',x=>x.assumptions.push('\x1b[31m')]){const value=translation();mutate(value);assert.throws(()=>validatePolicyTranslation(value,prose));}assert.equal(validatePolicyTranslation(translation(),prose).routes.length,4);});
 test('plain policy compiles fixed capabilities while preserving existing limits and sessions',()=>{const mapped=Object.fromEntries(routes.map(route=>[route,{harness:'codex',model:'exact-model',effort:'high'}]));const policy=compileModelPolicy(mapped);assert.deepEqual(policy.profiles[policy.routing.coordination].capabilities,['read']);assert.deepEqual(policy.profiles[policy.routing.implementation].capabilities,['read','edit','commands']);const previous={...policy,limits:{...policy.limits,agentExecutions:1},sessions:{...policy.sessions,maxReplacements:0}};assert.equal(JSON.stringify(compileModelPolicy(mapped,previous).limits),JSON.stringify(previous.limits));assert.equal(JSON.stringify(compileModelPolicy(mapped,previous).sessions),JSON.stringify(previous.sessions));});
@@ -141,4 +141,29 @@ test('models configure recognized alias does not replace ambiguous configured id
  s.overrides.modelPolicyPrompt=async q=>{s.questions.push(q);if(q.id.startsWith('model'))return 'chosen-exact';if(q.id.startsWith('harness'))return 'claude';if(q.id==='approve-policy')return true;throw Error(q.id);};
  assert.equal(await main(['models','configure',policyText],s.overrides),0,s.messages.join('\n'));assert.equal(s.questions.filter(q=>q.id.startsWith('model')).length,1);
  const policy=YAML.parse(await readFile(path,'utf8')).executionPolicy;assert.ok(routes.every(r=>policy.profiles[policy.routing[r]].model==='chosen-exact'));
+});
+
+test('models configure detects saved Codex user model without manual entry and retains approval',async t=>{
+ for(const approve of [false,true]){const root=await fixture(t),s=services(root),path=join(root,'.rivet/orchestration.yaml'),before=await readFile(path,'utf8');
+ await mkdir(join(root,'.codex'));await writeFile(join(root,'.codex/config.toml'),'model="saved-codex-model"\nmodel_reasoning_effort="low"\n');
+ s.overrides.modelPolicyPrompt=async q=>{s.questions.push(q);if(q.id==='default-action')return 'keep';if(q.id==='approve-policy')return approve;throw Error(q.id);};
+ assert.equal(await main(['models','configure'],s.overrides),0,s.messages.join('\n'));assert.equal(s.calls,0);assert.equal(s.questions.some(q=>q.id==='default-codex-model'),false);assert.match(s.messages.join('\n'),/Codex user config/);
+ if(!approve)assert.equal(await readFile(path,'utf8'),before);else{const policy=YAML.parse(await readFile(path,'utf8')).executionPolicy;assert.ok(routes.every(r=>policy.profiles[policy.routing[r]].model==='saved-codex-model'&&policy.profiles[policy.routing[r]].effort==='high'));}
+ }
+});
+test('models configure uses saved Codex model in prose suggestions and harness route edits',async t=>{
+ for(const mode of ['prose','edit']){const root=await fixture(t),s=services(root),policyText='Use defaults with high reasoning.';await mkdir(join(root,'.codex'));await writeFile(join(root,'.codex/config.toml'),'model="saved-codex-model"');
+ if(mode==='prose')s.overrides.models.translatePolicy=async()=>({routes:routes.map(route=>({route,candidates:[{modelReference:null,harness:'codex',effort:'high'}],source:policyText,rationale:'Requested defaults.'})),assumptions:[]});
+ else s.overrides.harnesses.discover=async()=>[{kind:'claude',executable:'/opt/claude'}];
+ let edited=false;s.overrides.modelPolicyPrompt=async q=>{if(q.id.startsWith('reference')||q.id==='edit-model'){assert.equal(q.defaultValue,'saved-codex-model');return q.defaultValue;}if(q.id==='default-action')return 'edit';if(q.id==='edit-route'){if(edited)return 'done';edited=true;return 'bounded-fix';}if(q.id==='edit-harness')return 'codex';if(q.id==='edit-effort')return 'high';if(q.id==='approve-policy')return true;throw Error(q.id);};
+ assert.equal(await main(['models','configure',...(mode==='prose'?[policyText]:[])],s.overrides),0,s.messages.join('\n'));
+ }
+});
+test('models configure saved Rivet mapping wins over Codex user config and unresolved config asks safely',async t=>{
+ for(const mode of ['saved','malformed']){const root=await fixture(t),s=services(root),path=join(root,'.rivet/orchestration.yaml');await mkdir(join(root,'.codex'));await writeFile(join(root,'.codex/config.toml'),'model="sk-ant-api03-'+ 'x'.repeat(100)+'"\n[bad');
+ if(mode==='saved'){const doc=YAML.parseDocument(await readFile(path,'utf8'));doc.set('executionPolicy',compileModelPolicy(Object.fromEntries(routes.map(r=>[r,{harness:'codex',model:'saved-rivet',effort:'medium'}]))));await writeFile(path,String(doc));}
+ s.overrides.modelPolicyPrompt=async q=>{s.questions.push(q);if(q.id==='default-codex-model')return 'manual-model';if(q.id==='default-action')return 'keep';if(q.id==='approve-policy')return true;throw Error(q.id);};
+ assert.equal(await main(['models','configure'],s.overrides),0);assert.equal(s.questions.some(q=>q.id==='default-codex-model'),mode==='malformed');assert.doesNotMatch(s.messages.join('\n'),/sk-ant|\[bad/);
+ const policy=YAML.parse(await readFile(path,'utf8')).executionPolicy;assert.ok(routes.every(r=>policy.profiles[policy.routing[r]].model===(mode==='saved'?'saved-rivet':'manual-model')));
+ }
 });

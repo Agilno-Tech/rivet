@@ -136,6 +136,18 @@
       "file": "test/cli/model-policy.test.js",
       "criteria": [
         {
+          "id": "codex-saved-model",
+          "test": "models configure detects saved Codex user model without manual entry and retains approval"
+        },
+        {
+          "id": "codex-suggestions",
+          "test": "models configure uses saved Codex model in prose suggestions and harness route edits"
+        },
+        {
+          "id": "codex-policy-precedence",
+          "test": "models configure saved Rivet mapping wins over Codex user config and unresolved config asks safely"
+        },
+        {
           "id": "detected-defaults",
           "test": "models configure without prose proposes detected Claude defaults without translation and requires approval"
         },
@@ -154,6 +166,24 @@
         {
           "id": "invalid-and-cancelled",
           "test": "models configure defaults refuse absent harnesses invalid model settings and interrupted approval"
+        }
+      ]
+    },
+    {
+      "id": "codex-config-model",
+      "file": "test/runtime/codex-config-model.test.js",
+      "criteria": [
+        {
+          "id": "toml-model",
+          "test": "Codex model detection resolves custom and default homes with TOML syntax"
+        },
+        {
+          "id": "override-profile-precedence",
+          "test": "Codex model detection uses explicit override before config and selected legacy profile before root model"
+        },
+        {
+          "id": "safe-unresolved-config",
+          "test": "Codex model detection fails closed for missing malformed unsafe oversized nonregular and invalid UTF8 config"
         }
       ]
     },

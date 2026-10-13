@@ -40,11 +40,19 @@ export const catalog = {
       ['explicit-missing-settings', 'models configure missing model and reasoning are clarified rather than defaulted silently'],
     ]),
     scenario('model-policy-defaults', 'test/cli/model-policy.test.js', [
+      ['codex-saved-model', 'models configure detects saved Codex user model without manual entry and retains approval'],
+      ['codex-suggestions', 'models configure uses saved Codex model in prose suggestions and harness route edits'],
+      ['codex-policy-precedence', 'models configure saved Rivet mapping wins over Codex user config and unresolved config asks safely'],
       ['detected-defaults', 'models configure without prose proposes detected Claude defaults without translation and requires approval'],
       ['saved-policy-first', 'models configure without prose reuses existing routes and limits even without installed harnesses'],
       ['codex-explicit-model', 'models configure Codex defaults request one exact model or use explicit Rivet model setting'],
       ['editable-approval', 'models configure default proposal can be edited or declined without translating'],
       ['invalid-and-cancelled', 'models configure defaults refuse absent harnesses invalid model settings and interrupted approval'],
+    ]),
+    scenario('codex-config-model', 'test/runtime/codex-config-model.test.js', [
+      ['toml-model', 'Codex model detection resolves custom and default homes with TOML syntax'],
+      ['override-profile-precedence', 'Codex model detection uses explicit override before config and selected legacy profile before root model'],
+      ['safe-unresolved-config', 'Codex model detection fails closed for missing malformed unsafe oversized nonregular and invalid UTF8 config'],
     ]),
     scenario('model-provider-detection', 'test/cli/models.test.js', [
       ['local-evidence', 'models list detects every supported provider from local evidence without leaking credentials'],

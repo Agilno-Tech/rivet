@@ -4,7 +4,8 @@ import {CliError,EXIT_CODES,observeOutputErrors} from '../cli/output.js';
 import {prepareExecutionPolicyUpdate} from './init.js';
 import {translateModelPolicy} from '../models/policy-client.js';
 import {POLICY_ROUTES,policyText,validatePolicyTranslation,compileModelPolicy} from '../models/policy-contract.js';
-import {detectModelProviders,providerDetectionSummary,CLAUDE_POLICY_MODELS,configuredCodexModel,exactPolicyModel} from '../models/detection.js';
+import {detectModelProviders,providerDetectionSummary,CLAUDE_POLICY_MODELS,exactPolicyModel} from '../models/detection.js';
+import {resolveConfiguredCodexModel} from '../models/codex-config-model.js';
 import {SESSION_CAPABILITIES} from '../clients/session-capabilities.js';
 const labels={coordination:'Coordination and technical decisions','independent-review':'Independent review',implementation:'Substantial implementation and complex debugging','bounded-fix':'Bounded fixes, focused tests and investigations'};
 function fail(message){throw new CliError(message,'INVALID_INPUT');}
@@ -23,9 +24,11 @@ export async function configureModelPolicy({operands,flags},dependencies){
   const update=await prepareExecutionPolicyUpdate(project.root,{beforeCommit:check});const previous=update.config.orchestration.executionPolicy,profiles=previous?.profiles??{};
   const found=await dependencies.harnesses.discover(project.root,{signal});check();const eligible=found.filter(x=>x.executable&&SESSION_CAPABILITIES[x.kind]);
   show(providerDetectionSummary(detectModelProviders({environment:dependencies.env,harnesses:found})));
+  let codexDefault;
+  const codexModel=async()=>{if(!codexDefault){codexDefault=await resolveConfiguredCodexModel({environment:dependencies.env,cwd:dependencies.cwd()});check();show(`Codex model suggestion source: ${codexDefault.source}. Saved user configuration only; runtime overrides and model access are not verified.`);}return codexDefault.model;};
   let translated,mapping;
   if(prose===undefined){
-   mapping=await defaultMapping({previous,eligible,requested:flags.harness,environment:dependencies.env,prompt,show});
+   mapping=await defaultMapping({previous,eligible,requested:flags.harness,codexModel,prompt,show});
    translated={routes:POLICY_ROUTES.map(route=>({route,rationale:previous?'Reuse the existing routed policy.':'Suggested defaults; review or edit before saving.',source:previous?'Existing execution policy':'Installed harness defaults'})),assumptions:[]};
   }else{
   let kind=flags.harness;if(!kind)kind=eligible.length===1?eligible[0].kind:eligible.length?await prompt({id:'translator',type:'select',message:'Choose the installed harness that will translate this policy:',choices:eligible.map(x=>({value:x.kind,label:x.kind}))}):null;
@@ -37,7 +40,7 @@ export async function configureModelPolicy({operands,flags},dependencies){
   for(const route of POLICY_ROUTES){const item=translated.routes.find(x=>x.route===route);let candidate=item.candidates[0];
    if(item.candidates.length>1){const key=JSON.stringify(item.candidates);let index=choices.get(key);if(index===undefined){index=await prompt({id:`candidate-${route}`,type:'select',message:`Choose one model for ${labels[route]} (alternatives are not fallbacks):`,choices:item.candidates.map((x,i)=>({value:i,label:`${x.modelReference??'Unspecified model'} / ${x.harness??'harness to clarify'} / ${x.effort??'reasoning to clarify'}`}))});if(!Number.isInteger(index)||!item.candidates[index])fail('Invalid model choice.');choices.set(key,index);}candidate=item.candidates[index];}
    let reference=candidate.modelReference;
-   if(reference===null){const old=previous?.profiles[previous.routing[route]],available=eligible.map(x=>x.kind);const preferred=candidate.harness??old?.harness??(available.length===1?available[0]:undefined);const suggestion=old&&(!preferred||old.harness===preferred)?old.model:preferred==='claude'?CLAUDE_POLICY_MODELS[route]:preferred==='codex'?configuredCodexModel(dependencies.env):undefined;reference=await prompt({id:`reference-${route}`,type:'input',message:`Which model should handle ${labels[route]}?${suggestion?' Suggested default shown; replace it to choose another.':''}`,defaultValue:suggestion});if(suggestion&&reference===suggestion&&preferred)cache.set(reference,{model:reference,harness:preferred});}try{policyText(reference,200);}catch{fail('Invalid model reference.');}
+   if(reference===null){const old=previous?.profiles[previous.routing[route]],available=eligible.map(x=>x.kind);const preferred=candidate.harness??old?.harness??(available.length===1?available[0]:undefined);const suggestion=old&&(!preferred||old.harness===preferred)?old.model:preferred==='claude'?CLAUDE_POLICY_MODELS[route]:preferred==='codex'?await codexModel():undefined;reference=await prompt({id:`reference-${route}`,type:'input',message:`Which model should handle ${labels[route]}?${suggestion?' Suggested default shown; replace it to choose another.':''}`,defaultValue:suggestion});if(suggestion&&reference===suggestion&&preferred)cache.set(reference,{model:reference,harness:preferred});}try{policyText(reference,200);}catch{fail('Invalid model reference.');}
    const key=reference;let identity=cache.get(key);
    if(identity&&candidate.harness&&candidate.harness!==identity.harness)fail('Conflicting harnesses for a shared model reference.');
    if(!identity){const matches=Object.entries(profiles).filter(([id,p])=>(id===reference||p.model===reference)&&(!candidate.harness||candidate.harness===p.harness));
@@ -68,7 +71,7 @@ export async function configureModelPolicy({operands,flags},dependencies){
 }
 
 
-async function defaultMapping({previous,eligible,requested,environment,prompt,show}){
+async function defaultMapping({previous,eligible,requested,codexModel,prompt,show}){
  let mapping;
  if(previous)mapping=Object.fromEntries(POLICY_ROUTES.map(route=>{const p=previous.profiles[previous.routing[route]];return [route,{harness:p.harness,model:p.model,effort:p.effort}];}));
  else{
@@ -77,7 +80,7 @@ async function defaultMapping({previous,eligible,requested,environment,prompt,sh
   if(!eligible.some(x=>x.kind===kind))fail('No compatible selected task harness is installed. Install Claude Code or Codex; other providers support text delegation only.');
   let model;
   if(kind==='codex'){
-   model=configuredCodexModel(environment);
+   model=await codexModel();
    if(model===undefined)model=exactPolicyModel(await prompt({id:'default-codex-model',type:'input',message:'Exact Codex model ID to use for all four routes (you can edit individual routes next):'}));
   }
   mapping=Object.fromEntries(POLICY_ROUTES.map(route=>[route,{harness:kind,model:kind==='claude'?CLAUDE_POLICY_MODELS[route]:model,effort:'high'}]));
@@ -93,7 +96,7 @@ async function defaultMapping({previous,eligible,requested,environment,prompt,sh
   const current=mapping[route];
   const harness=await prompt({id:'edit-harness',type:'select',message:`Harness for ${labels[route]} (currently ${current.harness}):`,choices:['claude','codex'].map(value=>({value,label:`${value}${eligible.some(x=>x.kind===value)?' (installed)':' (not detected)'}`}))});
   if(!SESSION_CAPABILITIES[harness])fail('Invalid target harness.');
-  const model=exactPolicyModel(await prompt({id:'edit-model',type:'input',message:'Exact model ID or Claude provider alias:',defaultValue:harness===current.harness?current.model:harness==='claude'?CLAUDE_POLICY_MODELS[route]:configuredCodexModel(environment)}));
+  const model=exactPolicyModel(await prompt({id:'edit-model',type:'input',message:'Exact model ID or Claude provider alias:',defaultValue:harness===current.harness?current.model:harness==='claude'?CLAUDE_POLICY_MODELS[route]:await codexModel()}));
   const effort=await prompt({id:'edit-effort',type:'select',message:`Requested reasoning (currently ${current.effort}):`,choices:SESSION_CAPABILITIES[harness].effort.map(value=>({value,label:value}))});
   if(!SESSION_CAPABILITIES[harness].effort.includes(effort))fail('Invalid reasoning setting.');
   mapping[route]={harness,model,effort};preview();
