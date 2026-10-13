@@ -263,7 +263,9 @@ The optional `orchestration.executionPolicy` has `version: 1`, `mode: managed`, 
 
 The schema accepts effort labels `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`. Syntactic acceptance is separate from model/client support. No model is selected by default. Explicit routes must reference existing profiles, and advisory routes cannot request edit or command capabilities.
 
-`resolveExecutionSelection` returns an immutable, versioned selection with policy/profile identity and a recorded reason; `executionPolicyIdentity` pins the complete policy in a proposal. Validation rechecks these identities against current configuration when loading a governed plan. The policy does not widen role budgets, create a second scheduler, or enable dispatch by itself. See [Models](./models.md#managed-execution-selection-contract) for legacy and host behavior.
+`rivet models configure "policy" [--harness=claude|codex] [--project=<path>]` translates plain-language model/reasoning preferences through an installed harness, clarifies model alternatives and unresolved IDs, and presents the four existing routes for interactive approval. It updates only `executionPolicy` using a snapshot-bound atomic configuration edit. Decline, cancellation, invalid output or a changed configuration leaves the file unchanged. Existing limits/session settings are preserved; adding the first policy shows the defaults before approval. This does not execute a task or modify previously approved plans. See [model policy configuration](./models.md#model-and-reasoning-policy).
+
+`resolveExecutionSelection` returns an immutable, versioned selection with policy/profile identity and a recorded reason; `executionPolicyIdentity` pins the complete policy in a proposal. Validation rechecks these identities against current configuration when loading a governed plan. The policy does not widen role budgets, create a second scheduler, or enable dispatch by itself. See [Models](./models.md#model-and-reasoning-policy) for legacy and host behavior.
 
 ### Managed model dispatch and session telemetry
 

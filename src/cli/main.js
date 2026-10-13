@@ -112,6 +112,8 @@ Usage:
   rivet repositories inspect [--review=<number>] [--remote=<name>] [--provider=<id>] [--project=<path>] [--json]
   rivet integrations setup [--project=<path>]  Guide local read-only provider configuration
   rivet integrations list|check [--project=<path>] [--host-inventory-json=<json>] [--json]
+  rivet models configure "policy" [--harness=claude|codex] [--project=<path>]
+                                  Propose model/reasoning routes and approve before saving
   rivet models role --roles=<file> --role=<name> [--json]
   rivet models delegate "prompt" --roles=<file> --role=<name> [--project=<path>]
   rivet models delegate "prompt" --profile=<file>  Approve one text-only model request
@@ -283,6 +285,7 @@ function resolveDependencies(overrides = {}) {
     output: overrides.output ?? createOutput(),
     fetch: overrides.fetch ?? globalThis.fetch,
     models: overrides.models,
+    modelPolicyPrompt: overrides.modelPolicyPrompt,
     support: overrides.support,
     confirmModelDelegation: overrides.confirmModelDelegation ?? defaultConfirmModelDelegation,
     selectTrackerDestination: overrides.selectTrackerDestination ?? defaultSelectTrackerDestination,

@@ -102,6 +102,10 @@ Export current plan or final review context using `rivet task review --phase=pla
 
 Preserve the provenance of every numerical claim: command or measurement method, source commit, environment, time, units and artifact. Distinguish observations from estimates and provider telemetry from model-reported usage. Demonstrate detection with safe known-bad fixtures and positive controls when practical. Include affected public documentation in the same pull request. Treat scan findings and unavailable evidence as work to resolve; do not broadly suppress rules or report unavailable context-window telemetry as measured fact.
 
+### Model and reasoning policy
+
+When a user wants to configure future task models in plain language, use `rivet models configure "policy"` from an interactive terminal, optionally with `--harness=claude|codex` for the translator. It proposes the four supported routes, clarifies model identities and alternatives, and asks the human to approve the exact mapping before saving. Do not simulate interactive approval. If the current harness cannot provide interactive input, hand off that command to the user's terminal. Do not invent a model ID, silently choose between alternatives, or claim that a translated mapping proves live availability. The saved policy preserves existing limits and does not update prior task approvals. Host model selections remain recommendations that the owning harness must actually honor.
+
 ### Managed task coordination
 
 Approved tasks with a managed execution policy join machine capacity automatically when execution starts. Use `rivet task status` for the selected task and `rivet orchestrate status --json` for machine-wide diagnostics. Humans use the existing `run` and `task start|pause|resume` workflow, with an optional readable `--for=1h` on run/start/resume. The default allowance is one hour; resuming never extends a persisted deadline. Do not request or pass internal registration IDs. A queued action is not permission to launch. Pause prevents new admission and does not prove a running writer stopped. Unknown ownership retains capacity.

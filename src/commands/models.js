@@ -1,3 +1,4 @@
+import { configureModelPolicy } from './model-policy.js';
 import { resolveRoleProfile } from '../models/profiles.js';
 import { humanRunCommand } from './human-run.js';
 import { resolve } from 'node:path';
@@ -31,6 +32,7 @@ async function readProfile(path) {
 
 export async function modelsCommand(parsed, dependencies) {
   const { subcommand, operands, flags } = parsed;
+  if (subcommand === 'configure') return configureModelPolicy(parsed, dependencies);
   if (subcommand === 'role') {
     if (operands.length || typeof flags.roles !== 'string' || typeof flags.role !== 'string'
       || Object.keys(flags).some(key => !['roles', 'role', 'json'].includes(key))) throw new CliError('Use rivet models role --roles=<file> --role=<name> [--json].', 'INVALID_INPUT');

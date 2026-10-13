@@ -1,6 +1,7 @@
 import { observeExecutionAttempt } from './execution-proof.js';
 import {randomUUID} from 'node:crypto';
 import { sessionTelemetry } from './session-capabilities.js';
+import { validatePolicyPayload } from '../models/policy-contract.js';
 import { validateReviewPayload } from '../review/contract.js';
 import { serializeProtocolLaunch } from '../protocols/presentation.js';
 import { spawn } from 'node:child_process';
@@ -554,7 +555,7 @@ export async function createProcessRunner(input) {
     try {
       contract = protocol === 'launch'
         ? validateLaunchPayload(request.payload)
-        : protocol === 'review' ? validateReviewPayload(request.payload) : validatePlanningPayload(request.payload);
+        : protocol === 'review' ? validateReviewPayload(request.payload) : protocol === 'policy' ? validatePolicyPayload(request.payload) : validatePlanningPayload(request.payload);
     } catch { failAgent('invalid-contract'); }
     if (protocol !== 'launch' && request.protocolContext !== undefined) failAgent('invalid-contract');
     let stdinPayload = protocol === 'launch'
@@ -744,6 +745,6 @@ export async function createProcessRunner(input) {
       if (!['claude', 'codex'].includes(provider)) failAgent('invalid-contract');
       return probe(provider === 'codex' ? ['exec', '--help'] : ['--help'], true);
     },
-    run, runPlanning, runReview(inputRequest) { return execute(inputRequest, 'review'); },
+    run, runPlanning, runPolicy(inputRequest) { return execute(inputRequest, 'policy'); }, runReview(inputRequest) { return execute(inputRequest, 'review'); },
   });
 }

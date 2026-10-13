@@ -86,6 +86,74 @@
       ]
     },
     {
+      "id": "model-policy-approval",
+      "file": "test/cli/model-policy.test.js",
+      "criteria": [
+        {
+          "id": "bounded-translation",
+          "test": "plain policy rejects missing duplicate unsafe and authority-bearing translations"
+        },
+        {
+          "id": "mapping-approval",
+          "test": "models configure translates prose once clarifies shared aliases and approves exact mapping"
+        },
+        {
+          "id": "decline-and-stale-save",
+          "test": "models configure decline and changed config cannot publish"
+        },
+        {
+          "id": "cancel-and-invalid-output",
+          "test": "models configure output failure EOF interruption and invalid translator output leave config unchanged"
+        },
+        {
+          "id": "preserve-configuration",
+          "test": "models configure reuses configured exact profiles and retains unrelated profiles comments and permissions"
+        },
+        {
+          "id": "safe-file-update",
+          "test": "model policy safe writer refuses readonly symlink hardlink and changed topology"
+        },
+        {
+          "id": "exact-file-permissions",
+          "test": "model policy update preserves exact file permissions despite process umask"
+        },
+        {
+          "id": "exact-model-identity",
+          "test": "model policy keeps case-sensitive existing model identities distinct"
+        },
+        {
+          "id": "approval-output-failure",
+          "test": "models configure asynchronous output error during approval refuses save"
+        },
+        {
+          "id": "explicit-missing-settings",
+          "test": "models configure missing model and reasoning are clarified rather than defaulted silently"
+        }
+      ]
+    },
+    {
+      "id": "model-policy-translator",
+      "file": "test/runtime/model-policy-client.test.js",
+      "criteria": [
+        {
+          "id": "bounded-native-request",
+          "test": "model policy translator uses literal stdin isolated cwd schema and read-only no-tools arguments"
+        },
+        {
+          "id": "invalid-and-timeout",
+          "test": "model policy translator rejects extra output authority and bounds native timeout"
+        },
+        {
+          "id": "settled-cancellation",
+          "test": "model policy translator cancellation settles owned subprocess before returning"
+        },
+        {
+          "id": "application-composition",
+          "test": "models configure actual application discovers selects and translates through native fixture"
+        }
+      ]
+    },
+    {
       "id": "orchestration-routing",
       "file": "test/models/execution-policy.test.js",
       "criteria": [

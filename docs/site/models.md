@@ -1,5 +1,7 @@
 # Model providers
 
+For task routing, [describe your model and reasoning policy](#model-and-reasoning-policy) with `rivet models configure`. Rivet shows the mapping for approval before saving.
+
 Rivet's registry distinguishes coding harnesses, hosted APIs, local models, and compatible endpoints. Model IDs are configured by the user rather than restricted to a list of product model names.
 
 ```sh
@@ -154,7 +156,30 @@ This setting selects a CLI adapter. It does not select arbitrary per-node model 
 
 Registering metadata does not install an executor. Custom executors, broader role routing and live qualification require additional implementation and testing.
 
-## Managed execution selection contract
+## Model and reasoning policy
+
+Describe your preferences in plain language from a configured project:
+
+```sh
+rivet models configure "Use high reasoning throughout. Use Astra or Opus for coordination, technical decisions and independent review; Sol for substantial implementation and complex debugging; Luna for bounded fixes, focused tests and investigations."
+```
+
+Rivet uses an installed Claude Code or Codex CLI to propose the mapping. If both are available, choose the translator interactively or pass `--harness=claude` or `--harness=codex`. The translator is separate from the models you choose for future tasks. This command makes a bounded model call using that CLI's existing account.
+
+The flow is:
+
+1. Describe the policy.
+2. Resolve alternatives and any model names that need an exact harness/model ID. Existing configured profiles can be reused; Rivet does not guess a new model ID from a nickname.
+3. Review all four routes, their exact models and reasoning levels, and any interpretation of your description.
+4. Approve the mapping to save it in `.rivet/orchestration.yaml`, or decline to leave configuration unchanged.
+
+For the example, coordination and technical decisions map to `coordination`, independent review to `independent-review`, substantial implementation and complex debugging to `implementation`, and bounded fixes, focused tests and investigations to `bounded-fix`. These remain the four existing task classes. The planner selects a work item's class, and you review it with the task plan.
+
+Rivet preserves your existing machine/session limits and unrelated configuration. When adding the first managed policy, it shows the default limits with the mapping. The translator cannot grant permissions or change task budgets. Configuration changes during review require a fresh proposal rather than overwriting newer edits.
+
+Saving a policy does not start work, approve a task or switch an account. Review and commit the configuration before starting a new task. Existing approvals retain their pinned policy; they are not silently updated. Model IDs and supported reasoning options must be available to the executing harness. A translated mapping is not a live availability check, and there is no automatic fallback between models.
+
+### Configuration reference
 
 An optional version 1 `executionPolicy` in `.rivet/orchestration.yaml` defines named harness profiles and four explicit routes: `bounded-fix`, `implementation`, `independent-review`, and `coordination`. Profiles contain `harness`, `model`, `effort`, and `capabilities`. Coding routes require `read`, `edit`, and `commands`; review and coordination profiles permit only `read`. These are requested capabilities, subject to executor qualification, not proof of provider availability.
 

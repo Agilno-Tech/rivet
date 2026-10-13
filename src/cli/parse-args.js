@@ -74,7 +74,7 @@ const STRICT_OPTIONS = {
   },
   models: {
     boolean: new Set(['json']),
-    valued: new Set(['profile', 'roles', 'role', 'project']),
+    valued: new Set(['profile', 'roles', 'role', 'project', 'harness']),
   },
   support: {
     boolean: new Set(['json', 'probe-harnesses', 'save']),

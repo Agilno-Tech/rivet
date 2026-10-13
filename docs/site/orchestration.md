@@ -18,7 +18,15 @@ Configured model and effort values reach the selected Claude or Codex CLI as sep
 
 Host actions show profile recommendations. A host tool receipt must distinguish requested settings from observed settings; Rivet cannot independently prove what an external desktop agent ran.
 
-Add an `executionPolicy` to the existing `.rivet/orchestration.yaml`; keep its other fields, including `enabled: false`. Replace the example model IDs with models supported by your installed CLIs and account:
+To choose models without editing YAML, describe your preferences:
+
+```sh
+rivet models configure "Use high reasoning. Use my lead model for coordination and independent review, my coding model for implementation, and my fast model for bounded fixes."
+```
+
+Rivet clarifies model names and alternatives, shows the exact mapping, and saves it only after approval. See [plain-language model policies](./models.md#model-and-reasoning-policy) for the full flow.
+
+For manual configuration, add an `executionPolicy` to the existing `.rivet/orchestration.yaml`; keep its other fields, including `enabled: false`. Replace the example model IDs with models supported by your installed CLIs and account:
 
 ```yaml
 executionPolicy:
