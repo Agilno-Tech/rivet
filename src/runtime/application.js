@@ -31,7 +31,7 @@ import { createFeatureRunStore } from '../feature/run-store.js';
 import { createFeatureExecutor } from '../feature/runtime-bridge.js';
 import { createHostExecution, captureHostExecutionRequest } from '../feature/host-execution.js';
 import { discoverHarnesses } from './harness-discovery.js';
-import { createFeatureWorkflow, captureFeatureWorkflowInput } from '../feature/workflow.js';
+import { createFeatureWorkflow, captureFeatureWorkflowInput, FeatureWorkflowError } from '../feature/workflow.js';
 import { createGitClient } from '../git/client.js';
 import { createReservedWorktree } from '../git/worktrees.js';
 import { buildLaunchContract } from '../prompts/launch-contract.js';
@@ -360,7 +360,7 @@ export function createRivetApplication(input = {}) {
               options.signal?.throwIfAborted();
               const record = await rawWorkflow.status({project:request.project,runId:request.runId});
               if (record.featurePlan?.client === 'host')
-                throw Object.assign(new Error('Host tasks continue through the owning harness work commands.'), {code:'ERR_FEATURE_WORKFLOW_HOST_USE_WORK',safeMessage:'Host tasks continue through the owning harness work commands.'});
+                throw new FeatureWorkflowError('host-use-work');
               if (record.featurePlan?.executionPolicy) {
                 if (!['approved','blocked'].includes(record.status) || record.version !== request.expectedVersion)
                   throw Object.assign(new Error('Task state changed; inspect task status.'), {code:'ERR_FEATURE_WORKFLOW_STATE_CONFLICT',safeMessage:'Task state changed; inspect task status.'});
