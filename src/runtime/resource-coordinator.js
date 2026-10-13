@@ -261,6 +261,13 @@ export function createResourceCoordinator({ root, now = Date.now }) {
                 x.idempotencyKey === input.idempotencyKey &&
                 x.generation === input.generation,
             );
+      if (c && input.retryUndispatched === true &&
+          ['released', 'cancelled'].includes(c.status) &&
+          !c.dispatched && c.execution === null) {
+        c.status = 'queued';
+        c.sequence = ++s.sequence;
+        c.reason = null;
+      }
       if (!c) {
         if (s.claims.length >= 4096) fail('claim-limit');
         c = {
@@ -306,7 +313,9 @@ export function createResourceCoordinator({ root, now = Date.now }) {
         c.dispatched ||
         r.paused ||
         project?.paused ||
-        now() >= r.deadlineMs
+        now() >= r.deadlineMs ||
+        input.signal?.aborted ||
+        (input.deadlineMs !== undefined && (!Number.isSafeInteger(input.deadlineMs) || now() >= input.deadlineMs))
       )
         fail('dispatch-conflict');
       c.dispatched = true;

@@ -1345,7 +1345,7 @@ test('enrolled host queues without poisoning state and requires observed stop be
 test('enrolled host verification queues without recording failed checks then resumes',async t=>{
  const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
  const {withMachineContext}=await import('../../src/runtime/machine-admission.js');
- const {root,execution,verifyInput}=await completedWorker(t);const machine=createResourceCoordinator({root:join(dirname(root),'machine')});
+ const {root,execution,verifyInput}=await completedWorker(t,{managed:true});const machine=createResourceCoordinator({root:join(dirname(root),'machine')});
  const r=await machine.register({projectRoot:root,runId:verifyInput.runId,deadlineMs:Date.now()+60000});
  const held=await machine.request({registrationId:r.id,resource:'heavyVerification',idempotencyKey:'occupied',generation:1});
  const verify=()=>withMachineContext(machine,root,r.runId,()=>execution.verify(verifyInput),{nonblocking:true});
@@ -1421,4 +1421,41 @@ test('enrolled legacy host rejects before changing its approved run or checkout'
  assert.equal((await app.feature.status({project:root,runId:approved.runId})).status,'approved');
  assert.deepEqual(await gitClient.listWorktrees(root),before);
  assert.equal((await app.machine.inspect()).claims.length,0);
+});
+
+test('host admission cancellation before durable dispatch retains no new writer', async t => {
+ const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+ const {withMachineContext}=await import('../../src/runtime/machine-admission.js');
+ const {root,gitClient,approved}=await fixture(t,{managed:true});
+ const execution=createHostExecution({gitClient,now:()=>NOW});
+ const prepared=await execution.prepare({project:root,runId:approved.runId,expectedRunVersion:approved.version});
+ const c=createResourceCoordinator({root:join(dirname(root),'machine')});
+ await c.register({projectRoot:root,runId:approved.runId,deadlineMs:Date.now()+60000});
+ const controller=new AbortController();
+ const machine={...c,dispatch:async input=>{controller.abort();return c.dispatch(input);}};
+ await assert.rejects(withMachineContext(machine,root,approved.runId,()=>execution.nextAction({project:root,runId:approved.runId,expectedRuntimeVersion:prepared.runtimeVersion}),{signal:controller.signal}));
+ const claims=(await c.inspect()).claims.filter(x=>x.resource==='agentExecutions');
+ assert.equal(claims.length,1);assert.equal(claims[0].status,'released');assert.equal(claims[0].dispatched,undefined);
+ const state=await execution.status({project:root,runId:approved.runId});
+ assert.equal(state.sessions[0].stopStatus,'unknown');
+ const next=await withMachineContext(c,root,approved.runId,()=>execution.nextAction({project:root,runId:approved.runId,expectedRuntimeVersion:state.runtime.version}));
+ assert.equal(next.status,'action');
+ assert.equal((await c.inspect()).claims.filter(x=>x.resource==='agentExecutions'&&x.status==='held').length,1);
+});
+
+test('application forwards host cancellation and preserves previously dispatched owners', async t => {
+ const {createRivetApplication}=await import('../../src/runtime/application.js');
+ const {root,approved}=await fixture(t,{managed:true,now:new Date().toISOString()});
+ const app=createRivetApplication({env:{...process.env,RIVET_MACHINE_STATE_ROOT:join(dirname(root),'machine')}});
+ await app.machine.register({projectRoot:root,runId:approved.runId,deadlineMs:Date.now()+60000});
+ const base={project:root,runId:approved.runId};
+ const prepared=await app.work.prepare({...base,expectedRunVersion:approved.version});
+ const controller=new AbortController();controller.abort();
+ await assert.rejects(app.work.nextAction({...base,expectedRuntimeVersion:prepared.runtimeVersion},{signal:controller.signal}));
+ assert.equal((await app.machine.inspect()).claims.length,0);
+ const next=await app.work.nextAction({...base,expectedRuntimeVersion:prepared.runtimeVersion});
+ await assert.rejects(app.work.nextAction({...base,expectedRuntimeVersion:next.runtimeVersion},{signal:controller.signal}));
+ const claims=(await app.machine.inspect()).claims;
+ assert.equal(claims.find(x=>x.resource==='agentExecutions').status,'held');
+ assert.equal(claims.find(x=>x.resource==='activeTasks').status,'held');
 });

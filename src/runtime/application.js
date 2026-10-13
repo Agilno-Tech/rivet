@@ -445,7 +445,7 @@ export function createRivetApplication(input = {}) {
                   }
                 }
               },
-              { nonblocking: true,cleanup:['nextAction','checkpoint','submitResult'].includes(method)||method==='handoff'&&['observe','fence','stop','release'].includes(args[0]?.input?.operation) },
+              { signal:args[1]?.signal, deadlineMs:args[1]?.deadlineMs, nonblocking: true,cleanup:['nextAction','checkpoint','submitResult'].includes(method)||method==='handoff'&&['observe','fence','stop','release'].includes(args[0]?.input?.operation) },
             );
           return service[method](...args);
         },

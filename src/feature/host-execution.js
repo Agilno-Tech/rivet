@@ -1,4 +1,4 @@
-import {currentMachineContext} from '../runtime/machine-admission.js';
+import {currentMachineContext,assertMachineAdmissionOpen} from '../runtime/machine-admission.js';
 import {stopReceipt as validatedStopReceipt} from './sessions.js';
 import {captureCheckpoint,verifyCheckpoint} from './checkpoints.js';
 import {requireSession,turnoverReason} from './sessions.js';
@@ -274,7 +274,9 @@ export function createHostExecution(input) {
     const { store, run } = await runRecord(value.project, value.runId);
     if (!['approved', 'running'].includes(run.status) || run.version !== value.expectedRunVersion) fail('state-conflict');
     await requireGovernance({project:value.project,run,gitClient,phase:'plan'});
+    assertMachineAdmissionOpen();
     const preparedContext = await runtimeContext(value.project, run);
+    assertMachineAdmissionOpen();
     const running = run.status === 'running' ? run : await store.update({
       status: 'running',
       updatedAt: now(),
@@ -310,6 +312,9 @@ export function createHostExecution(input) {
     const value = request(inputValue, 'expectedRuntimeVersion');
     const hostPaths = await resolveFeatureRunPaths(value.project, value.runId);
     const hostLock = await acquireHostRunLock(hostPaths);
+    const machine = currentMachineContext();
+    let pendingClaim;
+    let pendingTask;
     try {
       const { run } = await runRecord(value.project, value.runId);
       if (run.status !== 'running') fail('state-conflict');
@@ -320,13 +325,13 @@ export function createHostExecution(input) {
         phase: 'plan',
       });
       const { instance, runtime } = await runtimeContext(value.project, run);
-      const machine = currentMachineContext();
+      if (!machine?.admissionClosed) assertMachineAdmissionOpen();
       if(machine?.admissionClosed){
         const current=await inspectFeatureRuntime(instance);
         const running=current.graph.nodes.find(n=>n.status==='running');
         const session=running&&current.sessions?.[running.id];
         const claims=(await machine.coordinator.inspect()).claims;
-        const stopped=session&&claims.some(c=>c.registrationId===machine.registration.id&&c.idempotencyKey===session.id&&c.generation===session.generation&&c.status==='released');
+        const stopped=session&&claims.some(c=>c.registrationId===machine.registration.id&&c.idempotencyKey===session.id&&c.generation===session.generation&&c.status==='released'&&c.dispatched===true);
         if(!stopped)return immutableJson({status:'deadline',runtimeVersion:current.version,action:null});
       }
       if (machine&&!machine.admissionClosed) {
@@ -336,6 +341,8 @@ export function createHostExecution(input) {
           idempotencyKey: `host-task-${run.version}`,
           generation: 1,
         });
+        pendingTask = task;
+        assertMachineAdmissionOpen();
         if (task.status !== 'held')
           return immutableJson({
             status: 'queued',
@@ -344,9 +351,11 @@ export function createHostExecution(input) {
             action: null,
           });
       }
+      if (!machine?.admissionClosed) assertMachineAdmissionOpen();
       let prepared = await runtime.prepareAction(instance, {
         expectedVersion: value.expectedRuntimeVersion,
       });
+      if (!machine?.admissionClosed) assertMachineAdmissionOpen();
       if (prepared.action === null) {
         return immutableJson({
           status: 'idle',
@@ -386,10 +395,13 @@ export function createHostExecution(input) {
         const claim = machine.admissionClosed?(await machine.coordinator.inspect()).claims.find(c=>c.registrationId===machine.registration.id&&c.idempotencyKey===action.sessionId&&c.generation===action.generation):await machine.coordinator.request({
           registrationId: machine.registration.id,
           resource: 'agentExecutions',
+          retryUndispatched: true,
           idempotencyKey: action.sessionId,
           generation: action.generation,
         });
         if(!claim)fail('state-conflict');
+        pendingClaim = claim;
+        if (!machine.admissionClosed) assertMachineAdmissionOpen();
         if (claim.status === 'released')
           return immutableJson({
             status: 'result-required',
@@ -414,11 +426,14 @@ export function createHostExecution(input) {
           });
           prepared = {...prepared, version: admitted.version};
           action = createWorkAction({...action, runtimeVersion: admitted.version});
-          newlyDispatched = true;
+          assertMachineAdmissionOpen();
           await machine.coordinator.dispatch({
+            signal: machine.signal,
+            deadlineMs: machine.deadlineMs,
             claimId: claim.id,
             generation: action.generation,
           });
+          newlyDispatched = true;
         }
       }
       const wasAlreadyStarted =
@@ -445,6 +460,23 @@ export function createHostExecution(input) {
         runtimeVersion: prepared.version,
         action,
       });
+    } catch (error) {
+      if (pendingClaim && !pendingClaim.dispatched) {
+        // The coordinator refuses release if another invocation dispatched it.
+        await machine.coordinator.release({
+          claimId: pendingClaim.id,
+          generation: pendingClaim.generation,
+          completed: true,
+        }).catch(() => {});
+      }
+      if (pendingTask) {
+        await machine.coordinator.release({
+          claimId: pendingTask.id,
+          generation: pendingTask.generation,
+          completed: true,
+        }).catch(() => {});
+      }
+      throw error;
     } finally {
       await hostLock.release();
     }

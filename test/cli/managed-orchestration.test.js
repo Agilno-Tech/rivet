@@ -156,3 +156,25 @@ test('managed watch preserves run deadline across restarted services and stops a
   );
   assert.equal(executions, 0);
 });
+
+test('managed host watch stops after preparation crosses its own cutoff', async t => {
+ const {root,machine}=await fixture(t);
+ let clock=Date.now();let nextCalls=0;let received;
+ const service=createManagedOrchestration({root:machine,gitClient:async()=>null,now:()=>clock,
+  workflow:{status:async()=>({status:'approved',version:1,featurePlan:{client:'host'}})},
+  work:{status:async()=>({runtime:{version:1}}),prepare:async(_request,options)=>{received=options;clock+=1001;return {runtimeVersion:1};},nextAction:async()=>{nextCalls++;return {status:'action'};}}});
+ const r=await service.coordinator.register({projectRoot:root,runId:'host-cutoff',deadlineMs:clock+60000});
+ const result=await service.watch(r.id,{deadlineMs:clock+500});
+ assert.equal(result.terminal,'deadline');assert.equal(nextCalls,0);assert.ok(received.signal instanceof AbortSignal);
+});
+
+test('managed host watch honors explicit cancellation during slow preparation', async t => {
+ const {root,machine}=await fixture(t);
+ const controller=new AbortController();let nextCalls=0;let received;
+ const service=createManagedOrchestration({root:machine,gitClient:async()=>null,
+  workflow:{status:async()=>({status:'approved',version:1,featurePlan:{client:'host'}})},
+  work:{status:async()=>({runtime:{version:1}}),prepare:async(_request,options)=>{received=options;await new Promise(resolve=>setTimeout(resolve,20));controller.abort();return {runtimeVersion:1};},nextAction:async()=>{nextCalls++;return {status:'action'};}}});
+ const r=await service.coordinator.register({projectRoot:root,runId:'host-cancel',deadlineMs:Date.now()+60000});
+ const result=await service.watch(r.id,{deadlineMs:Date.now()+30000,signal:controller.signal});
+ assert.equal(result.terminal,'cancelled');assert.equal(nextCalls,0);assert.equal(received.signal.aborted,true);
+});

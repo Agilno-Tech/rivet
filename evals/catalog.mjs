@@ -51,6 +51,8 @@ export const catalog = {
     scenario('orchestration-supervision', 'test/cli/managed-orchestration.test.js', [
       ['explicit-enrollment', 'normal CLI persists explicit registration pause resume limits and planning renewal'],
       ['durable-deadline', 'managed watch preserves run deadline across restarted services and stops at decisions'],
+      ['host-prepare-deadline', 'managed host watch stops after preparation crosses its own cutoff'],
+      ['host-prepare-cancellation', 'managed host watch honors explicit cancellation during slow preparation'],
     ]),
     scenario('orchestration-process-lifecycle', 'test/runtime/process-runner.test.js', [
       ['settled-cancellation', 'managed watch cancellation awaits real owned process settlement before capacity release'],
@@ -66,6 +68,8 @@ export const catalog = {
       ['expired-stop-reconciliation', 'application permits stopped host reconciliation after deadline without new admission'],
       ['queued-successor-clock', 'enrolled host successor starts its execution clock after queued admission'],
       ['legacy-admission-guard', 'enrolled legacy host rejects before changing its approved run or checkout'],
+      ['cancel-before-dispatch', 'host admission cancellation before durable dispatch retains no new writer'],
+      ['cancel-retains-owner', 'application forwards host cancellation and preserves previously dispatched owners'],
     ]),
     scenario('orchestration-task-ownership', 'test/runtime/application.test.js', [
       ['single-task-owner', 'concurrent enrolled calls own one run task slot and release it after settlement'],

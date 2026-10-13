@@ -76,6 +76,11 @@ export function createManagedOrchestration({
     const deadline = Math.min(deadlineMs, r.deadlineMs);
     const controller = new AbortController();
     const abort = () => controller.abort();
+    const cutoff = () => controller.signal.aborted || now() >= deadline;
+    const stopped = (ticks) => ({
+      terminal: now() >= deadline ? 'deadline' : 'cancelled',
+      ticks,
+    });
     signal?.addEventListener('abort', abort, {
       once: true,
     });
@@ -95,7 +100,7 @@ export function createManagedOrchestration({
             terminal: 'paused',
             ticks: ticks - 1,
           };
-        if (controller.signal.aborted)
+        if (cutoff())
           return {
             terminal: now() >= deadline ? 'deadline' : 'cancelled',
             ticks: ticks - 1,
@@ -114,35 +119,48 @@ export function createManagedOrchestration({
             task,
           };
         if (task.featurePlan?.client === 'host') {
-          let version = current.execution?.runtime?.version;
-          if (task.status === 'approved')
-            version = (
-              await work.prepare({
+          try {
+            let version = current.execution?.runtime?.version;
+            if (task.status === 'approved')
+              version = (
+                await work.prepare(
+                  {
+                    project: r.projectRoot,
+                    runId: r.runId,
+                    expectedRunVersion: task.version,
+                  },
+                  { signal: controller.signal, deadlineMs: deadline },
+                )
+              ).runtimeVersion;
+            if (cutoff()) return stopped(ticks);
+            if (!Number.isSafeInteger(version))
+              return { terminal: 'decision-required', ticks, task };
+            const action = await work.nextAction(
+              {
                 project: r.projectRoot,
                 runId: r.runId,
-                expectedRunVersion: task.version,
-              })
-            ).runtimeVersion;
-          if (!Number.isSafeInteger(version))
-            return { terminal: 'decision-required', ticks, task };
-          const action = await work.nextAction({
-            project: r.projectRoot,
-            runId: r.runId,
-            expectedRuntimeVersion: version,
-          });
-          if (action.status === 'queued' && ticks < maxTicks) {
-            await delay(
-              Math.min(intervalMs, Math.max(1, deadline - now())),
-              undefined,
-              { signal: controller.signal },
+                expectedRuntimeVersion: version,
+              },
+              { signal: controller.signal, deadlineMs: deadline },
             );
-            continue;
+            if (cutoff()) return stopped(ticks);
+            if (action.status === 'queued' && ticks < maxTicks) {
+              await delay(
+                Math.min(intervalMs, Math.max(1, deadline - now())),
+                undefined,
+                { signal: controller.signal },
+              );
+              continue;
+            }
+            return {
+              terminal: action.status === 'queued' ? 'queued' : 'host-action',
+              ticks,
+              action,
+            };
+          } catch (error) {
+            if (cutoff()) return stopped(ticks);
+            throw error;
           }
-          return {
-            terminal: action.status === 'queued' ? 'queued' : 'host-action',
-            ticks,
-            action,
-          };
         }
         if (!['approved', 'blocked'].includes(task.status))
           return {
@@ -167,7 +185,7 @@ export function createManagedOrchestration({
             task: result,
           };
         } catch (error) {
-          if (controller.signal.aborted)
+          if (cutoff())
             return {
               terminal: now() >= deadline ? 'deadline' : 'cancelled',
               ticks,

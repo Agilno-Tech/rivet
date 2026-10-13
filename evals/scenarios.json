@@ -172,6 +172,14 @@
         {
           "id": "durable-deadline",
           "test": "managed watch preserves run deadline across restarted services and stops at decisions"
+        },
+        {
+          "id": "host-prepare-deadline",
+          "test": "managed host watch stops after preparation crosses its own cutoff"
+        },
+        {
+          "id": "host-prepare-cancellation",
+          "test": "managed host watch honors explicit cancellation during slow preparation"
         }
       ]
     },
@@ -228,6 +236,14 @@
         {
           "id": "legacy-admission-guard",
           "test": "enrolled legacy host rejects before changing its approved run or checkout"
+        },
+        {
+          "id": "cancel-before-dispatch",
+          "test": "host admission cancellation before durable dispatch retains no new writer"
+        },
+        {
+          "id": "cancel-retains-owner",
+          "test": "application forwards host cancellation and preserves previously dispatched owners"
         }
       ]
     },

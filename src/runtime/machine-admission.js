@@ -22,7 +22,7 @@ export async function withMachineContext(
   project,
   runId,
   operation,
-  { signal, nonblocking = false, cleanup = false } = {},
+  { signal, deadlineMs, nonblocking = false, cleanup = false } = {},
 ) {
   let registration = await findRegistration(coordinator, project, runId);
   if (!registration && runId && !cleanup) {
@@ -36,7 +36,8 @@ export async function withMachineContext(
       });
   }
   if (!registration) return operation(signal);
-  const remaining = registration.deadlineMs - Date.now();
+  const effectiveDeadline = Math.min(registration.deadlineMs, deadlineMs ?? registration.deadlineMs);
+  const remaining = effectiveDeadline - Date.now();
   if (remaining <= 0 && !cleanup) throw error('deadline');
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -53,6 +54,7 @@ export async function withMachineContext(
         coordinator,
         registration,
         signal: controller.signal,
+        deadlineMs: effectiveDeadline,
         nonblocking,
         admissionClosed: remaining <= 0 || registration.cancelled === true,
       },
@@ -62,6 +64,12 @@ export async function withMachineContext(
     clearTimeout(timer);
     signal?.removeEventListener('abort', abort);
   }
+}
+export function assertMachineAdmissionOpen() {
+  const selected = context.getStore();
+  if (!selected) return;
+  if (selected.signal?.aborted) throw error('cancelled');
+  if (Date.now() >= selected.deadlineMs) throw error('deadline');
 }
 export async function admitted(resource, key, options, operation) {
   const selected = context.getStore();
