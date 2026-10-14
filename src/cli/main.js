@@ -113,7 +113,7 @@ Usage:
   rivet integrations setup [--project=<path>]  Guide local read-only provider configuration
   rivet integrations list|check [--project=<path>] [--host-inventory-json=<json>] [--json]
   rivet models configure ["policy"] [--harness=claude|codex] [--project=<path>]
-                                  Detect providers, propose model/reasoning defaults, and approve before saving
+                                  Recommend model/reasoning routes; accept or customize, then approve
   rivet models role --roles=<file> --role=<name> [--json]
   rivet models delegate "prompt" --roles=<file> --role=<name> [--project=<path>]
   rivet models delegate "prompt" --profile=<file>  Approve one text-only model request

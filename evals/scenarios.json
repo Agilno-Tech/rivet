@@ -170,6 +170,58 @@
       ]
     },
     {
+      "id": "recommended-model-setup",
+      "file": "test/cli/model-policy.test.js",
+      "criteria": [
+        {
+          "id": "role-recommendations",
+          "test": "models configure recommends cached Codex role mapping and requires exact final approval"
+        },
+        {
+          "id": "customize-and-fence",
+          "test": "models configure customizes detected models with advertised reasoning and rejects stale approval"
+        },
+        {
+          "id": "preserve-user-policy",
+          "test": "models configure cached recommendations preserve saved routes and explicit override"
+        },
+        {
+          "id": "custom-and-supported-efforts",
+          "test": "models configure cached customization permits custom IDs and refuses unsupported known efforts"
+        }
+      ]
+    },
+    {
+      "id": "codex-model-catalog",
+      "file": "test/cli/codex-model-catalog.test.js",
+      "criteria": [
+        {
+          "id": "family-and-effort",
+          "test": "catalog recommends detected role families by priority with supported reasoning"
+        },
+        {
+          "id": "visible-valid-models",
+          "test": "catalog excludes hidden models and rejects duplicate or malformed catalogs"
+        },
+        {
+          "id": "bounded-file",
+          "test": "catalog bounded reader rejects symlink invalid UTF8 and oversized files"
+        },
+        {
+          "id": "honest-fallback",
+          "test": "catalog fallback preserves override then configured model then first visible candidate"
+        },
+        {
+          "id": "stable-home-and-order",
+          "test": "catalog preserves tie order and respects CODEX_HOME without reading fallback HOME"
+        },
+        {
+          "id": "safe-metadata",
+          "test": "catalog refuses invalid reasoning shapes and never returns secret-like IDs or raw timestamps"
+        }
+      ]
+    },
+    {
       "id": "codex-config-model",
       "file": "test/runtime/codex-config-model.test.js",
       "criteria": [

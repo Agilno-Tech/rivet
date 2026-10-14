@@ -178,11 +178,22 @@ Start with detected defaults from a configured project:
 rivet models configure
 ```
 
-Rivet detects installed Claude Code and Codex harnesses and shows local configuration evidence for the other supported providers. A saved routing policy takes precedence. For a new policy, choose a harness if both are installed, then review or edit the proposed routes before approving the save. This defaults flow makes no model call.
+Rivet detects installed harnesses and proposes a complete setup. Choose a harness when both Claude Code and Codex are installed, then select **Accept recommendations** or **Customize**. Customize lets you change individual routes, models and reasoning levels. A final preview asks for approval before saving. A saved Rivet policy takes precedence and can be kept or customized. This setup flow makes no model call.
 
-Claude defaults use `opus` for coordination and independent review, `sonnet` for implementation, and `haiku` for bounded fixes, with high requested reasoning. These are [Claude Code model aliases](https://code.claude.com/docs/en/model-config), resolved by the provider rather than pinned model versions. For Codex, Rivet reads the saved model from `$CODEX_HOME/config.toml`, or `~/.codex/config.toml` when `CODEX_HOME` is unset. `RIVET_CODEX_MODEL` remains an optional override. The preview identifies the source, and the initial proposal reuses the detected model across the four routes. Rivet asks for a model ID only when it cannot resolve one. You can change the proposal before saving. Use `--harness=claude` or `--harness=codex` to select the initial harness when creating a policy; an existing policy still takes precedence.
+| Work | Codex recommendation | Claude recommendation |
+| --- | --- | --- |
+| Coordination and technical decisions | Detected Astra model | `opus` |
+| Independent review | Detected Astra model | `opus` |
+| Substantial implementation and complex debugging | Detected Sol model | `sonnet` |
+| Bounded fixes, focused tests and investigations | Detected Luna model | `haiku` |
 
-Codex detection reads only the saved user configuration; it does not infer the model selected in another running chat, one-off CLI flags, or project, system and cloud overrides. A selected legacy `[profiles.<name>]` model takes precedence over the top-level model; a valid selected profile without a model inherits the top-level value. Rivet does not choose among unselected profiles. Missing, unreadable, malformed or unsafe configuration falls back to a prompt without displaying the file contents. Only the model ID is proposed; provider and authentication settings are not imported, and Rivet keeps its requested reasoning policy. No Codex configuration is changed. The detected model is copied into the routing proposal for your approval; future Codex setting changes do not silently change the saved Rivet policy. See [Codex configuration](https://developers.openai.com/codex/config-basic).
+For Codex, Rivet reads the local `models_cache.json` under `$CODEX_HOME` or `~/.codex`. It selects exact visible model IDs from that catalog, preferring its priority and ordering within each family. It recommends high reasoning when advertised; otherwise it proposes the model's advertised default and explains the change. Cached metadata may be stale and does not prove current account access. Rivet does not refresh the cache or guess IDs for missing models.
+
+If a family is missing, the preview explains the alternative: the configured Codex model, then an eligible catalog model. If neither is known, Rivet asks for an exact ID. `RIVET_CODEX_MODEL` remains an explicit override for all routes. The model editor offers detected models plus custom ID entry; known catalog models show their advertised reasoning options. Claude recommendations use [provider-resolved aliases](https://code.claude.com/docs/en/model-config), with high requested reasoning; they are not pinned model versions.
+
+The configured Codex model comes from `$CODEX_HOME/config.toml`, or `~/.codex/config.toml`. A selected legacy `[profiles.<name>]` model takes precedence over the top-level model; a valid selected profile without a model inherits the top-level value. Rivet never chooses an unselected profile. Missing, unreadable, malformed or unsafe files are treated as unresolved without displaying their contents. Detection does not infer the model selected in another chat, one-off CLI flags, or project, system and cloud overrides. Provider and authentication settings are not imported. See [Codex configuration](https://developers.openai.com/codex/config-basic).
+
+Use `--harness=claude` or `--harness=codex` to select the initial harness when creating a policy. Existing Rivet policies still take precedence. Recommendations and any alternatives are shown before approval; later catalog or Codex setting changes do not silently change a saved Rivet policy. Neither Codex configuration nor task execution is changed by previewing a setup.
 
 Or describe your preferences in plain language:
 

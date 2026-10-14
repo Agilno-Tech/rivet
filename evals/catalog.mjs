@@ -49,6 +49,20 @@ export const catalog = {
       ['editable-approval', 'models configure default proposal can be edited or declined without translating'],
       ['invalid-and-cancelled', 'models configure defaults refuse absent harnesses invalid model settings and interrupted approval'],
     ]),
+    scenario('recommended-model-setup', 'test/cli/model-policy.test.js', [
+      ['role-recommendations', 'models configure recommends cached Codex role mapping and requires exact final approval'],
+      ['customize-and-fence', 'models configure customizes detected models with advertised reasoning and rejects stale approval'],
+      ['preserve-user-policy', 'models configure cached recommendations preserve saved routes and explicit override'],
+      ['custom-and-supported-efforts', 'models configure cached customization permits custom IDs and refuses unsupported known efforts'],
+    ]),
+    scenario('codex-model-catalog', 'test/cli/codex-model-catalog.test.js', [
+      ['family-and-effort', 'catalog recommends detected role families by priority with supported reasoning'],
+      ['visible-valid-models', 'catalog excludes hidden models and rejects duplicate or malformed catalogs'],
+      ['bounded-file', 'catalog bounded reader rejects symlink invalid UTF8 and oversized files'],
+      ['honest-fallback', 'catalog fallback preserves override then configured model then first visible candidate'],
+      ['stable-home-and-order', 'catalog preserves tie order and respects CODEX_HOME without reading fallback HOME'],
+      ['safe-metadata', 'catalog refuses invalid reasoning shapes and never returns secret-like IDs or raw timestamps'],
+    ]),
     scenario('codex-config-model', 'test/runtime/codex-config-model.test.js', [
       ['toml-model', 'Codex model detection resolves custom and default homes with TOML syntax'],
       ['override-profile-precedence', 'Codex model detection uses explicit override before config and selected legacy profile before root model'],

@@ -5,6 +5,7 @@ import {prepareExecutionPolicyUpdate} from './init.js';
 import {translateModelPolicy} from '../models/policy-client.js';
 import {POLICY_ROUTES,policyText,validatePolicyTranslation,compileModelPolicy} from '../models/policy-contract.js';
 import {detectModelProviders,providerDetectionSummary,CLAUDE_POLICY_MODELS,exactPolicyModel} from '../models/detection.js';
+import {readCodexModelCatalog,recommendCodexRoutes} from '../models/codex-model-catalog.js';
 import {resolveConfiguredCodexModel} from '../models/codex-config-model.js';
 import {SESSION_CAPABILITIES} from '../clients/session-capabilities.js';
 const labels={coordination:'Coordination and technical decisions','independent-review':'Independent review',implementation:'Substantial implementation and complex debugging','bounded-fix':'Bounded fixes, focused tests and investigations'};
@@ -26,10 +27,11 @@ export async function configureModelPolicy({operands,flags},dependencies){
   show(providerDetectionSummary(detectModelProviders({environment:dependencies.env,harnesses:found})));
   let codexDefault;
   const codexModel=async()=>{if(!codexDefault){codexDefault=await resolveConfiguredCodexModel({environment:dependencies.env,cwd:dependencies.cwd()});check();show(`Codex model suggestion source: ${codexDefault.source}. Saved user configuration only; runtime overrides and model access are not verified.`);}return codexDefault.model;};
+  let catalog;const codexCatalog=async()=>{if(!catalog){catalog=await readCodexModelCatalog({environment:dependencies.env,cwd:dependencies.cwd()});check();}return catalog;};
   let translated,mapping;
   if(prose===undefined){
-   mapping=await defaultMapping({previous,eligible,requested:flags.harness,codexModel,prompt,show});
-   translated={routes:POLICY_ROUTES.map(route=>({route,rationale:previous?'Reuse the existing routed policy.':'Suggested defaults; review or edit before saving.',source:previous?'Existing execution policy':'Installed harness defaults'})),assumptions:[]};
+   const defaults=await defaultMapping({previous,eligible,requested:flags.harness,codexModel,codexCatalog,configured:()=>codexDefault,prompt,show});mapping=defaults.mapping;
+   translated={routes:POLICY_ROUTES.map(route=>({route,...defaults.reasons[route]})),assumptions:[]};
   }else{
   let kind=flags.harness;if(!kind)kind=eligible.length===1?eligible[0].kind:eligible.length?await prompt({id:'translator',type:'select',message:'Choose the installed harness that will translate this policy:',choices:eligible.map(x=>({value:x.kind,label:x.kind}))}):null;
   if(!eligible.some(x=>x.kind===kind))fail('No compatible selected harness is available. Install and authenticate Claude Code or Codex.');
@@ -62,7 +64,7 @@ export async function configureModelPolicy({operands,flags},dependencies){
   for(const route of POLICY_ROUTES){const item=translated.routes.find(x=>x.route===route),selection=policy.profiles[policy.routing[route]];show(`${labels[route]}: ${selection.model} | ${selection.harness} | Requested reasoning: ${selection.effort}\n  Why: ${item.rationale}\n  Source: ${item.source}`);const old=previous?.profiles[previous.routing[route]];show(`  Previously: ${old?`${old.model} | ${old.harness} | ${old.effort}`:'not configured'}`);}
   for(const assumption of translated.assumptions)show(`Translator assumption: ${assumption}`);
   show(`${previous?'Preserved':'Default'} capacity limits: ${JSON.stringify(policy.limits)}\n${previous?'Preserved':'Default'} session limits: ${JSON.stringify(policy.sessions)}`);
-  show('Read-only coordination/review; implementation/fixes may edit and run approved commands. Model IDs are user supplied, configured defaults, existing profiles, or Claude provider-resolved aliases (opus/sonnet/haiku); not live verified. Requested reasoning may be rejected or clamped by the provider. Existing approved tasks keep their pinned policy. No task will start.');
+  show('Read-only coordination/review; implementation/fixes may edit and run approved commands. Model IDs are user supplied, configured defaults, cached Codex models, existing profiles, or Claude provider-resolved aliases (opus/sonnet/haiku); not live verified. Requested reasoning may be rejected or clamped by the provider. Existing approved tasks keep their pinned policy. No task will start.');
   const approved=await prompt({id:'approve-policy',type:'confirm',message:'Save this exact model routing policy?',proposal:policy});check();
   if(approved!==true){show('Policy not saved.');return EXIT_CODES.SUCCESS;}
   await proposal.commit();saved=true;show('Saved model routing. Review and commit .rivet/orchestration.yaml before starting a new task.');return EXIT_CODES.SUCCESS;
@@ -71,8 +73,8 @@ export async function configureModelPolicy({operands,flags},dependencies){
 }
 
 
-async function defaultMapping({previous,eligible,requested,codexModel,prompt,show}){
- let mapping;
+async function defaultMapping({previous,eligible,requested,codexModel,codexCatalog,configured,prompt,show}){
+ let mapping;const reasons=Object.fromEntries(POLICY_ROUTES.map(route=>[route,{rationale:previous?'Reuse the existing routed policy.':'Suggested Claude role default.',source:previous?'Existing execution policy':'Claude provider-resolved aliases'}]));
  if(previous)mapping=Object.fromEntries(POLICY_ROUTES.map(route=>{const p=previous.profiles[previous.routing[route]];return [route,{harness:p.harness,model:p.model,effort:p.effort}];}));
  else{
   let kind=requested;
@@ -81,14 +83,16 @@ async function defaultMapping({previous,eligible,requested,codexModel,prompt,sho
   let model;
   if(kind==='codex'){
    model=await codexModel();
-   if(model===undefined)model=exactPolicyModel(await prompt({id:'default-codex-model',type:'input',message:'Exact Codex model ID to use for all four routes (you can edit individual routes next):'}));
+   const recommendations=recommendCodexRoutes(await codexCatalog(),configured());
+   if(recommendations){mapping=Object.fromEntries(POLICY_ROUTES.map(route=>{const {rationale,source,...selection}=recommendations[route];reasons[route]={rationale,source};return [route,selection];}));}
+   if(!mapping&&model===undefined)model=exactPolicyModel(await prompt({id:'default-codex-model',type:'input',message:'Exact Codex model ID to use for all four routes (you can edit individual routes next):'}));
   }
-  mapping=Object.fromEntries(POLICY_ROUTES.map(route=>[route,{harness:kind,model:kind==='claude'?CLAUDE_POLICY_MODELS[route]:model,effort:'high'}]));
+  if(!mapping){mapping=Object.fromEntries(POLICY_ROUTES.map(route=>[route,{harness:kind,model:kind==='claude'?CLAUDE_POLICY_MODELS[route]:model,effort:'high'}]));if(kind==='codex')for(const route of POLICY_ROUTES)reasons[route]={rationale:'No usable cached model recommendation; use entered exact model. Reasoning support unverified.',source:'User supplied model'};}
  }
- const preview=()=>{show('Suggested routing (authentication and model access not verified):');for(const route of POLICY_ROUTES){const p=mapping[route];show(`${labels[route]}: ${p.model} | ${p.harness} | Requested reasoning: ${p.effort}`);}};
+ const preview=()=>{show('Recommended routing (authentication and model access not verified):');for(const route of POLICY_ROUTES){const p=mapping[route];show(`${labels[route]}: ${p.model} | ${p.harness} | Requested reasoning: ${p.effort}\n  Why: ${reasons[route].rationale}\n  Source: ${reasons[route].source}`);}};
  preview();
- show('Claude opus/sonnet/haiku are provider-resolved aliases, not pinned model versions. High reasoning is requested, not guaranteed.');
- const action=await prompt({id:'default-action',type:'select',message:'Keep this mapping or change individual routes before final approval?',choices:[{value:'keep',label:'Keep mapping and review for approval'},{value:'edit',label:'Edit routes'}]});
+ show('Claude opus/sonnet/haiku are provider-resolved aliases, not pinned model versions. Reasoning settings are requested; effective provider behavior is not verified.');
+ const action=await prompt({id:'default-action',type:'select',message:'Accept recommendations or customize before final approval?',choices:[{value:'keep',label:'Accept recommendations'},{value:'edit',label:'Customize'}]});
  if(!['keep','edit'].includes(action))fail('Invalid routing choice.');
  if(action==='edit')while(true){
   const route=await prompt({id:'edit-route',type:'select',message:'Choose a route to change:',choices:[...POLICY_ROUTES.map(value=>({value,label:labels[value]})),{value:'done',label:'Done: review for approval'}]});
@@ -96,10 +100,14 @@ async function defaultMapping({previous,eligible,requested,codexModel,prompt,sho
   const current=mapping[route];
   const harness=await prompt({id:'edit-harness',type:'select',message:`Harness for ${labels[route]} (currently ${current.harness}):`,choices:['claude','codex'].map(value=>({value,label:`${value}${eligible.some(x=>x.kind===value)?' (installed)':' (not detected)'}`}))});
   if(!SESSION_CAPABILITIES[harness])fail('Invalid target harness.');
-  const model=exactPolicyModel(await prompt({id:'edit-model',type:'input',message:'Exact model ID or Claude provider alias:',defaultValue:harness===current.harness?current.model:harness==='claude'?CLAUDE_POLICY_MODELS[route]:await codexModel()}));
-  const effort=await prompt({id:'edit-effort',type:'select',message:`Requested reasoning (currently ${current.effort}):`,choices:SESSION_CAPABILITIES[harness].effort.map(value=>({value,label:value}))});
-  if(!SESSION_CAPABILITIES[harness].effort.includes(effort))fail('Invalid reasoning setting.');
+  const detected=harness==='codex'?await codexCatalog():[];let selectedModel;
+  if(detected.length){selectedModel=await prompt({id:'edit-codex-model',type:'select',message:'Choose a cached Codex model or enter a custom model:',choices:[...detected.map(x=>({value:x.model,label:x.model})),{value:'__custom__',label:'Enter a custom model'}]});if(selectedModel!=='__custom__'&&!detected.some(x=>x.model===selectedModel))fail('Invalid model choice.');}
+  const model=selectedModel&&selectedModel!=='__custom__'?selectedModel:exactPolicyModel(await prompt({id:'edit-model',type:'input',message:'Exact model ID or Claude provider alias:',defaultValue:harness===current.harness?current.model:harness==='claude'?CLAUDE_POLICY_MODELS[route]:await codexModel()}));
+  const allowedEfforts=detected.find(x=>x.model===model)?.efforts??SESSION_CAPABILITIES[harness].effort;
+  const effort=await prompt({id:'edit-effort',type:'select',message:`Requested reasoning (currently ${current.effort}):`,choices:allowedEfforts.map(value=>({value,label:value}))});
+  if(!allowedEfforts.includes(effort))fail('Invalid reasoning setting.');
+  reasons[route]={rationale:'User customized this route.',source:detected.find(x=>x.model===model)?.source??'User supplied model; model-specific reasoning support unverified'};
   mapping[route]={harness,model,effort};preview();
  }
- return mapping;
+ return {mapping,reasons};
 }
