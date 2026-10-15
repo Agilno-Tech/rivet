@@ -113,7 +113,7 @@ function dependsOn(node, targetId, nodeMap) {
 
 function validatePlanSemantics(plan, { config, workRequest, baselineCommit, client }) {
   if (plan.baselineCommit !== baselineCommit || plan.workRequestDigest !== workRequest.digest || plan.client !== client
-    || !matchesClientProfile(client, plan.clientProfile)) fail();
+    || !matchesClientProfile(client, plan.clientProfile, config.project.claude)) fail();
   if (client === 'host' && config.orchestration.roles.some(role => role.harness !== undefined)) fail();
   if (plan.branchNaming !== undefined) {
     let expected;
@@ -144,7 +144,7 @@ function validatePlanSemantics(plan, { config, workRequest, baselineCommit, clie
   for (const node of plan.nodes) {
     const role = roles.get(node.roleId);
     if (!role || role.kind !== node.role || node.dependencies.includes(node.id)) fail();
-    if (!matchesWorkerExecution(role, node.execution)) fail();
+    if (!matchesWorkerExecution(role, node.execution, config.project.claude)) fail();
     if (node !== roots[0] && (node.dependencies.length === 0 || !node.parentId)) fail();
     if (node.parentId && !nodeMap.has(node.parentId)) fail();
     if (node.dependencies.some(id => !nodeMap.has(id))) fail();

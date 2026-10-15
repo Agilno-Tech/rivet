@@ -28,13 +28,17 @@ async function gitExecutable() {
   throw new Error('Git fixture executable is unavailable');
 }
 
-async function installedFixture(t, kind, workerHarness) {
+async function installedFixture(t, kind, workerHarness, caps) {
   const parent = await realpath(await mkdtemp(join(tmpdir(), `rivet-installed-${kind}-`)));
   const root = join(parent, 'project');
   const remote = join(parent, 'origin.git');
   await mkdir(join(root, 'app'), { recursive: true });
   await mkdir(join(root, 'requests'), { recursive: true });
   await cp(VALID_CONFIG, join(root, '.rivet'), { recursive: true });
+  if (caps) {
+    const path = join(root, '.rivet', 'project.yaml');
+    await writeFile(path, (await readFile(path, 'utf8')) + `\nclaude:\n  planningMaxCostUsd: ${caps.planningMaxCostUsd}\n  workerMaxCostUsd: ${caps.workerMaxCostUsd}\n`);
+  }
   if (workerHarness) {
     const path = join(root, '.rivet', 'orchestration.yaml');
     await writeFile(path, (await readFile(path, 'utf8')).replace('    kind: worker', `    kind: worker\n    harness: ${workerHarness}`));
@@ -250,6 +254,8 @@ test('maps bounded workflow prerequisites and version conflicts to stable public
     ['ERR_FEATURE_WORKFLOW_CONFIGURATION', 'MISSING_CONFIGURATION'],
     ['ERR_FEATURE_WORKFLOW_STATE_CONFLICT', 'REPOSITORY_CONFLICT'],
     ['ERR_AGENT_OUTPUT_INVALID', 'PROVIDER_UNAVAILABLE'],
+    ['ERR_AGENT_AUTHENTICATION_REQUIRED', 'AUTHENTICATION_REQUIRED'],
+    ['ERR_AGENT_BUDGET_EXHAUSTED', 'BUDGET_EXHAUSTED'],
   ]) {
     const capture = captureOutput();
     const error = Object.assign(new Error('private detail'), { code, safeMessage: 'Bounded workflow failure.' });
@@ -263,9 +269,9 @@ test('maps bounded workflow prerequisites and version conflicts to stable public
 });
 
 test('installed CLI uses one selected live client through planning and Worker execution without moving main or remotes', async t => {
-  for (const [kind, workerHarness] of [['claude', undefined], ['codex', undefined], ['claude','codex'], ['codex','claude']]) {
-    await t.test(`${kind} planner, ${workerHarness ?? kind} worker`, async t => {
-      const fixture = await installedFixture(t, kind, workerHarness);
+  for (const [kind, workerHarness, caps] of [['claude', undefined], ['codex', undefined], ['claude','codex'], ['codex','claude'], ['claude', undefined, {planningMaxCostUsd: 3.5, workerMaxCostUsd: 4.25}], ['codex', 'claude', {planningMaxCostUsd: 3.5, workerMaxCostUsd: 4.25}]]) {
+    await t.test(`${kind} planner, ${workerHarness ?? kind} worker${caps ? " with custom caps" : ""}`, async t => {
+      const fixture = await installedFixture(t, kind, workerHarness, caps);
       const worker = workerHarness ?? kind;
       const gitPath = await gitExecutable();
       const baseline = (await execFile('git', ['-C', fixture.root, 'rev-parse', 'HEAD'])).stdout.trim();
@@ -323,6 +329,8 @@ test('installed CLI uses one selected live client through planning and Worker ex
       assert.deepEqual(log.map(item => item.provider), [kind, worker]);
       assert.deepEqual(log.map(item => item.mode), [kind === 'claude' ? 'dontAsk' : 'read-only', worker === 'claude' ? 'acceptEdits' : 'workspace-write']);
       assert.deepEqual(log.map(item => item.kind), ['agilno.feature-planning', 'agilno.agent-launch']);
+      if (kind === 'claude') assert.equal(log[0].maxBudgetUsd, caps?.planningMaxCostUsd ?? 1);
+      if (worker === 'claude') assert.equal(log[1].maxBudgetUsd, caps?.workerMaxCostUsd ?? 2);
       assert.equal((await execFile('git', ['-C', fixture.root, 'ls-files', '.git/rivet'])).stdout, '');
     });
   }

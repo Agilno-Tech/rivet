@@ -164,7 +164,7 @@ test('client process subsystem declares a fail-closed POSIX-only platform bounda
 });
 
 test('validates adapter templates and reports unavailable providers without live model calls', async () => {
-  assert.deepEqual(CLAUDE_ADAPTER_SYNTAX.args, ['--print', '--input-format', 'text', '--output-format', 'json', '--no-session-persistence', '{stdin}']);
+  assert.deepEqual(CLAUDE_ADAPTER_SYNTAX.args, ['--print', '--input-format', 'text', '--output-format', 'json', '--no-session-persistence', '--strict-mcp-config', '{stdin}']);
   assert.equal(CLAUDE_ADAPTER_SYNTAX.outputMode, 'json-structured-output-envelope-v1');
   assert.equal(CLAUDE_ADAPTER_SYNTAX.observedVersion, '2.1.207 (Claude Code)');
   assert.deepEqual(CLAUDE_ADAPTER_SYNTAX.testedVersions, ['2.1.207 (Claude Code)', '2.1.274 (Claude Code)']);
@@ -194,7 +194,7 @@ test('launches provider-specific, capability-checked argv on unfamiliar versions
   t.after(() => rm(root, { recursive: true, force: true }));
 
   const cases = [
-    [createClaudeClient, CLAUDE_ADAPTER_SYNTAX, '[ "$#" -eq 10 ] && [ "$1" = "--print" ] && [ "$2" = "--input-format" ] && [ "$3" = "text" ] && [ "$4" = "--output-format" ] && [ "$5" = "json" ] && [ "$6" = "--no-session-persistence" ] && [ "$7" = "--json-schema" ] && case "$8" in *agilno.agent-result*) true ;; *) false ;; esac && [ "$9" = "--max-budget-usd" ] && [ "${10}" = "2" ]'],
+    [createClaudeClient, CLAUDE_ADAPTER_SYNTAX, '[ "$#" -eq 11 ] && [ "$7" = "--strict-mcp-config" ] && [ "$1" = "--print" ] && [ "$2" = "--input-format" ] && [ "$3" = "text" ] && [ "$4" = "--output-format" ] && [ "$5" = "json" ] && [ "$6" = "--no-session-persistence" ] && [ "${8}" = "--json-schema" ] && case "${9}" in *agilno.agent-result*) true ;; *) false ;; esac && [ "${10}" = "--max-budget-usd" ] && [ "${11}" = "2" ]'],
     [createCodexClient, CODEX_ADAPTER_SYNTAX, '[ "$#" -eq 5 ] && [ "$1" = "exec" ] && [ "$2" = "--ephemeral" ] && [ "$3" = "--ignore-user-config" ] && [ "$4" = "--color" ] && [ "$5" = "never" ]'],
   ];
   for (const [createClient, syntax, argvCheck] of cases) {
@@ -241,7 +241,7 @@ test('plans through provider-specific read-only modes using the same pinned exec
     {
       createPlanningClient: createClaudePlanningClient,
       syntax: CLAUDE_ADAPTER_SYNTAX,
-      argvCheck: '[ "$#" -eq 18 ] && [ "$7" = "--model" ] && [ "$8" = "sonnet" ] && [ "$9" = "--effort" ] && [ "${10}" = "low" ] && [ "${11}" = "--max-budget-usd" ] && [ "${12}" = "1" ] && [ "${13}" = "--permission-mode" ] && [ "${14}" = "dontAsk" ] && [ "${15}" = "--tools" ] && [ "${16}" = "Read,Glob,Grep" ] && [ "${17}" = "--json-schema" ] && case "${18}" in *agilno.feature-decomposition*) true ;; *) false ;; esac && case " $* " in *" --fallback-model "*|*" --permission-mode plan "*) false ;; *) true ;; esac',
+      argvCheck: '[ "$#" -eq 19 ] && [ "$7" = "--strict-mcp-config" ] && [ "${8}" = "--model" ] && [ "${9}" = "sonnet" ] && [ "${10}" = "--effort" ] && [ "${11}" = "low" ] && [ "${12}" = "--max-budget-usd" ] && [ "${13}" = "1" ] && [ "${14}" = "--permission-mode" ] && [ "${15}" = "dontAsk" ] && [ "${16}" = "--tools" ] && [ "${17}" = "Read,Glob,Grep" ] && [ "${18}" = "--json-schema" ] && case "${19}" in *agilno.feature-decomposition*) true ;; *) false ;; esac && case " $* " in *" --fallback-model "*|*" --permission-mode plan "*) false ;; *) true ;; esac',
     },
     {
       createPlanningClient: createCodexPlanningClient,
@@ -307,7 +307,7 @@ test('uses the bounded Sonnet execution profile while preserving only non-secret
     output: { summary: 'user identity preserved', evidence: ['environment-sanitized'] },
     usage: { tokens: 1, costUsd: 0 },
   }));
-  await writeFile(executable, `#!${interpreter}\nif [ "$1" = "--version" ]; then printf '%s\\n' '${CLAUDE_ADAPTER_SYNTAX.observedVersion}'; exit 0; fi\nif [ "$1" = "--help" ] || [ "$2" = "--help" ]; then printf '%s\\n' '${CLAUDE_ADAPTER_SYNTAX.requiredOptions.join('\n')}'; exit 0; fi\n[ "$#" -eq 16 ] || exit 40\n[ "$7" = "--model" ] && [ "$8" = "sonnet" ] || exit 41\n[ "$9" = "--effort" ] && [ "\${10}" = "low" ] || exit 42\n[ "\${11}" = "--permission-mode" ] && [ "\${12}" = "acceptEdits" ] || exit 43\n[ "\${13}" = "--json-schema" ] && case "\${14}" in *agilno.agent-result*) true ;; *) false ;; esac || exit 43\n[ "\${15}" = "--max-budget-usd" ] && [ "\${16}" = "0.75" ] || exit 44\ncase " $* " in *" --fallback-model "*) exit 45 ;; esac\ncat >/dev/null\n[ "$USER" = "fixture-user" ] || exit 46\n[ -z "$ANTHROPIC_API_KEY" ] || exit 47\nprintf '%s\\n' '${result}'\n`, { mode: 0o700 });
+  await writeFile(executable, `#!${interpreter}\nif [ "$1" = "--version" ]; then printf '%s\\n' '${CLAUDE_ADAPTER_SYNTAX.observedVersion}'; exit 0; fi\nif [ "$1" = "--help" ] || [ "$2" = "--help" ]; then printf '%s\\n' '${CLAUDE_ADAPTER_SYNTAX.requiredOptions.join('\n')}'; exit 0; fi\n[ "$#" -eq 17 ] && [ "$7" = "--strict-mcp-config" ] || exit 40\n[ "\${8}" = "--model" ] && [ "\${9}" = "sonnet" ] || exit 41\n[ "\${10}" = "--effort" ] && [ "\${11}" = "low" ] || exit 42\n[ "\${12}" = "--permission-mode" ] && [ "\${13}" = "acceptEdits" ] || exit 43\n[ "\${14}" = "--json-schema" ] && case "\${15}" in *agilno.agent-result*) true ;; *) false ;; esac || exit 43\n[ "\${16}" = "--max-budget-usd" ] && [ "\${17}" = "0.75" ] || exit 44\ncase " $* " in *" --fallback-model "*) exit 45 ;; esac\ncat >/dev/null\n[ "$USER" = "fixture-user" ] || exit 46\n[ -z "$ANTHROPIC_API_KEY" ] || exit 47\nprintf '%s\\n' '${result}'\n`, { mode: 0o700 });
   await chmod(executable, 0o700);
   const metadata = await lstat(worktree, { bigint: true });
   const launch = validLaunch({
@@ -461,4 +461,27 @@ test('sanitizes hostile nested adapter templates, environments, and launch optio
   Object.defineProperty(getterOptions, 'signal', { enumerable: true, get() { signalReads += 1; return undefined; } });
   await assert.rejects(() => client.launch(validLaunch(), getterOptions), error => error.code === 'ERR_AGENT_PROVIDER_UNAVAILABLE');
   assert.equal(signalReads, 1);
+});
+
+test('a reused Claude planning client passes each captured planning cap to the executable', async t => {
+  const {CLAUDE_FEATURE_PROFILE} = await import('../../src/feature/client-profile.js');
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'rivet-planning-caps-')));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const executable = join(root, 'claude.cjs'), log = join(root, 'argv.json');
+  const interpreter = await realpath(process.execPath);
+  await writeFile(executable, `#!${interpreter}\nconst fs = require('node:fs');
+if (process.argv.includes('--version')) console.log('99.0.0');
+else if (process.argv.includes('--help')) console.log(${JSON.stringify(CLAUDE_ADAPTER_SYNTAX.requiredOptions.join('\n'))});
+else { fs.writeFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2))); process.stdin.resume(); process.stdin.on('end', () => console.log(JSON.stringify({type:'result',subtype:'success',structured_output:{planned:true}}))); }
+`, {mode: 0o700});
+  const client = createClaudePlanningClient({executable, interpreter, worktree: root});
+  for (const cap of [3.5, 0.125, 1, 10000, 0.000001]) {
+    const clientProfile = structuredClone(CLAUDE_FEATURE_PROFILE);
+    clientProfile.planning.maxCostUsd = cap;
+    const result = await client.propose({schemaVersion: 1, client: 'claude', clientProfile});
+    assert.equal(result.planned, true);
+    const args = JSON.parse(await readFile(log, 'utf8'));
+    assert.equal(args[args.indexOf('--max-budget-usd') + 1], String(cap));
+    assert.ok(args.includes('--strict-mcp-config'));
+  }
 });

@@ -15,6 +15,8 @@ export function failureGuidance(code, command) {
     case 'MISSING_CONFIGURATION': return 'Run rivet doctor from your project. If it is not configured yet, preview rivet setup first.';
     case 'BLOCKED_AUTHORITY': return 'Review the denied operation in your coding harness and request permission for that exact operation.';
     case 'FAILED_GATE': return task ? 'Run rivet task status to inspect the failed checks. Fix the reported cause before continuing with rivet task resume.' : 'Run rivet doctor and resolve the reported failing check before retrying.';
+    case 'AUTHENTICATION_REQUIRED': return 'Run claude auth login, then retry the command.';
+    case 'BUDGET_EXHAUSTED': return 'Reduce the planning scope or review claude.planningMaxCostUsd in .rivet/project.yaml, commit any policy change, and propose again.';
     case 'PROVIDER_UNAVAILABLE': return 'Check the reported harness or provider installation, authentication and permissions, then retry.';
     case 'REPOSITORY_CONFLICT': return task ? 'Inspect rivet task status and your checkout. Preserve existing edits and follow the reported recovery step before retrying.' : 'Inspect the reported repository or saved-state conflict. Preserve existing edits before retrying.';
     default: return 'Review the diagnostic report and attach it with reproduction steps at https://github.com/Agilno-Tech/rivet/issues/new.';

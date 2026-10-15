@@ -249,7 +249,7 @@ test('bounds runtime, handles abort and spawn/identity failures without leaking 
   await assert.rejects(() => timed.run({ args: [], cwd: 'linked', payload: slowPayload }), error => error.code === 'ERR_AGENT_CWD_UNSAFE');
   const hardlinkPath = join(slow.root, 'hardlinked-provider');
   await link(slow.executable, hardlinkPath);
-  await assert.rejects(() => createProcessRunner({ executable: hardlinkPath, interpreter: slow.interpreter, worktree: slow.worktree }), error => error.code === 'ERR_AGENT_EXECUTABLE_UNSAFE');
+  await createProcessRunner({ executable: hardlinkPath, interpreter: slow.interpreter, worktree: slow.worktree });
   await rm(hardlinkPath);
   // Close stdin first so the parent observes EPIPE before the already-spawned
   // provider exits. That race must still be classified as provider execution.
@@ -361,4 +361,37 @@ test('Claude native cost-cap stop preserves telemetry on nonzero exit without ac
 
 test('a nonzero Claude exit cannot present a success envelope as successful work', async t => {
   await assert.rejects(runClaudeResult(t, nativeClaudeResult({tokens: 1}), 1));
+});
+
+test('hard-linked provider executes and mutations through its alias are rejected', async t => {
+  const f = await fixture(t, `cat >/dev/null; printf '%s\\n' '${envelope()}'`);
+  const alias = join(f.root, 'npm-linked-provider');
+  await link(f.executable, alias);
+  const runner = await createProcessRunner({executable: alias, interpreter: f.interpreter, worktree: f.worktree});
+  const request = {args: [], cwd: '.', payload: await payload(f)};
+  assert.equal((await runner.run(request)).status, 'success');
+  await writeFile(f.executable, '#!/bin/sh\nexit 99\n');
+  await assert.rejects(runner.run(request), error => error.code === 'ERR_AGENT_EXECUTABLE_UNSAFE');
+});
+
+for (const protocol of ['planning', 'launch']) {
+  for (const [native, reason] of [
+    [{type: 'result', subtype: 'error_max_budget_usd', is_error: true}, 'BUDGET_EXHAUSTED'],
+    [{type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['OAuth token has expired. Please run /login. CANARY-PRIVATE']}, 'AUTHENTICATION_REQUIRED'],
+  ]) {
+    if (protocol === 'launch' && reason === 'BUDGET_EXHAUSTED') continue; // Existing measured-usage coverage.
+    test(`Claude ${protocol} classifies ${reason} without exposing provider text`, async t => {
+      const f = await fixture(t, `cat >/dev/null; printf '%s\\n' '${JSON.stringify(native)}'; exit 1`);
+      const runner = await createProcessRunner({executable: f.executable, interpreter: f.interpreter, worktree: f.worktree, resultFormat: 'claude-json'});
+      const request = {args: [], cwd: '.', payload: protocol === 'planning' ? await planningPayload(f) : await payload(f)};
+      await assert.rejects(protocol === 'planning' ? runner.runPlanning(request) : runner.run(request), error => error.code === `ERR_AGENT_${reason}` && !error.message.includes('CANARY-PRIVATE'));
+    });
+  }
+}
+
+test('Claude reports an expired login in an is_error result even with a success subtype and zero exit', async t => {
+  const native = {type: 'result', subtype: 'success', is_error: true, result: 'Not logged in · Please run /login'};
+  const f = await fixture(t, `cat >/dev/null; printf '%s\\n' '${JSON.stringify(native)}'`);
+  const runner = await createProcessRunner({executable: f.executable, interpreter: f.interpreter, worktree: f.worktree, resultFormat: 'claude-json'});
+  await assert.rejects(runner.runPlanning({args: [], cwd: '.', payload: await planningPayload(f)}), error => error.code === 'ERR_AGENT_AUTHENTICATION_REQUIRED');
 });

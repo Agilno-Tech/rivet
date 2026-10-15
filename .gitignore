@@ -6,6 +6,7 @@ Thumbs.db
 .idea/
 
 # Local documentation/build artifacts
+docs/plans/
 docs/.vitepress/cache/
 docs/.vitepress/dist/
 *.tgz

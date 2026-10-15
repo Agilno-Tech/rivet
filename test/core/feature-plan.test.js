@@ -385,3 +385,30 @@ test('missing ticket placeholder reports an actionable planning error', async()=
   const workRequest=createWorkRequest({...input,source:{kind:'inline',ref:'inline'}});
   assert.throws(()=>createHostFeaturePlan({config,workRequest,baselineCommit:BASELINE,decomposition:decomposition()}),/branchPattern.*ticket/i);
 });
+
+test('configured Claude spending caps are sealed in planning and Worker profiles and reject policy drift', async () => {
+  const original = await configuration(), workRequest = request();
+  for (const caps of [{planningMaxCostUsd: 3.5}, {workerMaxCostUsd: 4.25}, {planningMaxCostUsd: 3.5, workerMaxCostUsd: 4.25}]) {
+    for (const [client, harness] of [['claude', undefined], ['codex', 'claude'], ['claude', 'codex']]) {
+      const config = structuredClone(original);
+      config.project.claude = caps;
+      if (harness) config.orchestration.roles.find(role => role.kind === 'worker').harness = harness;
+      let contract;
+      const planner = createFeaturePlanner({planningClient: {propose: async input => { contract = input; return decomposition(); }}});
+      const plan = await planner.propose({config, workRequest, baselineCommit: BASELINE, client});
+      const expectedPlanning = caps.planningMaxCostUsd ?? 1, expectedWorker = caps.workerMaxCostUsd ?? 2;
+      if (client === 'claude') {
+        assert.equal(contract.clientProfile.planning.maxCostUsd, expectedPlanning);
+        assert.equal(plan.clientProfile.planning.maxCostUsd, expectedPlanning);
+        assert.equal(plan.clientProfile.execution.maxCostUsd, expectedWorker);
+      } else assert.equal(plan.clientProfile, undefined);
+      const worker = plan.nodes.find(node => node.role === 'worker');
+      if (harness === 'claude') assert.equal(worker.execution.clientProfile.execution.maxCostUsd, expectedWorker);
+      if (harness === 'codex') assert.equal(worker.execution.clientProfile, undefined);
+      const changed = structuredClone(config);
+      changed.project.claude.workerMaxCostUsd = 8;
+      assert.throws(() => createFeaturePlan({proposal: plan, config: changed, workRequest, baselineCommit: BASELINE, client}), FeaturePlanError);
+      assert.ok(Object.isFrozen(plan));
+    }
+  }
+});

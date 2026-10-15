@@ -554,7 +554,7 @@ export function createFeatureExecutor(input) {
         signal,
       });
       if (installed.status === 'declined') throw new WorktreeBootstrapError('approval-declined');
-      if (installed.status !== 'ready') throw new WorktreeBootstrapError('install-failed');
+      if (installed.status !== 'ready') throw new WorktreeBootstrapError('install-failed', installed.result);
     }
 
     const statePaths = await resolveStatePaths(project, run.runId);
@@ -661,6 +661,7 @@ export function createFeatureExecutor(input) {
           });
         } catch (error) {
           preparationReason = typeof error?.code === 'string' ? error.code : 'worktree-preparation-error';
+          if (error instanceof WorktreeBootstrapError) preparationReason += `: ${error.safeMessage}`;
           throw error;
         }
       },

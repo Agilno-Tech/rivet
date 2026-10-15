@@ -157,3 +157,17 @@ test('copied ownership cannot hide dependency files after directory or same-path
   await assert.rejects(inspectDependencyDirectory(root),/unsafe/);
  }
 });
+
+test('Corepack-shaped Yarn symlinks run through the application resolver with the bounded environment', async t => {
+  const f = await fixture(t, [{cwd: '.', argv: ['yarn', 'install', '--immutable']}]);
+  const bin = join(f.parent, 'bin');
+  await mkdir(bin);
+  const target = join(f.parent, 'yarn.js');
+  await writeFile(target, '#!/usr/bin/env node\nconst assert = require("node:assert/strict"); assert.deepEqual(process.argv.slice(2), ["install", "--immutable"]); require("node:fs").writeFileSync(".rivet-deps/installed", "ready");\n', {mode: 0o700});
+  await symlink(target, join(bin, 'yarn'));
+  f.input.dependencies.provides = [];
+  const app = createRivetApplication({env: {PATH: bin}});
+  const result = await bootstrapWorktreeDependencies(f.input, {...f.options, resolveCommandExecutable: app.resolveCommandExecutable});
+  assert.equal(result.status, 'ready', JSON.stringify(result));
+  assert.equal(await readFile(join(f.input.worktreePath, '.rivet-deps/installed'), 'utf8'), 'ready');
+ });
