@@ -110,3 +110,14 @@ test('refuses a checkout changed after the prompt and rejects installer source e
     confirm: async () => true,
   }), error => error instanceof WorktreeBootstrapError && error.details.reason === 'checkout-changed');
 });
+
+test('install errors expose only recognized bootstrap failure reasons', () => {
+  const error = new WorktreeBootstrapError('install-failed', {
+    status: 'bootstrap-error', code: null, bootstrapFailure: 'target-spawn-failed',
+  });
+  assert.match(error.safeMessage, /Bootstrap failure: target-spawn-failed/);
+  const untrusted = new WorktreeBootstrapError('install-failed', {
+    status: 'bootstrap-error', code: null, bootstrapFailure: 'secret-untrusted-path',
+  });
+  assert.doesNotMatch(untrusted.safeMessage, /secret-untrusted-path/);
+});

@@ -885,3 +885,16 @@ test('command allowlist maps and argv array traps are read exactly once', async 
   assert.equal(prepared.commandId, 'test');
   assert.deepEqual(accesses, { ownKeys: 1, command: 1, length: 1, zero: 1 });
 });
+
+test('pre-launch failures retain a bounded bootstrap reason without exposing process output', async t => {
+  const { root, worktree } = await fixture(t);
+  const executable = await executableFixture(root, 'yarn', '#!/rivet-missing-interpreter\n');
+  const result = await runCommand(contract(worktree, executable), {
+    actorId: 'worker-one', commandId: 'test', cwd: '.',
+  });
+  assert.equal(result.status, 'bootstrap-error');
+  assert.equal(result.bootstrapFailure, 'target-spawn-failed');
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, '');
+  assert.equal(result.suppressed, true);
+});

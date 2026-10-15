@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { assertGitClient } from '../git/client.js';
 import { createApprovalReceipt, createApprovalRegistry } from '../policy/approvals.js';
 import { createAuthorityEnvelope } from '../policy/authority.js';
-import { runCommand } from '../policy/commands.js';
+import { runCommand, isCommandBootstrapFailure } from '../policy/commands.js';
 import { inspectPortableDependencies, bootstrapPortableDependencies } from './portable-dependencies.js';
 
 const LOCKFILES = Object.freeze({
@@ -40,6 +40,10 @@ export class WorktreeBootstrapError extends Error {
     if (reason === 'install-failed' && result
       && ['aborted', 'timeout', 'output-overflow', 'bootstrap-error', 'signal', 'nonzero'].includes(result.status)) {
       this.message += ` Dependency command status: ${result.status}; exit code: ${Number.isInteger(result.code) ? result.code : 'unavailable'}.`;
+    }
+    if (reason === 'install-failed' && result?.status === 'bootstrap-error'
+      && isCommandBootstrapFailure(result.bootstrapFailure)) {
+      this.message += ` Bootstrap failure: ${result.bootstrapFailure}.`;
     }
     this.name = 'WorktreeBootstrapError';
     this.code = `ERR_WORKTREE_BOOTSTRAP_${reason.replaceAll('-', '_').toUpperCase()}`;

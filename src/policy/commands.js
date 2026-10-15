@@ -29,6 +29,15 @@ const BOOTSTRAP_PATH = fileURLToPath(new URL('./command-bootstrap.js', import.me
 const RESULT_FRAMING = /[\s\p{P}\p{S}\p{Cf}\p{Cc}]/u;
 const MAX_RESULT_FRAMING = 256;
 const preparedData = new WeakMap();
+const BOOTSTRAP_FAILURES = new Set([
+  'startup-timeout', 'anchor-invalid', 'anchor-changed', 'target-spawn-failed',
+  'invalid-init', 'invalid-message', 'cancelled', 'internal-failure', 'ipc-closed',
+  'terminated', 'invalid-bootstrap-message', 'bootstrap-process-failed',
+]);
+
+export function isCommandBootstrapFailure(value) {
+  return BOOTSTRAP_FAILURES.has(value);
+}
 
 export class CommandPolicyError extends Error {
   constructor(reason = 'invalid-command') {
@@ -443,6 +452,7 @@ function executeAnchored(prepared, data, abortHandle) {
     let timedOut = false;
     let aborted = abortHandle.aborted();
     let bootstrapError = false;
+    let bootstrapFailure;
     let launched = false;
     let settled = false;
     let stopping = false;
@@ -470,6 +480,7 @@ function executeAnchored(prepared, data, abortHandle) {
         rawOverflow,
         overflowStream,
         bootstrapError,
+        bootstrapFailure: bootstrapError ? bootstrapFailure ?? 'bootstrap-process-failed' : undefined,
         stdout: Buffer.concat(chunks.stdout),
         stderr: Buffer.concat(chunks.stderr),
       });
@@ -495,13 +506,13 @@ function executeAnchored(prepared, data, abortHandle) {
         stop();
       }
     };
-    const malformed = () => { bootstrapError = true; stop(); };
+    const malformed = () => { bootstrapError = true; bootstrapFailure ??= 'invalid-bootstrap-message'; stop(); };
     const onMessage = async message => {
       if (!message || message.version !== BOOTSTRAP_VERSION || message.nonce !== nonce) return malformed();
       if (message.type === 'ready') {
         if (!exactMessage(message, ['version', 'type', 'nonce']) || launched) return malformed();
         launched = true;
-        if (!await anchorsStillValid(prepared, data)) return malformed();
+        if (!await anchorsStillValid(prepared, data)) { bootstrapFailure = 'anchor-invalid'; return malformed(); }
         try { child.send({ version: BOOTSTRAP_VERSION, type: 'launch', nonce }, error => { if (error) malformed(); }); } catch { malformed(); }
         return;
       }
@@ -512,7 +523,9 @@ function executeAnchored(prepared, data, abortHandle) {
         return;
       }
       if (message.type === 'failed') {
-        if (!exactMessage(message, ['version', 'type', 'nonce', 'reason'])) return malformed();
+        if (!exactMessage(message, ['version', 'type', 'nonce', 'reason'])
+          || !isCommandBootstrapFailure(message.reason)) return malformed();
+        bootstrapFailure ??= message.reason;
         bootstrapError = true;
         return;
       }
@@ -549,6 +562,7 @@ function executeAnchored(prepared, data, abortHandle) {
       anchorCheckRunning = true;
       try {
         if (!await anchorsStillValid(prepared, data)) {
+          bootstrapFailure ??= 'anchor-changed';
           bootstrapError = true;
           stop();
         }
@@ -786,6 +800,7 @@ export async function runCommand(contractInput, requestInput, optionsInput = {})
     const output = sanitizeAndLimit(raw, prepared, data.environment);
     return Object.freeze({
       status: commandStatus(raw, output.truncated),
+      ...(raw.bootstrapFailure ? { bootstrapFailure: raw.bootstrapFailure } : {}),
       code: raw.code,
       signal: raw.signal,
       timedOut: raw.timedOut,
