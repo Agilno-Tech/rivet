@@ -40,7 +40,7 @@ test('explicit support saving uses existing sanitized collection and fixed failu
 
 test('failure cause codes use a closed production allowlist and never retain arbitrary codes',async t=>{
  const root=await fixture(t);
- for(const [input,expected] of [['ERR_HOST_RUN_BUSY','ERR_HOST_RUN_BUSY'],['ERR_GIT_NON_FAST_FORWARD','ERR_GIT_NON_FAST_FORWARD'],[secret,null],['ERR_'+secret,null]]) {
+ for(const [input,expected] of [['ERR_AGENT_AUTHENTICATION_REQUIRED','ERR_AGENT_AUTHENTICATION_REQUIRED'],['ERR_AGENT_BUDGET_EXHAUSTED','ERR_AGENT_BUDGET_EXHAUSTED'],['ERR_HOST_RUN_BUSY','ERR_HOST_RUN_BUSY'],['ERR_GIT_NON_FAST_FORWARD','ERR_GIT_NON_FAST_FORWARD'],[secret,null],['ERR_'+secret,null]]) {
   const saved=await reports.saveFailureReport({command:'task',subcommand:'approve',code:'REPOSITORY_CONFLICT',causeCode:input},{temporaryDirectory:root});
   assert.equal(saved.report.failure.causeCode,expected);assert.ok(!(await readFile(saved.path,'utf8')).includes(secret));
  }

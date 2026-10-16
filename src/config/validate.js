@@ -1,3 +1,4 @@
+import { clientProfileFor } from '../feature/client-profile.js';
 import { validateBranchPattern } from '../feature/branch-naming.js';
 import { parseRepositoryRemote } from '../repositories/identity.js';
 import { readFileSync } from 'node:fs';
@@ -301,6 +302,8 @@ export function validateProjectConfiguration(config) {
       if (identity.url !== config.project.repository.remote.url) throw new Error();
     } catch { throw new ConfigurationError('/project/repository/remote', 'invalid'); }
   }
+  try { clientProfileFor('claude', config.project.claude); }
+  catch { throw new ConfigurationError('/project/claude', 'invalid-spending-caps'); }
   validateConfigSemantics(config);
   return true;
 }

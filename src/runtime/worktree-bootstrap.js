@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { assertGitClient } from '../git/client.js';
 import { createApprovalReceipt, createApprovalRegistry } from '../policy/approvals.js';
 import { createAuthorityEnvelope } from '../policy/authority.js';
-import { runCommand } from '../policy/commands.js';
+import { runCommand, isCommandBootstrapFailure } from '../policy/commands.js';
 import { inspectPortableDependencies, bootstrapPortableDependencies } from './portable-dependencies.js';
 
 const LOCKFILES = Object.freeze({
@@ -23,7 +23,7 @@ const INSTALL_ARGS = Object.freeze({
 const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 export class WorktreeBootstrapError extends Error {
-  constructor(reason) {
+  constructor(reason, result) {
     const messages = {
       'invalid-input': 'Dependency setup input is invalid.',
       'unsafe-checkout': 'The isolated checkout changed or is unsafe. Inspect the task before retrying.',
@@ -37,6 +37,14 @@ export class WorktreeBootstrapError extends Error {
       'install-failed': 'Dependency installation failed in the isolated checkout. Inspect the package-manager output and retry.',
     };
     super(messages[reason] ?? messages['invalid-input']);
+    if (reason === 'install-failed' && result
+      && ['aborted', 'timeout', 'output-overflow', 'bootstrap-error', 'signal', 'nonzero'].includes(result.status)) {
+      this.message += ` Dependency command status: ${result.status}; exit code: ${Number.isInteger(result.code) ? result.code : 'unavailable'}.`;
+    }
+    if (reason === 'install-failed' && result?.status === 'bootstrap-error'
+      && isCommandBootstrapFailure(result.bootstrapFailure)) {
+      this.message += ` Bootstrap failure: ${result.bootstrapFailure}.`;
+    }
     this.name = 'WorktreeBootstrapError';
     this.code = `ERR_WORKTREE_BOOTSTRAP_${reason.replaceAll('-', '_').toUpperCase()}`;
     this.safeMessage = this.message;

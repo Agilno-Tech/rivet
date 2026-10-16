@@ -885,3 +885,46 @@ test('command allowlist maps and argv array traps are read exactly once', async 
   assert.equal(prepared.commandId, 'test');
   assert.deepEqual(accesses, { ownKeys: 1, command: 1, length: 1, zero: 1 });
 });
+
+test('pre-launch failures retain a bounded bootstrap reason without exposing process output', async t => {
+  const { root, worktree } = await fixture(t);
+  const executable = await executableFixture(root, 'yarn', '#!/rivet-missing-interpreter\n');
+  const result = await runCommand(contract(worktree, executable), {
+    actorId: 'worker-one', commandId: 'test', cwd: '.',
+  });
+  assert.equal(result.status, 'bootstrap-error');
+  assert.equal(result.bootstrapFailure, 'target-spawn-failed');
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, '');
+  assert.equal(result.suppressed, true);
+});
+
+test('verbose dependency installs still obey timeout and cancellation', async t => {
+  for (const stop of ['timeout', 'aborted']) {
+    const { root, worktree } = await fixture(t);
+    const marker = join(worktree, 'output-written');
+    const installer = await executableFixture(root, 'installer', `#!${process.execPath}
+const fs = require('node:fs');
+fs.writeSync(1, 'x'.repeat(100000));
+fs.writeFileSync('output-written', 'ready');
+setInterval(() => {}, 1000);
+`);
+    const nowMs = Date.now();
+    const approval = createApprovalReceipt({
+      id: 'install-approval', approverId: 'human-owner', approverPrincipal: 'human',
+      subjectId: 'worker-one', action: 'dependency.install', resource: `command:install:${worktree}`,
+      policyId: 'dependency.install', decision: 'approved', expiresAt: new Date(nowMs + 60000).toISOString(), singleUse: true,
+    });
+    const controller = new AbortController();
+    const pending = runCommand({
+      worktree, authority: createAuthorityEnvelope({actorId: 'worker-one', principal: 'agent', actions: ['dependency.install'], ownedPaths: [], providers: [], commands: ['install']}),
+      commands: {install: {executable: installer, args: [], action: 'dependency.install', elevated: true, approvalPolicyId: 'dependency.install', approverId: 'human-owner'}},
+      timeoutMs: stop === 'timeout' ? 1000 : 5000, maxOutputBytes: 16384,
+    }, {actorId: 'worker-one', commandId: 'install', cwd: '.', approval, approvalRegistry: approvalRegistry(), nowMs}, {signal: controller.signal});
+    await waitForPath(marker);
+    if (stop === 'aborted') controller.abort();
+    const result = await pending;
+    assert.equal(result.status, stop);
+    assert.equal(result.suppressed, true);
+  }
+});

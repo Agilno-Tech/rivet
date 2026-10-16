@@ -131,6 +131,22 @@ Help checks establish advertised options; they cannot prove unchanged semantics,
 
 Spawned process adapters currently support macOS and Linux. Native Windows execution is not supported; an app running on Windows does not remove that runtime limit. WSL needs its own compatible environment and qualification.
 
+### Claude spending caps
+
+Set optional overrides in the tracked `.rivet/project.yaml`:
+
+```yaml
+claude:
+  planningMaxCostUsd: 3.50
+  workerMaxCostUsd: 5
+```
+
+Omitting `planningMaxCostUsd` keeps the **$1 per planning call** default. Omitting `workerMaxCostUsd` keeps the **$2 per Worker launch** default. Each value must be a number from `0.000001` through `10000`, with at most six decimal places; zero does not mean unlimited. A planning repair call has its own cap, so the planning setting is not a cumulative task budget.
+
+Rivet captures these limits in the proposal, displays them for approval, and passes them to Claude's `--max-budget-usd`. A Worker's effective limit is the lower of its captured ceiling and its approved allocation. Raising `workerMaxCostUsd` therefore does not override a lower orchestration budget. These settings apply to Claude even when a Codex planner delegates to a Claude Worker; they do not change Codex or host execution.
+
+Commit configuration changes before proposing a task. Changing these settings invalidates the old policy match; create and approve a new proposal to use different limits. Existing saved profiles retain their original values, including the $1/$2 limits on older plans.
+
 ### Native usage and task budgets
 
 Claude Worker results use the CLI's native `modelUsage` counters and `total_cost_usd`, rather than usage figures written by the model. Token totals include input, output, cache creation and cache reads across all reported models, including delegated agents. Missing or invalid native accounting stops the result. The native cost is a client-side estimate, not a billing receipt; see [Claude's usage documentation](https://code.claude.com/docs/en/agent-sdk/cost-tracking).

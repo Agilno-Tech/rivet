@@ -1288,3 +1288,23 @@ test('existing four-file config accepts scoped MCP descriptors without credentia
   config.providers.providers[0].transport='invented';
   assert.throws(()=>validateProjectConfiguration(config),ConfigurationError);
 });
+
+test('Claude caps accept independent bounded numeric overrides and reject invalid values', async () => {
+  const original = await loadProjectConfig(fixture('valid'));
+  for (const caps of [{}, {planningMaxCostUsd: 3.5}, {workerMaxCostUsd: 4.25}, {planningMaxCostUsd: 0.000001, workerMaxCostUsd: 10000}]) {
+    const config = structuredClone(original);
+    config.project.claude = caps;
+    assert.equal(validateProjectConfiguration(config), true);
+  }
+  for (const key of ['planningMaxCostUsd', 'workerMaxCostUsd']) {
+    for (const value of [0, -1, 10000.01, NaN, Infinity, '3', null, 0.0000001, 1.1234567]) {
+      const config = structuredClone(original);
+      config.project.claude = {[key]: value};
+      assert.throws(() => validateProjectConfiguration(config), ConfigurationError);
+    }
+  }
+  for (const caps of [null, [], {unknown: 3}]) {
+    const config = structuredClone(original); config.project.claude = caps;
+    assert.throws(() => validateProjectConfiguration(config), ConfigurationError);
+  }
+});

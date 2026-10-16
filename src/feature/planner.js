@@ -70,7 +70,7 @@ function requiredEvidence(config, role, { humanApproval = false } = {}) {
 function compileFeaturePlan({ decomposition, config, workRequest, baselineCommit, client }) {
   if (client === 'host' && config.orchestration.roles.some(role => role.harness !== undefined)) fail('compiled-plan-invalid');
   const { boss, manager, worker } = roleChain(config);
-  const execution = workerExecutionFor(worker);
+  const execution = workerExecutionFor(worker, config.project.claude);
   const managerScopes = intersect(manager.authorityScopes, boss.authorityScopes);
   const workerScopes = intersect(worker.authorityScopes, managerScopes);
   if (managerScopes.length === 0 || workerScopes.length === 0) fail('compiled-plan-invalid');
@@ -101,7 +101,7 @@ function compileFeaturePlan({ decomposition, config, workRequest, baselineCommit
     workers[index].dependencies = [workers[index - 1].id];
   }
   const finalScopes = boss.authorityScopes.includes('verify') ? ['verify'] : [boss.authorityScopes[0]];
-  const clientProfile = clientProfileFor(client);
+  const clientProfile = clientProfileFor(client, config.project.claude);
   return {
     schemaVersion: 1,
     id: slug(workRequest.title),
@@ -170,6 +170,7 @@ function planningContract({ config, workRequest, baselineCommit, client }) {
     schemaVersion: 1,
     baselineCommit,
     client,
+    ...(client === 'claude' ? {clientProfile: clientProfileFor(client, config.project.claude)} : {}),
     workRequest,
     policy: {
       projectId: config.project.id,

@@ -20,7 +20,7 @@ import {
   CLAUDE_FEATURE_PROFILE,
   FEATURE_PLANNING_TIMEOUT_MS,
   clientProfileFor,
-  matchesClientProfile,
+  isClientProfile,
 } from '../feature/client-profile.js';
 import { collectEvidenceBundle } from '../evidence/collect.js';
 import { createFeatureRunStore } from '../feature/run-store.js';
@@ -211,7 +211,7 @@ export function createRivetApplication(input = {}) {
     fail();
   };
   const agentClientFor = (kind, clientProfile) => {
-    if (!matchesClientProfile(kind, clientProfile)) fail();
+    if (!isClientProfile(kind, clientProfile)) fail();
     if (kind === 'claude') return createClaudeClient({
       ...harnessSettings('claude'),
       expectedVersion: selectedVersion('claude'),

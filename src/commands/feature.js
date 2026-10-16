@@ -41,6 +41,10 @@ async function invoke(feature, method, input, options) {
     } else if (code === 'ERR_FEATURE_WORKFLOW_HOST_USE_WORK' || code === 'ERR_FEATURE_WORKFLOW_INVALID_INPUT' || code === 'ERR_INVALID_WORK_REQUEST'
       || code === 'ERR_INVALID_FEATURE_PLAN' || code === 'ERR_INVALID_FEATURE_RUN') {
       publicCode = 'INVALID_INPUT';
+    } else if (code === 'ERR_AGENT_AUTHENTICATION_REQUIRED') {
+      publicCode = 'AUTHENTICATION_REQUIRED';
+    } else if (code === 'ERR_AGENT_BUDGET_EXHAUSTED') {
+      publicCode = 'BUDGET_EXHAUSTED';
     } else if (code.startsWith('ERR_PROVIDER_') || code.startsWith('ERR_AGENT_')) {
       publicCode = 'PROVIDER_UNAVAILABLE';
     }
