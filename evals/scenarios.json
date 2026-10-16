@@ -294,6 +294,72 @@
       ]
     },
     {
+      "id": "orchestration-parallel-integration",
+      "file": "test/runtime/feature-runtime-bridge.test.js",
+      "criteria": [
+        {
+          "id": "sibling-acceptance",
+          "test": "explicit adapter workers overlap and both same-base siblings are verified and accepted"
+        },
+        {
+          "id": "dependency-progress",
+          "test": "explicit adapter starts accepted fast dependency before slow sibling finishes"
+        },
+        {
+          "id": "failed-candidate-retained",
+          "test": "explicit adapter refuses failed candidate quality without accepting a worker"
+        },
+        {
+          "id": "cancel-before-acceptance",
+          "test": "explicit adapter rejects live run cancellation before candidate acceptance"
+        },
+        {
+          "id": "slow-preparation",
+          "test": "explicit adapter waits through a slow cooperating checkout instead of blocking its sibling"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-verification-reuse",
+      "file": "test/quality/verification-reuse.test.js",
+      "criteria": [
+        {
+          "id": "exact-proof",
+          "test": "runner reuses exact passing verification, brands inside boundary, and invalidates changed policy"
+        },
+        {
+          "id": "cross-process-owner",
+          "test": "separate OS processes execute one shared runner generation"
+        },
+        {
+          "id": "uncertain-owner",
+          "test": "crashed owner remains blocked; PID absence does not authorize stealing"
+        },
+        {
+          "id": "no-forged-proof",
+          "test": "generic queue completion cannot manufacture branded passing proof"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-cleanup-preview",
+      "file": "test/runtime/worktree-cleanup.test.js",
+      "criteria": [
+        {
+          "id": "read-only-observation",
+          "test": "cleanup preview observes exact stopped completed Worker without changing state, refs or files"
+        },
+        {
+          "id": "retain-unsafe-checkouts",
+          "test": "cleanup retains active/failed/blocked tasks, unknown owners, dirt, ignored contents and symlinks"
+        },
+        {
+          "id": "preview-only-interface",
+          "test": "task cleanup requires preview, selects completed tasks and rejects apply"
+        }
+      ]
+    },
+    {
       "id": "orchestration-telemetry",
       "file": "test/runtime/session-capabilities.test.js",
       "criteria": [

@@ -478,7 +478,7 @@ function validateDurableIntentRelations(state, retryDelaysMs) {
   for (const remaining of parentAvailability.values()) validateNonnegativeBudget(remaining);
 }
 
-function captureResult(input, managed = false) {
+export function captureRuntimeResult(input, managed = false) {
   try {
     const value = captureOptions(input, ['version', 'status', 'output', 'usage'], ['version', 'status', 'output', 'usage']);
     const output = immutableJson(value.output);
@@ -681,7 +681,7 @@ export function createOrchestrator(input) {
     let result; let classification;
     if (outcome.error) classification = classify(outcome.error);
     else {
-      try { result = captureResult(outcome.result); classification = result.status; }
+      try { result = captureRuntimeResult(outcome.result); classification = result.status; }
       catch { classification = 'malformed-output'; }
     }
     for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -853,7 +853,7 @@ export function createOrchestrator(input) {
     return null;
   }
 
-  async function reconcileResult(instance, node, intent, result) {
+  async function reconcileResult(instance, node, intent, result, signal, retryReconciliation = false) {
     if (!config.reconcile || result.status !== 'success'
       || !resultWithinAllocation(result, intent.allocation ?? node.budget,
         Math.ceil(Math.max(0, config.now() - (intent.startedAtMs ?? config.now())) / 60_000), Boolean(intent.session))) {
@@ -865,14 +865,15 @@ export function createOrchestrator(input) {
       const current=canonicalRuntimeState(await instance.read(),instance.id);
       if (current.terminal === 'budget-exhausted') return { performed: false };
       if(intent.session) {
-        const session=requireSession(current,node.id,intent.session);
+        const session=requireSession(current,node.id,intent.session,retryReconciliation ? ['active','reconciling'] : ['active']);
+        if(retryReconciliation && session.writer && session.stopReceipt?.status!=='stopped')sessionFailure('writer-stop-unknown');
         if(session.writer?.source==='owned-process'&&session.stopReceipt?.status!=='stopped')sessionFailure('writer-stop-unknown');
         session.phase='reconciling';current.version++;
         await instance.commit(current.version-1,canonicalRuntimeState(current,instance.id));
       }
       // Invoke while the terminal check is protected, but await external work
       // after releasing the state lock. Handle rejection immediately.
-      pending = Promise.resolve(config.reconcile(clone(node), clone(intent), result))
+      pending = Promise.resolve(config.reconcile(clone(node), clone(intent), result, {signal}))
         .then(report => ({ report }), error => ({ error, failed: true }));
     } finally { await lock.release(); }
     const settled = await pending;
@@ -927,7 +928,7 @@ export function createOrchestrator(input) {
           const claimedIntent = await serializeResult(instance.id, () => claimPreparation(instance, intent, preparationClaimId));
           if (claimedIntent === null) return Object.freeze({ coordinated: true });
           phase = 'prepare';
-          const worktree = clone(await config.prepareWorktree(clone(node), clone(claimedIntent)));
+          const worktree = clone(await config.prepareWorktree(clone(node), clone(claimedIntent), {signal: controller.signal}));
           phase = 'prepare-commit';
           preparedIntent = await serializeResult(instance.id, () => persistPreparedIntent(instance, claimedIntent, preparationClaimId, worktree));
         }
@@ -939,7 +940,7 @@ export function createOrchestrator(input) {
         let executing=startedIntent;let result;
         while(true) {
           outcomeIntent=executing;const launchedIntent=executing;
-          result=captureResult(await config.client.launch(config.launchFor(clone(node),clone(executing)),{
+          result=captureRuntimeResult(await config.client.launch(config.launchFor(clone(node),clone(executing)),{
             signal:controller.signal,
             ...(executing.session ? {onExecution:receipt=>serializeResult(instance.id,()=>observeSession(instance,launchedIntent,'execution',receipt)),onTelemetry:receipt=>serializeResult(instance.id,()=>observeSession(instance,launchedIntent,'telemetry',receipt))} : {}),
           }),Boolean(executing.session));
@@ -950,7 +951,7 @@ export function createOrchestrator(input) {
           executing=await continueSession(instance,executing,node,result);finalSessionResult=undefined;
         }
         phase = 'reconcile';
-        const reconciliation = await reconcileResult(instance, node, executing, result);
+        const reconciliation = await reconcileResult(instance, node, executing, result, controller.signal);
         if (reconciliation.performed) {
           const report = reconciliation.report;
           if (report?.status !== 'integrated') outcome = { result: { version: 1, status: 'blocked', output: { summary: 'Worktree reconciliation requires review.', evidence: [] }, usage: result.usage } };
@@ -1186,7 +1187,9 @@ export function createOrchestrator(input) {
   }
 
   async function prepareActions(instance, inputOptions) {
-    const options = clone(captureOptions(inputOptions, ['expectedVersion','maxActiveNodes','capacityByOwner','childCapacityByParent'], ['expectedVersion']));
+    const options = clone(captureOptions(inputOptions, ['expectedVersion','maxActiveNodes','capacityByOwner','childCapacityByParent','existingOnly'], ['expectedVersion']));
+    if(options.existingOnly!==undefined && typeof options.existingOnly!=='boolean')fail('invalid-options');
+    const {existingOnly,...scheduleOptions}=options;
     const inspect = async () => {
       const lock = await instance.acquire();
       try { return canonicalRuntimeState(await instance.read(), instance.id); }
@@ -1195,33 +1198,35 @@ export function createOrchestrator(input) {
     let state = await inspect();
     if (state.version !== exactVersion(options.expectedVersion)) fail('version-conflict');
     if (TERMINAL.has(state.terminal)) return Object.freeze({version:state.version,actions:Object.freeze([])});
-    await tickInternal(instance, options, false);
-    state = await inspect();
-    const available = (snapshot,node) => {
-      if(TERMINAL.has(snapshot.terminal))return false;
-      const running=snapshot.graph.nodes.filter(item=>item.status==='running');
-      return running.length < (options.maxActiveNodes??4)
-        && running.filter(item=>item.owner.id===node.owner.id).length < (options.capacityByOwner?.[node.owner.id]??64)
-        && (!node.parentId || running.filter(item=>item.parentId===node.parentId).length < (options.childCapacityByParent?.[node.parentId]??64));
-    };
-    if(TERMINAL.has(state.terminal))return Object.freeze({version:state.version,actions:Object.freeze([])});
-    for (const node of state.graph.nodes.filter(node => node.status === 'reserved'
-      && ['committed','prepared'].includes(state.launchIntents[node.id]?.status))) {
-      state=await inspect();
-      if(!available(state,node))continue;
-      let intent = state.launchIntents[node.id];
-      if (config.prepareWorktree && intent.status !== 'prepared') {
-        const claimId = `prepare-${randomUUID()}`;
-        const claimed = await serializeResult(instance.id, () => claimPreparation(instance, intent, claimId));
-        if (claimed === null) fail('version-conflict');
-        const worktree = clone(await config.prepareWorktree(clone(node), clone(claimed)));
-        intent = await serializeResult(instance.id, () => persistPreparedIntent(instance, claimed, claimId, worktree));
-        if (intent === null) fail('version-conflict');
+    if(!existingOnly) {
+      await tickInternal(instance, scheduleOptions, false);
+      state = await inspect();
+      const available = (snapshot,node) => {
+        if(TERMINAL.has(snapshot.terminal))return false;
+        const running=snapshot.graph.nodes.filter(item=>item.status==='running');
+        return running.length < (options.maxActiveNodes??4)
+          && running.filter(item=>item.owner.id===node.owner.id).length < (options.capacityByOwner?.[node.owner.id]??64)
+          && (!node.parentId || running.filter(item=>item.parentId===node.parentId).length < (options.childCapacityByParent?.[node.parentId]??64));
+      };
+      if(TERMINAL.has(state.terminal))return Object.freeze({version:state.version,actions:Object.freeze([])});
+      for (const node of state.graph.nodes.filter(node => node.status === 'reserved'
+        && ['committed','prepared'].includes(state.launchIntents[node.id]?.status))) {
+        state=await inspect();
+        if(!available(state,node))continue;
+        let intent = state.launchIntents[node.id];
+        if (config.prepareWorktree && intent.status !== 'prepared') {
+          const claimId = `prepare-${randomUUID()}`;
+          const claimed = await serializeResult(instance.id, () => claimPreparation(instance, intent, claimId));
+          if (claimed === null) fail('version-conflict');
+          const worktree = clone(await config.prepareWorktree(clone(node), clone(claimed)));
+          intent = await serializeResult(instance.id, () => persistPreparedIntent(instance, claimed, claimId, worktree));
+          if (intent === null) fail('version-conflict');
+        }
+        state=await inspect();
+        if(!available(state,node))continue;
+        const started = await serializeResult(instance.id, () => markIntentStarted(instance, intent));
+        if (started === null) fail('version-conflict');
       }
-      state=await inspect();
-      if(!available(state,node))continue;
-      const started = await serializeResult(instance.id, () => markIntentStarted(instance, intent));
-      if (started === null) fail('version-conflict');
     }
     state = await inspect();
     if(TERMINAL.has(state.terminal))return Object.freeze({version:state.version,actions:Object.freeze([])});
@@ -1237,9 +1242,9 @@ export function createOrchestrator(input) {
 
   async function submitAction(instance, inputOptions) {
     const options = captureOptions(inputOptions, [
-      'expectedVersion', 'nodeId', 'intentId', 'idempotencyKey', 'reservationId', 'result', 'sessionId', 'generation',
+      'expectedVersion', 'nodeId', 'intentId', 'idempotencyKey', 'reservationId', 'result', 'sessionId', 'generation', 'retryReconciliation',
     ], ['expectedVersion', 'nodeId', 'intentId', 'idempotencyKey', 'reservationId', 'result']);
-    const result = captureResult(options.result);
+    const result = captureRuntimeResult(options.result);
     const lock = await instance.acquire();
     let state;
     try { state = canonicalRuntimeState(await instance.read(), instance.id); }
@@ -1251,10 +1256,11 @@ export function createOrchestrator(input) {
       || intent.id !== options.intentId || intent.idempotencyKey !== options.idempotencyKey
       || intent.reservationId !== options.reservationId
       || intent.worktree?.reservationId !== options.reservationId) fail('version-conflict');
-    if(intent.session) requireSession(state,node.id,{id:options.sessionId,generation:options.generation});
+    if(options.retryReconciliation !== undefined && typeof options.retryReconciliation !== 'boolean') fail('invalid-options');
+    if(intent.session) requireSession(state,node.id,{id:options.sessionId,generation:options.generation},options.retryReconciliation ? ['active','reconciling'] : ['active']);
     let report = null;
     let outcome = { result };
-    const reconciliation = await reconcileResult(instance, node, intent, result);
+    const reconciliation = await reconcileResult(instance, node, intent, result, undefined, options.retryReconciliation);
     if (reconciliation.performed) {
       report = reconciliation.report;
       if (report?.status !== 'integrated') {

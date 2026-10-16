@@ -1,3 +1,4 @@
+import { previewTaskWorktreeCleanup } from '../git/worktree-cleanup.js';
 import { executionForNode } from '../feature/client-profile.js';
 import {taskAllowance,requireManagedAllowance,activateTaskAdmission,taskCapacity} from '../runtime/task-orchestration.js';
 import {findRegistration} from '../runtime/machine-admission.js';
@@ -66,14 +67,14 @@ async function selectedRun(project, wanted, operation, dependencies) {
     if (!exact) fail('No task with that run ID exists in this project.', 'REPOSITORY_CONFLICT');
     return exact;
   }
-  const eligible = records.filter(record => ACTIVE.has(record.status)
+  const eligible = records.filter(record => (operation === 'cleanup' || ACTIVE.has(record.status))
     && (operation !== 'recover' || record.featurePlan.client === 'host' || record.status === 'awaiting-final-approval'));
-  if (eligible.length === 0) fail(operation === 'recover' ? 'No host task or terminal task at final review is available for lock recovery.'
+  if (eligible.length === 0) fail(operation === 'cleanup' ? 'No task exists in this project for cleanup preview.' : operation === 'recover' ? 'No host task or terminal task at final review is available for lock recovery.'
     : 'No active task exists in this project. Start one with rivet run "task".', 'REPOSITORY_CONFLICT');
   if (eligible.length > 1) {
     if (dependencies.terminalIsInteractive?.() === true) {
       const choice = await withTerminalInterruption(async signal => {
-        const selected = await dependencies.taskSelectionPrompt({type:'select',signal,message:'Which task would you like to continue?',choices:eligible.map(record=>({value:record.runId,label:`${visible(record.workRequest.acceptanceCriteria[0] ?? record.workRequest.title)} (${taskState(record.status)})`}))});
+        const selected = await dependencies.taskSelectionPrompt({type:'select',signal,message:operation === 'cleanup' ? 'Which task would you like to inspect for cleanup?' : 'Which task would you like to continue?',choices:eligible.map(record=>({value:record.runId,label:`${visible(record.workRequest.acceptanceCriteria[0] ?? record.workRequest.title)} (${taskState(record.status)})`}))});
         signal.throwIfAborted();
         return selected;
       });
@@ -83,7 +84,7 @@ async function selectedRun(project, wanted, operation, dependencies) {
       if (!current) fail('The selected task is no longer available. Run rivet task status.', 'REPOSITORY_CONFLICT');
       return current;
     }
-    output.log('Several active tasks exist:');
+    output.log(operation === 'cleanup' ? 'Several tasks exist:' : 'Several active tasks exist:');
     for (const record of eligible) output.log(`  ${summary(record)}`);
     fail('Choose one with --run=<id>, or run interactively to choose from a numbered list.');
   }
@@ -97,7 +98,9 @@ async function dependencyCommand(project, record, dependencies) {
   if (typeof dependencies.work?.status !== 'function'
     || typeof dependencies.resolveCommandExecutable !== 'function') fail('Dependency setup is unavailable.', 'MISSING_CONFIGURATION');
   const status = await invokeFeature(dependencies.work, 'status', { project: project.root, runId: record.runId });
+  if(status.candidateCheckouts?.some(candidate=>candidate.status!=='ready'))fail(status.nextAction,'REPOSITORY_CONFLICT');
   let target = null;
+  const targets=[...(status.dependencyTargets ?? [])];
   if (record.featurePlan.client === 'host' && record.status === 'running') {
     const statePaths = await resolveExistingStatePaths(project.root, record.runId);
     const workerIds = new Set(record.featurePlan.nodes.filter(node => node.role === 'worker').map(node => node.id));
@@ -113,13 +116,14 @@ async function dependencyCommand(project, record, dependencies) {
       };
     }
   }
-  if (!target && status.checkout?.status === 'clean') target = {
+  if (!target && targets.length===0 && status.checkout?.status === 'clean') target = {
     path: status.checkout.path,
     commit: status.checkout.acceptedCommit,
     branch: status.checkout.branch,
     kind: 'integration',
   };
-  if (!['running', 'blocked'].includes(record.status) || !target) {
+  if(target && targets.length===0)targets.push(target);
+  if (!['running', 'blocked'].includes(record.status) || targets.length===0) {
     fail('This task has no eligible isolated checkout yet. Continue the task, then retry dependency setup.', 'REPOSITORY_CONFLICT');
   }
   const config = await loadProjectConfig(project.root);
@@ -130,39 +134,43 @@ async function dependencyCommand(project, record, dependencies) {
   try { gitClient = await createGitClient({ gitExecutable: await dependencies.resolveCommandExecutable('git') }); }
   catch { fail('A supported Git executable is required for dependency setup.', 'PROVIDER_UNAVAILABLE'); }
   return withTerminalInterruption(async signal => {
-    let result;
-    try {
-      const install=()=>bootstrapWorktreeDependencies({
-        projectRoot: project.root,
-        worktreePath: target.path,
-        expectedCommit: target.commit,
-        expectedBranch: target.branch,
-        ...(config.project.dependencies ? {dependencies:config.project.dependencies} : {manager: config.project.stack.packageManager}),
-      }, {
-        gitClient,
-        resolveCommandExecutable: dependencies.resolveCommandExecutable,
-        confirm: confirmIsolatedDependencyInstall(dependencies, signal),
-        signal,
-      });
-      result=dependencies.machine?await withMachineContext(dependencies.machine,project.root,record.runId,install,{signal}):await install();
-    } catch (error) {
-      fail(error?.safeMessage ?? 'Dependency setup failed safely.', 'FAILED_GATE');
+    for(const target of targets) {
+      let result;
+      try {
+        const install=()=>bootstrapWorktreeDependencies({
+          projectRoot: project.root,
+          worktreePath: target.path,
+          expectedCommit: target.commit,
+          expectedBranch: target.branch,
+          ...(config.project.dependencies ? {dependencies:config.project.dependencies} : {manager: config.project.stack.packageManager}),
+        }, {
+          gitClient,
+          resolveCommandExecutable: dependencies.resolveCommandExecutable,
+          confirm: confirmIsolatedDependencyInstall(dependencies, signal),
+          signal,
+        });
+        result=dependencies.machine?await withMachineContext(dependencies.machine,project.root,record.runId,install,{signal}):await install();
+      } catch (error) {
+        fail(error?.safeMessage ?? 'Dependency setup failed safely.', 'FAILED_GATE');
+      }
+      if (result.status === 'declined') {
+        dependencies.output.log('Dependency setup was declined.');
+        return EXIT_CODES.SUCCESS;
+      }
+      if (result.status !== 'ready') {
+        dependencies.output.error(`Dependency setup failed (${visible(result.result?.status ?? result.status)}).`);
+        if (result.result?.stdout) dependencies.output.error(`stdout:\n${diagnostic(result.result.stdout)}`);
+        if (result.result?.stderr) dependencies.output.error(`stderr:\n${diagnostic(result.result.stderr)}`);
+        return EXIT_CODES.FAILED_GATE;
+      }
+      dependencies.output.log(record.featurePlan.client === 'host'
+        ? target.kind === 'candidate'
+          ? 'Dependencies are ready in the candidate checkout. Retry the exact submitted action and result in the owning harness.'
+        : target.kind === 'worker'
+          ? 'Dependencies are ready in the Worker checkout. Continue in the owning harness.'
+          : 'Dependencies are ready in the isolated checkout. Continue in the owning harness and retry work verify.'
+        : 'Dependencies are ready in the isolated checkout. Use rivet task resume to retry verification.');
     }
-    if (result.status === 'declined') {
-      dependencies.output.log('Dependency setup was declined.');
-      return EXIT_CODES.SUCCESS;
-    }
-    if (result.status !== 'ready') {
-      dependencies.output.error(`Dependency setup failed (${visible(result.result.status)}).`);
-      if (result.result.stdout) dependencies.output.error(`stdout:\n${diagnostic(result.result.stdout)}`);
-      if (result.result.stderr) dependencies.output.error(`stderr:\n${diagnostic(result.result.stderr)}`);
-      return EXIT_CODES.FAILED_GATE;
-    }
-    dependencies.output.log(record.featurePlan.client === 'host'
-      ? target.kind === 'worker'
-        ? 'Dependencies are ready in the Worker checkout. Continue in the owning harness.'
-        : 'Dependencies are ready in the isolated checkout. Continue in the owning harness and retry work verify.'
-      : 'Dependencies are ready in the isolated checkout. Use rivet task resume to retry verification.');
     return EXIT_CODES.SUCCESS;
   });
 }
@@ -180,10 +188,12 @@ function renderWorkerCheckouts(status, output) {
 
 
 export async function humanTaskCommand(parsed, dependencies) {
-  if (parsed.command !== 'task' || !['status', 'start', 'approve', 'pause', 'resume', 'deps', 'recover', 'decisions', 'decide', 'approve-decision', 'review', 'checkpoint', 'handoff'].includes(parsed.subcommand)
-    || parsed.operands.length !== 0 || Object.keys(parsed.flags).some(key => !['project', 'run', 'for', 'details', 'input', 'input-json', 'phase', 'decision'].includes(key))) {
+  if (parsed.command !== 'task' || !['status', 'start', 'approve', 'pause', 'resume', 'deps', 'cleanup', 'recover', 'decisions', 'decide', 'approve-decision', 'review', 'checkpoint', 'handoff'].includes(parsed.subcommand)
+    || parsed.operands.length !== 0 || Object.keys(parsed.flags).some(key => !['project', 'run', 'for', 'details', 'preview', 'input', 'input-json', 'phase', 'decision'].includes(key))) {
     fail('Use rivet task status|start|approve|resume|deps|recover [--project=<path>] [--run=<id>].');
   }
+  if (parsed.subcommand === 'cleanup' && parsed.flags.preview !== true) fail('Cleanup currently requires --preview; removal and retention are not available.');
+  if (parsed.subcommand !== 'cleanup' && parsed.flags.preview !== undefined) fail('--preview requires task cleanup.');
   const allowanceMs=taskAllowance(parsed.flags.for);
   if(allowanceMs!==undefined&&!['start','resume'].includes(parsed.subcommand))fail('--for is available on task start or resume.');
   const project = await resolveConfiguredProject(dependencies.cwd(), parsed.flags.project, { env: dependencies.env });
@@ -192,6 +202,18 @@ export async function humanTaskCommand(parsed, dependencies) {
   if (!['checkpoint','handoff','decisions','decide','approve-decision','review'].includes(parsed.subcommand)
       && ['input','input-json','phase','decision'].some(key=>parsed.flags[key]!==undefined))
     fail('Evidence options require a decision or review command.');
+  if (parsed.subcommand === 'cleanup') {
+    const gitClient = await createGitClient({gitExecutable:await dependencies.resolveCommandExecutable('git')});
+    const preview = await previewTaskWorktreeCleanup({projectRoot:project.root, runId:record.runId}, {gitClient});
+    dependencies.output.log('Cleanup preview only. No checkout, branch, commit or evidence was removed.');
+    for (const item of preview.checkouts) {
+      dependencies.output.log(`${item.eligible ? 'Eligible' : 'Retained'}: ${visible(item.path)} (${visible(item.reason)}).`);
+      dependencies.output.log(`  Preserve branch: ${visible(item.branch)}; commit: ${visible(item.commit ?? 'unknown')}.`);
+    }
+    if (!preview.checkouts.length) dependencies.output.log('No owned Worker checkouts are available for cleanup.');
+    dependencies.output.log('Integration and candidate checkouts are retained. Removal and automatic retention are not available.');
+    return EXIT_CODES.SUCCESS;
+  }
   requireManagedAllowance(record,allowanceMs);
   if(parsed.subcommand==='pause') {
     const registration=dependencies.machine&&await findRegistration(dependencies.machine,project.root,record.runId);
@@ -269,7 +291,8 @@ export async function humanTaskCommand(parsed, dependencies) {
     }
     for(const session of status.sessions??[])dependencies.output.log(`Session: ${session.id}; generation ${session.generation}; ${session.phase}; stop ${session.stopStatus}; context ${session.telemetry?.contextUsedTokens?.value??'unknown'}${session.turnoverReason?`; turnover ${session.turnoverReason}`:''}`);
     renderWorkerCheckouts(status, dependencies.output);
-    if (status.checkout) dependencies.output.log(`Integration checkout: ${visible(status.checkout.path)} (${status.checkout.status})`);
+    if(record.featurePlan.maxParallelWorkers!==undefined)dependencies.output.log(`Parallel Workers: up to ${record.featurePlan.maxParallelWorkers}.`);
+    if (status.checkout) dependencies.output.log(`Integration checkout: ${visible(status.checkout.path)} (${status.checkout.status}); accepted commit ${visible(status.checkout.acceptedCommit)}`);
     return EXIT_CODES.SUCCESS;
   }
   if (parsed.subcommand === 'start' || (parsed.subcommand === 'resume' && record.status === 'proposed' && record.featurePlan.client !== 'host')) {

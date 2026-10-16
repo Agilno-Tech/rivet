@@ -4,7 +4,7 @@ Managed orchestration coordinates approved tasks on one machine through the norm
 
 ## Scope
 
-Managed orchestration adds approved model/effort routing, bounded session replacement and shared resource admission. Feature nodes within one task remain sequential. Dependency-aware parallel integration, verification batching and automatic worktree cleanup belong to later releases.
+Managed orchestration adds approved model/effort routing, bounded session replacement, shared resource admission and dependency-aware work within a task. Independent work can run concurrently when the approved plan and role capacities allow it. Plans without explicit work dependencies retain serial execution. Multi-task verification batches are not yet available. Completed-work cleanup offers a read-only preview; removal and automatic retention are not yet available.
 
 Default ceilings are four active tasks, four agent executions, one heavy verification and one dependency installation. These are cooperative limits for participating Rivet processes. They do not measure or control unrelated applications. Approved project limits apply across active runs in the same project, while run limits may lower them further. Stricter limits from an active run remain in force until its held work settles; other projects retain their own limits. Task deadlines remain independent.
 
@@ -86,6 +86,16 @@ Deadline expiry prevents new execution. It still permits recording an exact stop
 
 Adding a managed policy to project configuration does not upgrade an older approval. Review a new plan before managed execution.
 
+## Parallel work within a task
+
+The planner can describe work items with stable IDs, dependencies and shared resources. Rivet validates the dependency graph and adds ordering for overlapping owned paths or shared resources. Review the resulting dependencies, scope and worker concurrency ceiling before activation. The ceiling defaults to one; `executionPolicy.limits.workersPerTask` may raise it for new plans, subject to configured worker and manager capacities and available machine slots.
+
+Each worker uses an isolated checkout. Completed work is merged into a separate integration candidate and checked with the project's configured quality gates before acceptance. A dependent starts only after its prerequisites have been accepted; unrelated workers can continue while that happens. If another worker advances the integration branch, Rivet rebuilds and checks the candidate against the accepted commit. Conflicts and failed checks preserve the checkout for inspection.
+
+Use `rivet task status` to inspect worker checkouts and the accepted integration commit. For host-owned tasks, `rivet task deps` offers dependency setup in eligible worker or pending candidate checkouts. If candidate verification fails, the owning harness may retry the same recorded action and result after resolving the check environment. Changed source commits, results or session generations require reconciliation rather than replaying the old result.
+
+Parallel acceptance does not skip final task verification or human approval. Candidate checks certify the exact combined commit; a worker's original branch is not independently certified by those checks.
+
 ## Machine-wide diagnostics
 
 For advanced inspection and machine ceilings:
@@ -148,3 +158,9 @@ On 2026-10-12, the two-worker fixtures in `test/runtime/feature-runtime-bridge.t
 | Managed, one successor per worker | 4 | 1 | 2 | 3 | 11.7 s |
 
 The successor case preserves dirty work without repeating dependency installation or final verification. Native token/cost coverage is unmeasured in these fixtures. Separate tests exercise cross-project resource contention, restart with uncertain owners, and cancellation against real owned subprocesses. These qualify local mechanics, not an unattended live-model pilot.
+
+### Cleanup preview
+
+Run `rivet task cleanup --preview` to inspect owned Worker checkouts for a selected task. Completed or cancelled tasks need recorded proof that the owner stopped, an unchanged checkout identity, a preserved branch and a clean checkout, including ignored dependency and build files. Unsafe or unproven checkouts are retained with a reason.
+
+The preview removes nothing and is not approval for later deletion. Branches, commits, evidence, integration checkouts and verification candidates remain available.

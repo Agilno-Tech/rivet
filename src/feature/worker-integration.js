@@ -12,7 +12,7 @@ function fail(reason) { throw new Error(`Worker integration ${reason}`); }
 export async function integrateFeatureWorker(input, options) {
   const {runId, baselineCommit, runtimeVersion, intentId, sessionId, generation, policyDigest,
     verificationOutputs = [], ...request} = input;
-  const {gitClient, acceptedStore, validateOwner, verify, nowMs} = options;
+  const {gitClient, acceptedStore, validateOwner, verify, nowMs, signal} = options;
   if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(runId)
     || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(baselineCommit)
     || !Number.isSafeInteger(runtimeVersion) || runtimeVersion < 1
@@ -48,7 +48,7 @@ export async function integrateFeatureWorker(input, options) {
           sourcePath:source.root,sourceBranch:source.branch}]};
       try {
         await prepareIntegrationCandidate(candidate,{gitClient,validateOwner:checkOwner});
-        const accepted = await acceptIntegrationCandidate(candidate,{gitClient,validateOwner:checkOwner,verify,
+        const accepted = await acceptIntegrationCandidate(candidate,{gitClient,validateOwner:checkOwner,verify,signal,
           onAccepted:async record => {
             const current = await acceptedStore.readOnly();
             if (current && !validLedger(current)) fail('ledger identity changed');
@@ -66,7 +66,7 @@ export async function integrateFeatureWorker(input, options) {
         if (error.message !== 'Integration candidate target changed' || attempt === 2) throw error;
         // A peer can have advanced Git while its ledger publication is still
         // in flight. Observe both only after that short transaction finishes.
-        const lock = await acquireCandidateIntegrationLock(request.statePaths);
+        const lock = await acquireCandidateIntegrationLock(request.statePaths,{signal});
         try {
           const current = await acceptedStore.readOnly();
           const target = await gitClient.inspectRepository(request.projectRoot);

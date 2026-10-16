@@ -2403,3 +2403,23 @@ test('runtime drain stops existing peers without scheduling more work',async()=>
   assert.equal(aborted,true);
   assert.deepEqual(launches.sort(),['api','design']);
 });
+
+test('runtime drain forwards worker cancellation into reconciliation',async()=>{
+  const instance=heldAcquireMemoryInstance({activated:true},Infinity);let releaseWorker,enteredReconciliation,aborted=false;
+  const workerWait=new Promise(resolve=>{releaseWorker=resolve;});
+  const entered=new Promise(resolve=>{enteredReconciliation=resolve;});
+  const runtime=createOrchestrator({now:()=>NOW,launchFor,client:{launch:async contract=>{
+    if(contract.nodeId==='design')await workerWait;
+    return {version:1,status:'success',output:{summary:'Done',evidence:[`${contract.nodeId}-commit`,`${contract.nodeId}-test`]},usage:{tokens:1,costUsd:0}};
+  }},reconcile:async(node,intent,result,{signal})=>{
+    if(node.id!=='design')return {status:'integrated'};
+    enteredReconciliation();
+    await new Promise(resolve=>signal.addEventListener('abort',()=>{aborted=true;resolve();},{once:true}));
+    return {status:'blocked'};
+  }});
+  await runtime.advance(instance,{expectedVersion:0,maxActiveNodes:2});
+  releaseWorker();await entered;
+  await runtime.drain(instance);
+  assert.equal(aborted,true);
+  assert.notEqual(instance.inspect().graph.nodes.find(n=>n.id==='design').status,'completed');
+});

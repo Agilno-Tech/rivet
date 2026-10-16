@@ -14,6 +14,9 @@ import { compileQualitySteps } from '../config/commands.js';
 import { validateProjectConfiguration } from '../config/validate.js';
 import { prepareIntegrationWorktree } from '../git/integration-worktree.js';
 import { reconcileWorktree } from '../git/reconcile.js';
+import { integrateFeatureWorker } from './worker-integration.js';
+import { acquireCandidateIntegrationLock } from '../git/integration-candidate.js';
+import { createFeatureRunStore } from './run-store.js';
 import { createAcceptedIntegrationStore } from './accepted-integration.js';
 import { createVerificationReportStore, verificationReport } from './verification-report.js';
 import { acceptedIntegrationPaths, resolveFeatureRunPaths, resolveStatePaths, verificationReportPaths } from '../state/paths.js';
@@ -511,8 +514,9 @@ export function createFeatureExecutor(input) {
       || Reflect.ownKeys(options).some(key => !['signal', 'confirmDependencyInstall'].includes(key))
       || (options.signal !== undefined && !(options.signal instanceof AbortSignal))
       || (options.confirmDependencyInstall !== undefined && typeof options.confirmDependencyInstall !== 'function')) fail();
-    const signal = options.signal;
-    if (signal?.aborted) fail();
+    const executionController = new AbortController();
+    const signal = options.signal ? AbortSignal.any([options.signal, executionController.signal]) : executionController.signal;
+    if (signal.aborted) fail();
     if (!request || typeof request !== 'object' || Array.isArray(request)
       || Reflect.ownKeys(request).length !== 2 || !Object.hasOwn(request, 'project') || !Object.hasOwn(request, 'run')) fail();
     const project = request.project;
@@ -539,7 +543,7 @@ export function createFeatureExecutor(input) {
       }
     }
 
-    async function prepareDependencies(worker, branch, expectedCommit) {
+    async function prepareDependencies(worker, branch, expectedCommit, dependencySignal = signal) {
       if (config.project.schemaVersion === 3 && !config.project.dependencies
         && !['npm', 'pnpm', 'yarn', 'bun'].includes(config.project.stack.packageManager)) return;
       const input = {
@@ -557,7 +561,7 @@ export function createFeatureExecutor(input) {
         gitClient: configured.gitClient,
         resolveCommandExecutable: configured.resolveCommandExecutable,
         confirm: options.confirmDependencyInstall,
-        signal,
+        signal: dependencySignal,
       });
       if (installed.status === 'declined') throw new WorktreeBootstrapError('approval-declined');
       if (installed.status !== 'ready') throw new WorktreeBootstrapError('install-failed', installed.result);
@@ -581,9 +585,24 @@ export function createFeatureExecutor(input) {
     const planNodes = new Map(run.featurePlan.nodes.map(node => [node.id, node]));
     const parent = await prepareFeatureWorkerParent(worktreeRunRoot);
     const nowMs = () => featureNowMilliseconds(configured.now);
-    let preparationReason = null;
-    let executionReason = null;
-    let reconciliationReason = null;
+    const parallel = run.featurePlan.maxParallelWorkers !== undefined;
+    const approvedConfiguration = JSON.stringify(config);
+    const integrationPolicyDigest = createHash('sha256').update(run.proposalDigest + approvedConfiguration).digest('hex');
+    const featurePaths = await resolveFeatureRunPaths(project, run.runId);
+    const accepted = createAcceptedIntegrationStore(await acceptedIntegrationPaths(featurePaths));
+    const runStore = createFeatureRunStore(featurePaths);
+    const diagnostics = new Map();
+    const launchedIntentIds = new Map();
+    const diagnostic = id => {
+      if (!diagnostics.has(id)) diagnostics.set(id, {preparation: null, execution: null, reconciliation: null});
+      return diagnostics.get(id);
+    };
+    const capacityByOwner = Object.fromEntries(config.orchestration.roles
+      .filter(role => run.featurePlan.nodes.some(node => node.roleId === role.id))
+      .map(role => [role.id, role.capacity]));
+    const childCapacityByParent = Object.fromEntries(run.featurePlan.nodes
+      .filter(node => run.featurePlan.nodes.some(child => child.parentId === node.id))
+      .map(node => [node.id, capacityByOwner[node.roleId]]));
     let reconciledTip = null;
     const leases = new Map();
     const recoveryWorktrees = new Map();
@@ -604,7 +623,7 @@ export function createFeatureExecutor(input) {
         }
         catch (error) {
           const detail = typeof error?.details?.reason === 'string' ? `:${error.details.reason}` : '';
-          executionReason = typeof error?.code === 'string' ? `${error.code}${detail}` : 'worker-execution-error';
+          diagnostic(launchedIntentIds.get(contract.nodeId) ?? contract.nodeId).execution = typeof error?.code === 'string' ? `${error.code}${detail}` : 'worker-execution-error';
           throw error;
         }
       },
@@ -615,76 +634,66 @@ export function createFeatureExecutor(input) {
       checkpointFor:(node,intent,session,result)=>captureCheckpoint({gitClient:configured.gitClient,run,node,intent,session,summary:result.output.summary,usage:result.usage,nowMs:nowMs()}),
       verifyCheckpoint:checkpoint=>verifyCheckpoint(configured.gitClient,checkpoint,run,nowMs()),
       now: nowMs,
-      async prepareWorktree(node, intent) {
+      async prepareWorktree(node, intent, {signal: workerSignal} = {}) {
+        const preparationSignal = workerSignal ? AbortSignal.any([signal, workerSignal]) : signal;
         try {
           const planNode = planNodes.get(node.id);
           if (!planNode || planNode.role !== 'worker') fail();
-          const current = await configured.gitClient.inspectRepository(integration.path);
-          if (current.branch !== integration.branch || current.dirty) fail();
           const branch = `worker/${run.runId}/${node.id}`;
           const worktreePath = join(parent, node.id);
-          if (intent.attempt > 1) {
-            const reused = await reusableWorkerCheckout({
-              gitClient: configured.gitClient,
-              projectRoot: integration.path,
-              statePaths,
-              node,
-              planNode,
-              branch,
-              worktreePath,
-              baseSha: current.headSha,
-              nowMs: nowMs(),
-              expectedWorktree: recoveryWorktrees.get(node.id),
-            });
-            leases.set(node.id, reused.reservation.leaseId);
-            if (!recoveryWorktrees.has(node.id)) await prepareDependencies(reused.worker, branch, current.headSha);
-            preparationReason = null;
-            return Object.freeze({
-              path: reused.worker.root,
-              dev: reused.worker.rootIdentity.dev,
-              ino: reused.worker.rootIdentity.ino,
-              reservationId: node.id === intent.nodeId ? intent.reservationId : fail(),
-            });
-          }
-          const created = await createReservedWorktree({
-            projectRoot: integration.path,
-            statePaths,
-            nodeId: node.id,
-            branch,
-            worktreePath,
-            ownerId: node.owner.id,
-            baseSha: current.headSha,
-            responsibilities: planNode.ownedPaths,
-            intendedPaths: planNode.ownedPaths,
-            expiresAt: new Date(nowMs() + 24 * 60 * 60 * 1000).toISOString(),
-          }, { gitClient: configured.gitClient, nowMs: nowMs() });
-          const worker = await configured.gitClient.inspectRepository(created.reservation.worktreePath);
-          leases.set(node.id, created.reservation.leaseId);
-          await prepareDependencies(worker, branch, current.headSha);
-          preparationReason = null;
+          let worker; let current;
+          // Selecting a base and reserving its checkout is one cooperating Git
+          // transaction with candidate acceptance. Installs run after release.
+          const lock = parallel ? await acquireCandidateIntegrationLock(statePaths, {signal: preparationSignal}) : null;
+          try {
+            current = await configured.gitClient.inspectRepository(integration.path);
+            if (current.branch !== integration.branch || current.dirty) fail();
+            if (intent.attempt > 1) {
+              const reused = await reusableWorkerCheckout({
+                gitClient: configured.gitClient, projectRoot: integration.path, statePaths,
+                node, planNode, branch, worktreePath, baseSha: current.headSha, nowMs: nowMs(),
+                expectedWorktree: recoveryWorktrees.get(node.id),
+              });
+              leases.set(node.id, reused.reservation.leaseId);
+              worker = reused.worker;
+            } else {
+              const created = await createReservedWorktree({
+                projectRoot: integration.path, statePaths, nodeId: node.id, branch, worktreePath,
+                ownerId: node.owner.id, baseSha: current.headSha,
+                responsibilities: planNode.ownedPaths, intendedPaths: planNode.ownedPaths,
+                expiresAt: new Date(nowMs() + 24 * 60 * 60 * 1000).toISOString(),
+              }, {gitClient: configured.gitClient, nowMs: nowMs()});
+              worker = await configured.gitClient.inspectRepository(created.reservation.worktreePath);
+              leases.set(node.id, created.reservation.leaseId);
+            }
+          } finally { await lock?.release(); }
+          preparationSignal.throwIfAborted();
+          if (intent.attempt <= 1 || !recoveryWorktrees.has(node.id)) await prepareDependencies(worker, branch, current.headSha, preparationSignal);
+          preparationSignal.throwIfAborted();
+          diagnostic(intent.id).preparation = null;
           return Object.freeze({
-            path: worker.root,
-            dev: worker.rootIdentity.dev,
-            ino: worker.rootIdentity.ino,
+            path: worker.root, dev: worker.rootIdentity.dev, ino: worker.rootIdentity.ino,
             reservationId: node.id === intent.nodeId ? intent.reservationId : fail(),
           });
         } catch (error) {
-          preparationReason = typeof error?.code === 'string' ? error.code : 'worktree-preparation-error';
-          if (error instanceof WorktreeBootstrapError) preparationReason += `: ${error.safeMessage}`;
+          diagnostic(intent.id).preparation = typeof error?.code === 'string' ? error.code : 'worktree-preparation-error';
+          if (error instanceof WorktreeBootstrapError) diagnostic(intent.id).preparation += `: ${error.safeMessage}`;
           throw error;
         }
       },
       launchFor(node, intent) {
+        launchedIntentIds.set(node.id, intent.id);
         try {
           const source = createFeatureLaunchInput(node, intent, planNodes.get(node.id), run);
           buildLaunchContract(source);
           return source;
         } catch (error) {
-          executionReason = typeof error?.code === 'string' ? error.code : 'launch-contract-error';
+          diagnostic(intent.id).execution = typeof error?.code === 'string' ? error.code : 'launch-contract-error';
           throw error;
         }
       },
-      async reconcile(node, intent, result) {
+      async reconcile(node, intent, result, {signal: workerSignal} = {}) {
+        const reconciliationSignal = workerSignal ? AbortSignal.any([signal, workerSignal]) : signal;
         try {
           assertSelectedProtocolRefs(project, run.workRequest.contextRefs);
           let leaseId = leases.get(node.id);
@@ -707,7 +716,7 @@ export function createFeatureExecutor(input) {
               nowMs: nowMs(),
             });
           }
-          const report = await reconcileWorktree({
+          const reconciliationInput = {
             projectRoot: integration.path,
             statePaths,
             nodeId: node.id,
@@ -715,22 +724,66 @@ export function createFeatureExecutor(input) {
             leaseId,
             integrationBranch: integration.branch,
             integrate: evidenceMatches,
-          }, { gitClient: configured.gitClient, nowMs: nowMs() });
+          };
+          const report = parallel && evidenceMatches && result.status === 'success'
+            ? await integrateFeatureWorker({
+              ...reconciliationInput, runId: run.runId, baselineCommit: run.featurePlan.baselineCommit,
+              runtimeVersion: (await inspectFeatureRuntime(instance)).version,
+              intentId: intent.id, sessionId: intent.session?.id, generation: intent.session?.generation,
+              policyDigest: integrationPolicyDigest, verificationOutputs: config.quality.verificationOutputs ?? [],
+            }, {
+              gitClient: configured.gitClient, acceptedStore: accepted, nowMs, signal: reconciliationSignal,
+              validateOwner: async () => {
+                if (reconciliationSignal.aborted) fail();
+                const liveRun = await runStore.readOnly();
+                if (!liveRun || liveRun.status !== 'running'
+                  || liveRun.proposalDigest !== run.proposalDigest
+                  || JSON.stringify(liveRun.activation) !== JSON.stringify(run.activation)) fail();
+                const liveConfig = await loadProjectConfig(project);
+                if (JSON.stringify(liveConfig) !== approvedConfiguration) fail();
+                validRun(liveConfig, liveRun);
+                assertSelectedProtocolRefs(project, run.workRequest.contextRefs);
+                const current = await inspectFeatureRuntime(instance);
+                const liveIntent = current.launchIntents[node.id];
+                const liveNode = current.graph.nodes.find(item => item.id === node.id);
+                if (current.terminal !== null || liveNode?.status !== 'running'
+                  || liveIntent?.id !== intent.id || liveIntent.status !== 'started'
+                  || liveIntent.attempt !== intent.attempt || liveIntent.reservationId !== intent.reservationId
+                  || JSON.stringify(liveIntent.session) !== JSON.stringify(intent.session)
+                  || JSON.stringify(liveIntent.worktree) !== JSON.stringify(intent.worktree)) fail();
+                if (intent.session) {
+                  const session = current.sessions[node.id];
+                  if (session?.id !== intent.session.id || session.generation !== intent.session.generation
+                    || session.phase !== 'reconciling' || session.stopReceipt?.status !== 'stopped') fail();
+                }
+              },
+              verify: async manifest => {
+                await prepareDependencies({root: manifest.path}, manifest.branch, manifest.commitSha, reconciliationSignal);
+                return runQualityGates({
+                  ...configuredVerificationReuse(config), projectRoot: manifest.path,
+                  commitSha: manifest.commitSha, authority: featureQualityAuthority(config),
+                  gates: await configuredFeatureGates(config, configured.resolveCommandExecutable, manifest.path),
+                  environment: configured.environment,
+                }, {gitClient: configured.gitClient, now: nowMs, signal: reconciliationSignal});
+              },
+            })
+            : await reconcileWorktree(reconciliationInput, {gitClient: configured.gitClient, nowMs: nowMs()});
           if (!evidenceMatches) {
-            reconciliationReason = 'result-evidence-mismatch';
+            diagnostic(intent.id).reconciliation = 'result-evidence-mismatch';
             return Object.freeze({ ...report, status: 'blocked', reason: 'result-evidence-mismatch' });
           }
-          reconciliationReason = report.status === 'integrated' ? null : report.reason ?? 'reconciliation-blocked';
-          if (report.status === 'integrated') reconciledTip = report.integrationTip;
+          diagnostic(intent.id).reconciliation = report.status === 'integrated' ? null : report.reason ?? 'reconciliation-blocked';
+          if (!parallel && report.status === 'integrated') reconciledTip = report.integrationTip;
           return report;
         } catch (error) {
-          reconciliationReason = typeof error?.code === 'string' ? error.code : 'reconciliation-error';
+          diagnostic(intent.id).reconciliation = typeof error?.code === 'string' ? error.code : 'reconciliation-error';
           throw error;
         }
       },
     });
 
     let state = await inspectFeatureRuntime(instance);
+    let workersComplete = false;
     try {
       if (!state.activated) {
         state = await runtime.activate(instance, {
@@ -758,34 +811,53 @@ export function createFeatureExecutor(input) {
       const maximumTicks = run.featurePlan.nodes.length * 4 + 8;
       for (let tick = 0; tick < maximumTicks; tick += 1) {
         await requireGovernance({project,run,gitClient:configured.gitClient,phase:'plan'});
-        const outcome = await runtime.tick(instance, { expectedVersion: state.version, maxActiveNodes: 1, signal });
+        let outcome;
+        for (let retry = 0; retry < 8; retry++) {
+          try {
+            outcome = await runtime[parallel ? 'advance' : 'tick'](instance, {
+              expectedVersion: state.version, maxActiveNodes: parallel ? run.featurePlan.maxParallelWorkers : 1,
+              ...(parallel ? {capacityByOwner, childCapacityByParent} : {}), signal,
+            });
+            break;
+          } catch (error) {
+            if (!parallel || error.details?.reason !== 'version-conflict' || retry === 7) throw error;
+            state = await inspectFeatureRuntime(instance);
+          }
+        }
         state = await inspectFeatureRuntime(instance);
         if (['blocked', 'failed', 'budget-exhausted', 'cancelled'].includes(outcome.terminal)) {
           const stopped = state.graph.nodes.filter(node => ['blocked', 'failed', 'cancelled'].includes(node.status)).map(node => node.id);
-          const preparation = preparationReason ? ` Preparation reason: ${preparationReason}.` : '';
-          const execution = executionReason ? ` Execution reason: ${executionReason}.` : '';
-          const reconciliation = reconciliationReason ? ` Reconciliation reason: ${reconciliationReason}.` : '';
+          const describe = kind => [...diagnostics].filter(([, value]) => value[kind]).map(([id, value]) => ` ${kind[0].toUpperCase() + kind.slice(1)} reason: ${value[kind]} (${id}).`).join('');
+          const preparation = describe('preparation');
+          const execution = describe('execution');
+          const reconciliation = describe('reconciliation');
           return blocked(run, state, protocolRecovery() ?? `Runtime stopped at ${outcome.terminal}${stopped.length ? ` (${stopped.join(', ')})` : ''}.${preparation}${execution}${reconciliation} Correct the reported condition and resume the feature run.`);
         }
         const finalNode = state.graph.nodes.find(node => node.approvalGate === 'final-delivery');
         const nonHumanComplete = state.graph.nodes
           .filter(node => !node.approvalGate)
           .every(node => ['completed', 'archived'].includes(node.status));
-        if (outcome.launched.length === 0 && nonHumanComplete && finalNode?.status === 'ready') break;
-        if (outcome.launched.length === 0) return blocked(run, state);
+        if (outcome.launched.length === 0 && nonHumanComplete && finalNode?.status === 'ready') {
+          workersComplete = true;
+          break;
+        }
+        if (outcome.launched.length === 0 && !outcome.pending) return blocked(run, state);
       }
     } catch (error) {
+      if (parallel) { executionController.abort(); await runtime.drain(instance); }
       state = await inspectFeatureRuntime(instance).catch(() => state);
       const reason = typeof error?.code === 'string' ? ` Runtime reason: ${error.code}.` : '';
       return blocked(run, state, protocolRecovery() ?? `Feature execution stopped safely.${reason} Correct the reported condition and resume the feature run.`);
     }
 
+    if (!workersComplete) {
+      if (parallel) { executionController.abort(); await runtime.drain(instance); }
+      return blocked(run, await inspectFeatureRuntime(instance));
+    }
     if (signal?.aborted) return blocked(run, state, 'Feature execution was interrupted. Inspect the run before resuming.');
 
     const integrated = await configured.gitClient.inspectRepository(integration.path);
     if (integrated.dirty || integrated.branch !== integration.branch) return blocked(run, state);
-    const featurePaths = await resolveFeatureRunPaths(project, run.runId);
-    const accepted = createAcceptedIntegrationStore(await acceptedIntegrationPaths(featurePaths));
     let identity = await accepted.readOnly();
     if (reconciledTip !== null) {
       if (integrated.headSha !== reconciledTip) return blocked(run, state, 'Integration changed after Worker reconciliation. A new reviewed proposal is required.');

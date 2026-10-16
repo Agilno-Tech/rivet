@@ -7,6 +7,7 @@ import { createSnapshotStore } from '../state/snapshot-store.js';
 import { acquireLock, LockBusyError } from '../state/lock.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { assertQualityRun } from '../quality/runner.js';
+import { inspectLegacyDependencyDirectory } from '../runtime/legacy-dependency-directory.js';
 import { readDependencyFile } from '../runtime/dependency-directory.js';
 
 const ID = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
@@ -137,7 +138,11 @@ async function outputArtifacts(ctx, roots) {
   return first;
 }
 async function checkCandidateOutputs(value,ctx,record) {
-  const paths = await ctx.client.statusPaths(ctx.intent.path,{includeIgnoredDirectories:true});
+  const observedPaths = await ctx.client.statusPaths(ctx.intent.path,{includeIgnoredDirectories:true});
+  // Dependency installation has a separate explicit approval and pins the exact
+  // root identity. Declared verification outputs never authorize node_modules.
+  const ownedDependencies = await inspectLegacyDependencyDirectory(ctx.intent.path);
+  const paths = observedPaths.filter(path => !(ownedDependencies && (path === 'node_modules' || path.startsWith('node_modules/'))));
   // Only ignored paths are eligible: inspectRepository rejects tracked and
   // untracked changes before this function. Every declared output is also read
   // without symlink traversal and pinned by content and filesystem identity.
@@ -234,14 +239,24 @@ export async function inspectIntegrationCandidate(input,options) {
   validateRecord(saved.data,ctx.intent); return freeze(saved.data);
 }
 
-export async function acquireCandidateIntegrationLock(statePaths) {
+export async function acquireCandidateIntegrationLock(statePaths, {signal, timeoutMs = 60_000} = {}) {
   assertResolvedStatePaths(statePaths);
+  if ((signal !== undefined && !(signal instanceof AbortSignal))
+    || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 300_000) fail('invalid lock wait');
   const path = join(statePaths.instanceDir,'integration.lock');
-  const deadline = Date.now() + 2_000;
+  // Checkout creation shares this lock with acceptance. Its Git commands can
+  // legitimately run for seconds; retain ownership while waiters observe a
+  // bounded operation budget, and never reclaim the owner's lock.
+  const deadline = Date.now() + timeoutMs;
   while (true) {
-    try { return await acquireLock(path); } catch (error) {
+    signal?.throwIfAborted();
+    try {
+      const lock = await acquireLock(path);
+      if (signal?.aborted) { await lock.release(); signal.throwIfAborted(); }
+      return lock;
+    } catch (error) {
       if (!(error instanceof LockBusyError) || Date.now() >= deadline) throw error;
-      await delay(5);
+      await delay(Math.min(25, Math.max(1, deadline - Date.now())), undefined, {signal});
     }
   }
 }
@@ -267,7 +282,7 @@ export async function acceptIntegrationCandidate(input,options) {
     saved=await ctx.store.write(verified,{expectedVersion:saved.version});
     if(proof.status!=='pass')fail('verification failed');
     await verifyResolvedStatePaths(value.statePaths);
-    const lock=await acquireCandidateIntegrationLock(value.statePaths);
+    const lock=await acquireCandidateIntegrationLock(value.statePaths, {signal: options.signal});
     try {
       const current=await ctx.store.read();
       if(current.version!==saved.version)fail('state changed');

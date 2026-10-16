@@ -13,6 +13,17 @@ import { createOutput, EXIT_CODES } from '../../src/cli/output.js';
 const execFile = promisify(execFileCallback);
 const CONFIG = new URL('../fixtures/config/valid/.rivet/', import.meta.url);
 
+test('activation preview exposes approved concurrency and shared resources', async t => {
+  const { root } = await fixture(t);
+  const s = services(root, { approve: false });
+  s.proposal.featurePlan.maxParallelWorkers = 2;
+  s.proposal.featurePlan.nodes[0].sharedResources = ['database'];
+  const code = await main(['run', 'Add a greeting module'], s.overrides);
+  assert.equal(code, EXIT_CODES.SUCCESS);
+  assert.match(s.messages.join('\n'), /Worker concurrency ceiling: 2; role, parent and machine capacity may lower it/);
+  assert.match(s.messages.join('\n'), /shared resources: database/);
+});
+
 async function fixture(t) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'rivet-human-run-')));
   t.after(() => rm(root, { recursive: true, force: true }));

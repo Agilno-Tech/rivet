@@ -498,8 +498,9 @@ export async function createGitClient(options = {}) {
     },
 
     async statusPaths(cwd, options = {}) {
-      const value = captureRecord(options, new Set(['includeIgnoredDirectories']));
+      const value = captureRecord(options, new Set(['includeIgnoredDirectories', 'includeManagedDependencies']));
       if (value.includeIgnoredDirectories !== undefined && typeof value.includeIgnoredDirectories !== 'boolean') fail('invalid-input');
+      if (value.includeManagedDependencies !== undefined && typeof value.includeManagedDependencies !== 'boolean') fail('invalid-input');
       const result = await run(absoluteInput(cwd), [
         'status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching',
       ]);
@@ -507,7 +508,7 @@ export async function createGitClient(options = {}) {
       // validated owned directory. Foreign or damaged metadata remains evidence.
       let managedDependencies = false;
       try { managedDependencies = (await inspectDependencyDirectory(absoluteInput(cwd))) !== null; } catch {}
-      return parseStatusPaths(result.output, managedDependencies, value.includeIgnoredDirectories === true);
+      return parseStatusPaths(result.output, managedDependencies && value.includeManagedDependencies !== true, value.includeIgnoredDirectories === true);
     },
 
     async commitPaths(cwdInput, input) {

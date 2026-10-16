@@ -80,6 +80,7 @@ Everyday commands:
   rivet task start                Reopen an unapproved plan
   rivet task approve              Review and finish verified work
   rivet task deps                 Approve configured dependency setup
+  rivet task cleanup --preview    Preview completed-task checkout cleanup
   rivet task recover              Inspect abandoned operation locks
   rivet task checkpoint           Preserve a managed host checkpoint
   rivet task handoff              Fence and transfer a managed session
@@ -137,6 +138,7 @@ Usage:
   rivet task approve-decision --decision=<id> [--project=<path>] [--run=<id>]
   rivet task review [--phase=plan|final] [--input=<report.json>] [--project=<path>] [--run=<id>]
   rivet task deps [--project=<path>] [--run=<id>]
+  rivet task cleanup --preview [--project=<path>] [--run=<id>]
   rivet protocols add <slug> [--from=<path>] [--project=<path>] [--json]
   rivet protocols import <slug> --from=<path> [--project=<path>] [--json]
   rivet protocols validate [<slug>] [--project=<path>] [--json]

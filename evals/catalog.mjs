@@ -83,6 +83,24 @@ export const catalog = {
       ['bounded-profiles', 'rejects unsafe profiles, unknown efforts, missing/ambiguous routes and advisory writes'],
       ['pinned-selection', 'resolves immutable approved identity and never falls back to another route'],
     ]),
+    scenario('orchestration-parallel-integration', 'test/runtime/feature-runtime-bridge.test.js', [
+      ['sibling-acceptance', 'explicit adapter workers overlap and both same-base siblings are verified and accepted'],
+      ['dependency-progress', 'explicit adapter starts accepted fast dependency before slow sibling finishes'],
+      ['failed-candidate-retained', 'explicit adapter refuses failed candidate quality without accepting a worker'],
+      ['cancel-before-acceptance', 'explicit adapter rejects live run cancellation before candidate acceptance'],
+      ['slow-preparation', 'explicit adapter waits through a slow cooperating checkout instead of blocking its sibling'],
+    ]),
+    scenario('orchestration-verification-reuse', 'test/quality/verification-reuse.test.js', [
+      ['exact-proof', 'runner reuses exact passing verification, brands inside boundary, and invalidates changed policy'],
+      ['cross-process-owner', 'separate OS processes execute one shared runner generation'],
+      ['uncertain-owner', 'crashed owner remains blocked; PID absence does not authorize stealing'],
+      ['no-forged-proof', 'generic queue completion cannot manufacture branded passing proof'],
+    ]),
+    scenario('orchestration-cleanup-preview', 'test/runtime/worktree-cleanup.test.js', [
+      ['read-only-observation', 'cleanup preview observes exact stopped completed Worker without changing state, refs or files'],
+      ['retain-unsafe-checkouts', 'cleanup retains active/failed/blocked tasks, unknown owners, dirt, ignored contents and symlinks'],
+      ['preview-only-interface', 'task cleanup requires preview, selects completed tasks and rejects apply'],
+    ]),
     scenario('orchestration-telemetry', 'test/runtime/session-capabilities.test.js', [
       ['literal-arguments', 'bounded selected model and effort become literal argv'],
       ['independent-selection', 'independent review dispatches selection without duplicate legacy model'],

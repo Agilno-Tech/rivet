@@ -68,6 +68,7 @@ function reviewLines(project, task, harness, proposal, details = false) {
     ...(!planning && plan.clientProfile ? [`Planning client limits: ${JSON.stringify(plan.clientProfile)}`] : []),
     'Request:', task,
     'Acceptance criteria:', ...request.acceptanceCriteria.map((item,index) => `  ${index+1}. ${item}`),
+    ...(plan.maxParallelWorkers === undefined ? [] : [`Worker concurrency ceiling: ${plan.maxParallelWorkers}; role, parent and machine capacity may lower it.`]),
     'Work and scope:',
   ];
   const labels = new Map();
@@ -76,6 +77,7 @@ function reviewLines(project, task, harness, proposal, details = false) {
   for (const node of plan.nodes) {
     lines.push(details ? `  ${node.role} (${node.id}): ${node.objective}` : `  ${labels.get(node.id)}${node.role==='worker' ? `: ${node.objective}` : ''}`);
     for (const path of node.ownedPaths ?? []) lines.push(`    path: ${path}`);
+    if (node.sharedResources?.length) lines.push(`    shared resources: ${node.sharedResources.join(', ')}`);
     if (node.dependencies?.length) lines.push(`    after: ${node.dependencies.map(id=>details?id:labels.get(id)??id).join(', ')}`);
     if (node.acceptanceCriteria?.length) lines.push(`    accepts: ${node.acceptanceCriteria.map(criterion=>!details && request.acceptanceCriteria.includes(criterion) ? `criterion ${request.acceptanceCriteria.indexOf(criterion)+1}` : criterion).join('; ')}`);
     if (node.authorityScopes?.length) lines.push(`    authority: ${node.authorityScopes.join(', ')}`);

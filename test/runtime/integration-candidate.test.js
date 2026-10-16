@@ -2,14 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { execFile as callback } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdir, mkdtemp, realpath, rm, writeFile, readFile, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile, readFile, symlink, rename, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createGitClient } from '../../src/git/client.js';
 import { resolveStatePaths } from '../../src/state/paths.js';
 import { createAuthorityEnvelope } from '../../src/policy/authority.js';
 import { runQualityGates } from '../../src/quality/runner.js';
-import { prepareIntegrationCandidate, inspectIntegrationCandidate, acceptIntegrationCandidate } from '../../src/git/integration-candidate.js';
+import { prepareIntegrationCandidate, inspectIntegrationCandidate, acceptIntegrationCandidate, acquireCandidateIntegrationLock } from '../../src/git/integration-candidate.js';
+import {acquireLock} from '../../src/state/lock.js';
 const execFile = promisify(callback);
 const git = async (cwd, ...args) => (await execFile('git', ['-C', cwd, ...args])).stdout.trim();
 async function commit(path, name, content) {
@@ -21,7 +22,7 @@ async function fixture(t, conflict = false) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'rivet-candidate-')));
   t.after(() => rm(root, { recursive: true, force: true }));
   const primary = join(root, 'repo'); await mkdir(primary); await git(primary, 'init', '-q', '-b', 'main');
-  await writeFile(join(primary,'.gitignore'),'build.log\nreports/\n');
+  await writeFile(join(primary,'.gitignore'),'build.log\nreports/\nnode_modules/\n');
   await git(primary,'add','.gitignore');
   const baseSha = await commit(primary, 'base', 'base\n');
   const gitClient = await createGitClient({gitExecutable: await realpath('/usr/bin/git')});
@@ -194,4 +195,63 @@ test('acceptance publication follows durable acceptance and exact replay recover
   await assert.rejects(acceptIntegrationCandidate(f.request,{...f.options,verify:f.verify,onAccepted}),/publication interrupted/);
   assert.equal((await acceptIntegrationCandidate(f.request,{...f.options,verify:f.verify,onAccepted})).status,'accepted');
   assert.equal(calls,2);
+});
+
+
+test('integration lock wait respects cancellation and bounded budget without reclaiming the owner', async t => {
+  const f=await fixture(t);
+  const owner=await acquireCandidateIntegrationLock(f.request.statePaths);
+  const controller=new AbortController();
+  const waiting=acquireCandidateIntegrationLock(f.request.statePaths,{signal:controller.signal});
+  const cancellation=assert.rejects(waiting,error=>error.name==='AbortError');
+  controller.abort();
+  await cancellation;
+  await assert.rejects(acquireCandidateIntegrationLock(f.request.statePaths,{timeoutMs:30}),{code:'ERR_STATE_LOCKED'});
+  await assert.rejects(acquireLock(join(f.request.statePaths.instanceDir,'integration.lock')),{code:'ERR_STATE_LOCKED'});
+  await owner.release();
+  const next=await acquireCandidateIntegrationLock(f.request.statePaths,{timeoutMs:100});
+  await next.release();
+});
+
+
+test('candidate accepts explicitly bootstrapped node_modules but rejects foreign, replaced and symlink roots', async t => {
+  const { bootstrapWorktreeDependencies } = await import('../../src/runtime/worktree-bootstrap.js');
+  for (const mode of ['owned', 'foreign', 'replaced', 'symlink']) {
+    const f = await fixture(t);
+    const participant = f.request.participants[0];
+    await commit(participant.sourcePath, 'package.json', '{"private":true}\n');
+    participant.sourceSha = await commit(participant.sourcePath, 'package-lock.json', '{"lockfileVersion":3}\n');
+    const prepared = await prepareIntegrationCandidate(f.request, f.options);
+    const candidate = prepared.manifest;
+    const installer = join(f.root, 'npm');
+    await writeFile(installer, '#!/bin/sh\nmkdir -p node_modules\nprintf ready > node_modules/installed\n', {mode: 0o700});
+    const dependencies = join(candidate.path, 'node_modules');
+    if (mode === 'foreign') {
+      await mkdir(dependencies);
+      const rootStat = await lstat(candidate.path), depStat = await lstat(dependencies);
+      await writeFile(join(dependencies, '.rivet-owner.json'), JSON.stringify({version: 1,
+        kind: 'rivet-node-dependencies', root: candidate.path,
+        rootIdentity: `${rootStat.dev}:${rootStat.ino}`, directoryIdentity: `${depStat.dev}:${depStat.ino}`,
+        token: '12345678-1234-4234-8234-123456789012'}));
+    }
+    else {
+      assert.equal((await bootstrapWorktreeDependencies({projectRoot: f.primary, worktreePath: candidate.path,
+        expectedCommit: candidate.commitSha, expectedBranch: candidate.branch, manager: 'npm'},
+        {gitClient: f.gitClient, resolveCommandExecutable: async () => installer, confirm: async () => true})).status, 'ready');
+      if (mode === 'replaced' || mode === 'symlink') {
+        const saved = join(f.root, 'saved-dependencies');
+        await rename(dependencies, saved);
+        if (mode === 'symlink') await symlink(saved, dependencies);
+        else {
+          await mkdir(dependencies);
+          await writeFile(join(dependencies, '.rivet-owner.json'), '{}');
+        }
+      }
+    }
+    if (mode === 'owned') assert.equal((await acceptIntegrationCandidate(f.request, {...f.options, verify: f.verify})).status, 'accepted');
+    else {
+      await assert.rejects(acceptIntegrationCandidate(f.request, {...f.options, verify: f.verify}));
+      assert.equal(await git(f.target, 'rev-parse', 'HEAD'), f.request.baseSha);
+    }
+  }
 });

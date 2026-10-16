@@ -40,13 +40,18 @@ async function npmExecutable() {
   return realpath(stdout.trim());
 }
 
-async function fixture(t, { now = NOW, schemaV2 = false, ownedPaths = ['app/agenda.js'], lockedDependencies = false, hostContext = false, repositoryRemote, workType, managed = false, verificationReuse = false } = {}) {
+async function fixture(t, { now = NOW, schemaV2 = false, ownedPaths = ['app/agenda.js'], lockedDependencies = false, hostContext = false, repositoryRemote, workType, managed = false, verificationReuse = false, workItems, portableDependencies = false } = {}) {
   const parent = await realpath(await mkdtemp(join(tmpdir(), 'rivet-host-execution-')));
   const root = join(parent, 'project');
   await mkdir(root);
   t.after(() => rm(parent, { recursive: true, force: true }));
   await cp(CONFIG, join(root, '.rivet'), { recursive: true });
   if(managed) { const path=join(root,'.rivet','orchestration.yaml'); const config=YAML.parse(await readFile(path,'utf8'));config.executionPolicy=managedPolicy();if(typeof managed==='object')Object.assign(config.executionPolicy.sessions,managed);await writeFile(path,YAML.stringify(config)); }
+  if(workItems) {
+    const path=join(root,'.rivet','orchestration.yaml');const config=YAML.parse(await readFile(path,'utf8'));
+    for(const role of config.roles)if(role.kind==='worker'||role.kind==='manager')role.capacity=2;
+    await writeFile(path,YAML.stringify(config));
+  }
   await writeFile(join(root, 'README.md'), '# Host execution fixture\n');
   if (lockedDependencies) {
     await writeFile(join(root, '.gitignore'), 'node_modules/\n');
@@ -120,6 +125,15 @@ async function fixture(t, { now = NOW, schemaV2 = false, ownedPaths = ['app/agen
       scripts: { build: 'x', test: 'x', lint: 'x', typecheck: 'x', dev: 'x' },
     }));
   }
+  if(portableDependencies) {
+    const path=join(root,'.rivet','project.yaml');const config=YAML.parse(await readFile(path,'utf8'));
+    config.schemaVersion=3;
+    config.dependencies={inputs:['package.json'],provides:[],steps:[{cwd:'.',argv:['node','install.js']}]};
+    config.commands=Object.fromEntries(Object.keys(config.commands).filter(name=>name!=='dev').map(name=>[name,{steps:[{cwd:'.',argv:['node','gate.js']}]}]));
+    await writeFile(path,YAML.stringify(config));
+    await writeFile(join(root,'install.js'),"require('node:fs').writeFileSync('.rivet-deps/ready','ready');\n");
+    await writeFile(join(root,'gate.js'),"process.exit(require('node:fs').existsSync('.rivet-deps/ready') ? 0 : 1);\n");
+  }
   if (repositoryRemote) {
     const path = join(root, '.rivet', 'project.yaml');
     const config = YAML.parse(await readFile(path, 'utf8'));
@@ -174,7 +188,7 @@ async function fixture(t, { now = NOW, schemaV2 = false, ownedPaths = ['app/agen
       schemaVersion: 1,
       kind: 'agilno.feature-decomposition',
       ...(workType ? {workType} : {}),
-      workItems: [{
+      workItems: workItems ?? [{
         objective: 'Add the agenda implementation.',
         ownedPaths,
         acceptanceCriterionIndexes: [1],
@@ -1553,4 +1567,196 @@ test('host and verify command leave long shared verification pending without rec
     assert.equal(command.ok,false);
     assert.equal(await createVerificationReportStore(await verificationReportPaths(paths)).readOnly(),null);
   } finally {controller.abort();await owner;}
+});
+
+
+test('explicit host graph offers siblings and accepts issued actions in reverse order',async t=>{
+  const workItems=[{id:'one',dependencies:[],objective:'Add first file',ownedPaths:['app/one.js'],acceptanceCriterionIndexes:[1]},
+    {id:'two',dependencies:[],objective:'Add second file',ownedPaths:['app/two.js'],acceptanceCriterionIndexes:[1]}];
+  const {root,gitClient,approved,gate}=await fixture(t,{managed:true,workItems});
+  const execution=createHostExecution({gitClient,now:()=>NOW,resolveCommandExecutable:async()=>gate});
+  const prepared=await execution.prepare({project:root,runId:approved.runId,expectedRunVersion:approved.version});
+  const next=await execution.nextAction({project:root,runId:approved.runId,expectedRuntimeVersion:prepared.runtimeVersion});
+  assert.equal(next.status,'actions');assert.equal(next.actions.length,2);
+  assert.ok(next.actions.every(offer=>offer.status==='action'));
+  const repeated=await execution.nextAction({project:root,runId:approved.runId,expectedRuntimeVersion:next.runtimeVersion});
+  assert.ok(repeated.actions.every(offer=>offer.status==='waiting-for-result'));
+  const issued=next.actions.map(offer=>offer.action);
+  for(const action of issued) {
+    const contract=JSON.parse(action.payload).contract;
+    await mkdir(join(contract.worktree.path,'app'),{recursive:true});
+    await writeFile(join(contract.worktree.path,contract.ownedPaths[0]),`export const ${action.nodeId.replaceAll('-','_')} = true;\n`);
+  }
+  for(const action of issued.toReversed()) {
+    const result=await execution.submitResult({project:root,runId:approved.runId,expectedRuntimeVersion:action.runtimeVersion,action,result:resultFor(action)});
+    assert.equal(result.status,'accepted');
+  }
+  await assert.rejects(execution.submitResult({project:root,runId:approved.runId,expectedRuntimeVersion:issued[0].runtimeVersion,action:issued[0],result:resultFor(issued[0])}));
+  const status=await execution.status({project:root,runId:approved.runId});
+  for(const name of ['one','two'])assert.match(await readFile(join(status.checkout.path,`app/${name}.js`),'utf8'),/export const/);
+});
+
+test('parallel host admission preserves runnable offers and selects each stopped writer by receipt',async t=>{
+  const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+  const {withMachineContext}=await import('../../src/runtime/machine-admission.js');
+  const {sessionTelemetry}=await import('../../src/clients/session-capabilities.js');
+  const workItems=['one','two'].map(id=>({id,dependencies:[],objective:`Add ${id}`,ownedPaths:[`app/${id}.js`],acceptanceCriterionIndexes:[1]}));
+  const {root,gitClient,approved,gate}=await fixture(t,{managed:true,workItems});
+  const machine=createResourceCoordinator({root:join(dirname(root),'machine')});
+  await machine.register({projectRoot:root,runId:approved.runId,deadlineMs:Date.now()+120000,machineLimits:{activeTasks:4,agentExecutions:1,heavyVerification:1,dependencyInstalls:1}});
+  const execution=createHostExecution({gitClient,now:()=>NOW,resolveCommandExecutable:async()=>gate});
+  const prepared=await execution.prepare({project:root,runId:approved.runId,expectedRunVersion:approved.version});
+  const base={project:root,runId:approved.runId};
+  const call=(method,input)=>withMachineContext(machine,root,approved.runId,()=>execution[method]({...base,...input}),{nonblocking:true});
+  const next=await call('nextAction',{expectedRuntimeVersion:prepared.runtimeVersion});
+  assert.equal(next.status,'actions');assert.equal(next.actions.filter(x=>x.status==='action').length,1);assert.equal(next.actions.filter(x=>x.status==='queued').length,1);
+  const action=next.actions.find(x=>x.status==='action').action;
+  const observation={sessionId:action.sessionId,generation:action.generation,nativeHandle:'native-first',actorId:'host-one',observedAtMs:Date.parse(NOW),source:'host-observation',assurance:'host-reported',actions:1,telemetry:sessionTelemetry('host')};
+  const observed=await call('handoff',{expectedRuntimeVersion:next.runtimeVersion,input:{operation:'observe',receipt:observation}});
+  const {actions,telemetry,...identity}=observation;
+  await call('handoff',{expectedRuntimeVersion:observed.runtimeVersion,input:{operation:'release',receipt:{...identity,status:'stopped'}}});
+  const resumed=await call('nextAction',{expectedRuntimeVersion:observed.runtimeVersion});
+  assert.equal(resumed.actions.filter(x=>x.status==='result-required').length,1);
+  assert.equal(resumed.actions.filter(x=>x.status==='action').length,1);
+  assert.notEqual(resumed.actions.find(x=>x.status==='action').action.sessionId,action.sessionId);
+});
+
+test('explicit host retries failed candidate verification with only the frozen result and source', async t => {
+  const workItems=[{id:'one',dependencies:[],objective:'Add first file',ownedPaths:['app/one.js'],acceptanceCriterionIndexes:[1]}];
+  const {root,gitClient,approved,gate}=await fixture(t,{managed:true,workItems});
+  let execution=createHostExecution({gitClient,now:()=>NOW,resolveCommandExecutable:async()=>gate});
+  const prepared=await execution.prepare({project:root,runId:approved.runId,expectedRunVersion:approved.version});
+  const next=await execution.nextAction({project:root,runId:approved.runId,expectedRuntimeVersion:prepared.runtimeVersion});
+  const action=next.actions[0].action;
+  const contract=JSON.parse(action.payload).contract;
+  await mkdir(join(contract.worktree.path,'app'),{recursive:true});
+  await writeFile(join(contract.worktree.path,'app/one.js'),'export const one = true;\n');
+  const input={project:root,runId:approved.runId,expectedRuntimeVersion:action.runtimeVersion,action,result:resultFor(action)};
+  await writeFile(gate,'#!/bin/sh\nexit 1\n');
+  await assert.rejects(execution.submitResult(input));
+  execution=createHostExecution({gitClient,now:()=>NOW,resolveCommandExecutable:async()=>gate});
+  await writeFile(gate,'#!/bin/sh\nexit 0\n');
+  await assert.rejects(execution.submitResult({...input,result:{...input.result,output:{...input.result.output,summary:'changed'}}}));
+  await assert.rejects(execution.submitResult({...input,action:{...action,generation:action.generation+1}}));
+  const source=await git(contract.worktree.path,'rev-parse','HEAD');
+  await writeFile(join(contract.worktree.path,'app/one.js'),'export const one = false;\n');
+  await git(contract.worktree.path,'add','app/one.js');await git(contract.worktree.path,'commit','-m','changed source');
+  await assert.rejects(execution.submitResult(input));
+  await git(contract.worktree.path,'reset','--hard',source);
+  const accepted=await execution.submitResult(input);
+  assert.equal(accepted.status,'accepted');
+});
+
+
+test('task deps prepares both parallel Workers and the frozen candidate before exact submission retry', async t=>{
+  const workItems=['one','two'].map(id=>({id,dependencies:[],objective:`Add ${id}`,ownedPaths:[`app/${id}.js`],acceptanceCriterionIndexes:[1]}));
+  const {root,gitClient,approved}=await fixture(t,{managed:true,workItems,portableDependencies:true});
+  const execution=createHostExecution({gitClient,now:()=>NOW,resolveCommandExecutable:async()=>process.execPath});
+  const prepared=await execution.prepare({project:root,runId:approved.runId,expectedRunVersion:approved.version});
+  const next=await execution.nextAction({project:root,runId:approved.runId,expectedRuntimeVersion:prepared.runtimeVersion});
+  const before=await execution.status({project:root,runId:approved.runId});
+  assert.equal(before.dependencyTargets.length,2);
+  const messages=[],approvals=[];
+  const {stdout:gitPath}=await execFile('which',['git']);
+  const deps=()=>main(['task','deps'],{cwd:()=>root,terminalIsInteractive:()=>true,
+    output:{log:value=>messages.push(value),error:value=>messages.push(value),json(){}},work:execution,
+    resolveCommandExecutable:async name=>name==='git'?realpath(gitPath.trim()):process.execPath,
+    confirmDependencyInstall:async plan=>{approvals.push(plan.worktreePath);return true;}});
+  assert.equal(await deps(),EXIT_CODES.SUCCESS,messages.join('\n'));
+  for(const target of before.dependencyTargets)assert.equal(await readFile(join(target.path,'.rivet-deps/ready'),'utf8'),'ready');
+  const action=next.actions[0].action;const contract=JSON.parse(action.payload).contract;
+  await mkdir(join(contract.worktree.path,'app'),{recursive:true});
+  await writeFile(join(contract.worktree.path,'app/one.js'),'export const one = true;\n');
+  const input={project:root,runId:approved.runId,expectedRuntimeVersion:action.runtimeVersion,action,result:resultFor(action)};
+  await assert.rejects(execution.submitResult(input));
+  const pending=await execution.status({project:root,runId:approved.runId});
+  assert.equal((await execution.nextAction({project:root,runId:approved.runId,expectedRuntimeVersion:pending.runtime.version})).status,'reconciliation-pending');
+  const candidate=pending.dependencyTargets.find(item=>item.kind==='candidate');
+  assert.ok(candidate);assert.match(pending.nextAction,/task deps/);
+  assert.equal(await deps(),EXIT_CODES.SUCCESS,messages.join('\n'));
+  assert.ok(approvals.includes(candidate.path));
+  assert.equal((await execution.submitResult(input)).status,'accepted');
+});
+
+
+test('task deps prepares parallel npm Workers and the npm candidate before exact retry', async t=>{
+  const workItems=['one','two'].map(id=>({id,dependencies:[],objective:`Add ${id}`,ownedPaths:[`app/${id}.js`],acceptanceCriterionIndexes:[1]}));
+  const {root,gitClient,approved,gate}=await fixture(t,{managed:true,workItems,lockedDependencies:true});
+  await writeFile(gate,'#!/bin/sh\ntest -f node_modules/installed\n');
+  const execution=createHostExecution({gitClient,now:()=>NOW,resolveCommandExecutable:async()=>gate});
+  const prepared=await execution.prepare({project:root,runId:approved.runId,expectedRunVersion:approved.version});
+  const next=await execution.nextAction({project:root,runId:approved.runId,expectedRuntimeVersion:prepared.runtimeVersion});
+  const installer=join(dirname(root),'installer');
+  await writeFile(installer,'#!/bin/sh\nmkdir -p node_modules\nprintf ready > node_modules/installed\n',{mode:0o700});
+  const approvals=[],messages=[];const {stdout:gitPath}=await execFile('which',['git']);
+  const deps=()=>main(['task','deps'],{cwd:()=>root,terminalIsInteractive:()=>true,work:execution,
+    output:{log:v=>messages.push(v),error:v=>messages.push(v),json(){}},
+    resolveCommandExecutable:async name=>name==='git'?realpath(gitPath.trim()):installer,
+    confirmDependencyInstall:async plan=>{approvals.push(plan.worktreePath);return true;}});
+  assert.equal(await deps(),EXIT_CODES.SUCCESS,messages.join('\n'));assert.equal(approvals.length,2);
+  const action=next.actions[0].action,contract=JSON.parse(action.payload).contract;
+  await mkdir(join(contract.worktree.path,'app'),{recursive:true});
+  await writeFile(join(contract.worktree.path,'app/one.js'),'export const one = true;\n');
+  const input={project:root,runId:approved.runId,expectedRuntimeVersion:action.runtimeVersion,action,result:resultFor(action)};
+  await assert.rejects(execution.submitResult(input));
+  const pending=await execution.status({project:root,runId:approved.runId});
+  const candidate=pending.dependencyTargets.find(item=>item.kind==='candidate');assert.ok(candidate);
+  assert.equal(await deps(),EXIT_CODES.SUCCESS,messages.join('\n'));assert.ok(approvals.includes(candidate.path));
+  assert.equal((await execution.submitResult(input)).status,'accepted');
+});
+
+test('missing pending candidate remains visible in task status and blocks dependency installation safely',async t=>{
+  const workItems=[{id:'one',dependencies:[],objective:'Add first file',ownedPaths:['app/one.js'],acceptanceCriterionIndexes:[1]}];
+  const {root,gitClient,approved,gate}=await fixture(t,{managed:true,workItems,lockedDependencies:true});
+  const execution=createHostExecution({gitClient,now:()=>NOW,resolveCommandExecutable:async()=>gate});
+  const prepared=await execution.prepare({project:root,runId:approved.runId,expectedRunVersion:approved.version});
+  const next=await execution.nextAction({project:root,runId:approved.runId,expectedRuntimeVersion:prepared.runtimeVersion});
+  const action=next.actions[0].action,contract=JSON.parse(action.payload).contract;
+  await mkdir(join(contract.worktree.path,'app'),{recursive:true});
+  await writeFile(join(contract.worktree.path,'app/one.js'),'export const one = true;\n');
+  await writeFile(gate,'#!/bin/sh\nexit 1\n');
+  await assert.rejects(execution.submitResult({project:root,runId:approved.runId,expectedRuntimeVersion:action.runtimeVersion,action,result:resultFor(action)}));
+  const before=await execution.status({project:root,runId:approved.runId});
+  const candidate=before.dependencyTargets.find(item=>item.kind==='candidate');assert.ok(candidate);
+  await rename(candidate.path,`${candidate.path}-moved`);
+  const observed=await execution.status({project:root,runId:approved.runId});
+  assert.deepEqual(observed.runtime,before.runtime);
+  assert.deepEqual(observed.workerCheckouts,before.workerCheckouts);
+  assert.equal(observed.dependencyTargets.length,0);
+  assert.equal(observed.candidateCheckouts[0].status,'unavailable');
+  assert.match(observed.nextAction,/candidate.*unavailable|unavailable.*candidate/i);
+  let approvedInstall=false;const messages=[];
+  const code=await main(['task','deps'],{cwd:()=>root,terminalIsInteractive:()=>true,work:execution,
+    output:{log:v=>messages.push(v),error:v=>messages.push(v),json(){}},
+    resolveCommandExecutable:async()=>process.execPath,confirmDependencyInstall:async()=>{approvedInstall=true;return true;}});
+  assert.equal(code,EXIT_CODES.REPOSITORY_CONFLICT);assert.equal(approvedInstall,false);
+  assert.match(messages.join('\n'),/candidate.*unavailable|unavailable.*candidate/i);
+});
+
+test('expired parallel host admission still exposes the stopped second sibling without mutating admission',async t=>{
+  const {createRivetApplication}=await import('../../src/runtime/application.js');
+  const {sessionTelemetry}=await import('../../src/clients/session-capabilities.js');
+  const workItems=['one','two','three'].map(id=>({id,dependencies:[],objective:`Add ${id}`,ownedPaths:[`app/${id}.js`],acceptanceCriterionIndexes:[1]}));
+  const {root,approved,gitClient}=await fixture(t,{managed:true,workItems,now:new Date().toISOString()});
+  const app=createRivetApplication({env:{...process.env,RIVET_MACHINE_STATE_ROOT:join(dirname(root),'machine')}});
+  await app.machine.register({projectRoot:root,runId:approved.runId,deadlineMs:Date.now()+60000,
+    machineLimits:{activeTasks:4,agentExecutions:2,heavyVerification:1,dependencyInstalls:1}});
+  const base={project:root,runId:approved.runId};
+  const prepared=await app.work.prepare({...base,expectedRunVersion:approved.version});
+  const next=await app.work.nextAction({...base,expectedRuntimeVersion:prepared.runtimeVersion});
+  const issued=next.actions.filter(offer=>offer.status==='action');assert.equal(issued.length,2);
+  const second=issued[1].action;
+  const identity={sessionId:second.sessionId,generation:second.generation,nativeHandle:'second-before-deadline',actorId:'host-two',observedAtMs:Date.now(),source:'host-observation',assurance:'host-reported'};
+  const observed=await app.work.handoff({...base,expectedRuntimeVersion:next.runtimeVersion,input:{operation:'observe',receipt:{...identity,actions:1,telemetry:sessionTelemetry('host')}}});
+  await app.machine.register({projectRoot:root,runId:approved.runId,deadlineMs:Date.now()+30});await delay(60);
+  await app.work.handoff({...base,expectedRuntimeVersion:observed.runtimeVersion,input:{operation:'release',receipt:{...identity,observedAtMs:Date.now(),status:'stopped'}}});
+  const before=await app.work.status(base),claimsBefore=await app.machine.inspect(),treesBefore=await gitClient.listWorktrees(root);
+  const recovered=await app.work.nextAction({...base,expectedRuntimeVersion:observed.runtimeVersion});
+  assert.equal(recovered.status,'actions');
+  assert.equal(recovered.actions.find(offer=>offer.action?.nodeId===second.nodeId)?.status,'result-required');
+  assert.equal(recovered.actions.find(offer=>offer.action?.nodeId===issued[0].action.nodeId)?.status,'waiting-for-result');
+  assert.equal(recovered.actions.some(offer=>offer.status==='action'),false);
+  assert.deepEqual((await app.work.status(base)).runtime,before.runtime);
+  assert.deepEqual((await app.machine.inspect()).claims,claimsBefore.claims);
+  assert.deepEqual(await gitClient.listWorktrees(root),treesBefore);
 });

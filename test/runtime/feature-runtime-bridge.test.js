@@ -827,3 +827,211 @@ test('custom Worker ceiling respects lower approved allocations and the saved pr
     assert.equal(createFeatureLaunchInput(node, intent, planNode, run).budget.maxCostUsd, expected);
   }
 });
+
+async function parallelFixture(t, {failure = false, beforeResult, dependent = false, stoppedProof = true, outerFailure = false, preparationRace = false, slowPreparation = false, cancelPreparation = false} = {}) {
+  const parentRoot = await realpath(await mkdtemp(join(tmpdir(), 'rivet-adapter-parallel-')));
+  t.after(() => rm(parentRoot, {recursive:true, force:true}));
+  const root = join(parentRoot, 'project');
+  await mkdir(root);
+  await cp(new URL('../fixtures/config/valid/.rivet/', import.meta.url), join(root, '.rivet'), {recursive:true});
+  const {parse,stringify} = await import('yaml');
+  const {managedPolicy} = await import('../fixtures/execution-policy.js');
+  const orchestrationPath = join(root,'.rivet','orchestration.yaml');
+  const orchestration = parse(await readFile(orchestrationPath,'utf8'));
+  orchestration.executionPolicy = managedPolicy();
+  orchestration.roles.find(role => role.kind === 'worker').capacity = 2;
+  await writeFile(orchestrationPath,stringify(orchestration));
+  await writeFile(join(root,'README.md'),'parallel fixture\n');
+  await writeFile(join(root,'package.json'),JSON.stringify({scripts:{build:'x',test:'x',lint:'x',typecheck:'x'}}));
+  await execFile('git',['init','--quiet','--initial-branch=main',root]);
+  await execFile('git',['-C',root,'add','.']);
+  await execFile('git',['-C',root,'-c','user.name=Test','-c','user.email=test@example.invalid','commit','--quiet','-m','fixture']);
+  const preparingMarker=join(parentRoot,'preparing-dependent');
+  const releasePreparation=join(parentRoot,'release-dependent');
+  let executableGit=await gitExecutable();
+  if(preparationRace || slowPreparation) {
+    const wrapper=join(parentRoot,'git-wrapper');
+    await writeFile(wrapper,`#!/bin/sh
+case "$*" in
+  ${slowPreparation ? `*'refs/heads/worker/parallel-run/fast^{commit}'*) if [ ! -f '${preparingMarker}' ]; then printf waiting > '${preparingMarker}'; sleep 3; fi ;;` : ''}
+  *'refs/heads/worker/parallel-run/dependent^{commit}'*)
+    if [ ! -f '${preparingMarker}' ]; then
+      printf waiting > '${preparingMarker}'
+      count=0
+      while [ ! -f '${releasePreparation}' ] && [ "$count" -lt 600 ]; do sleep 0.05; count=$((count + 1)); done
+    fi
+    ;;
+esac
+exec '${executableGit}' "$@"
+`,{mode:0o700});
+    executableGit=wrapper;
+  }
+  const gitClient = await createGitClient({gitExecutable:executableGit});
+  const baselineCommit = (await gitClient.inspectRepository(root)).headSha;
+  const config = await loadProjectConfig(root);
+  const request = workRequest();
+  const workItems = ['fast','slow',...(dependent?['dependent']:[])].map((id,index) => ({
+    id, dependencies:id==='dependent'?['fast']:[],objective:`Implement ${id} output.`,
+    ownedPaths:[`app/${id}.txt`],acceptanceCriterionIndexes:[index===1?2:1],
+  }));
+  const planner = createFeaturePlanner({planningClient:{propose:async()=>({schemaVersion:1,kind:'agilno.feature-decomposition',workItems})}});
+  const featurePlan = await planner.propose({config,workRequest:request,baselineCommit,client:'codex'});
+  const run = await persistedRunningRun(root,'parallel-run',request,featurePlan);
+  const executable = join(parentRoot,'gate');
+  const gateLog=join(parentRoot,'candidate-gates');
+  const slowMarker=join(parentRoot,'slow-verification');
+  const releaseMarker=join(parentRoot,'release-verification');
+  let releaseTimer;
+  t.after(()=>clearTimeout(releaseTimer));
+  const slowGate=outerFailure ? `if [ -f app/slow.txt ] && [ ! -f app/fast.txt ]; then printf waiting > '${slowMarker}'; while [ ! -f '${releaseMarker}' ]; do sleep 0.05; done; fi\n` : '';
+  await writeFile(executable,`#!/bin/sh\nprintf '%s\\n' \"$PWD\" >> '${gateLog}'\n${slowGate}exit ${failure?1:0}\n`,{mode:0o700});
+  let active = 0; let maximum = 0; const bases = []; const events = [];
+  let startedSlow; const slowStarted = new Promise(resolve=>{startedSlow=resolve;});
+  let startedDependent; const dependentStarted = new Promise(resolve=>{startedDependent=resolve;});
+  async function waitFor(promise,signal) {
+    let timer; let abort;
+    try {
+      await Promise.race([promise,new Promise((_,reject)=>{
+        timer=setTimeout(()=>reject(new Error('parallel worker did not start')),45000);
+        abort=()=>reject(new Error('aborted'));
+        signal.addEventListener('abort',abort,{once:true});
+        if(signal.aborted)abort();
+      })]);
+    } finally {clearTimeout(timer);signal.removeEventListener('abort',abort);}
+  }
+  const executor = createFeatureExecutor({gitClient,now:()=>NOW,resolveCommandExecutable:async()=>executable,
+    clientFor:()=>({provider:'codex',async launch(contract,options){
+      active++; maximum=Math.max(maximum,active); events.push(`start:${contract.nodeId}`);
+      bases.push((await gitClient.inspectRepository(contract.worktree.path)).headSha);
+      const receipt={version:1,executionId:`execution-${contract.nodeId}`,processId:111,processGroupId:111,ownerProcessId:process.pid,processBirth:null,observedAtMs:NOW_MS,source:'owned-process',assurance:'observed',status:'started'};
+      await options.onExecution(receipt);
+      if(contract.nodeId==='fast') await waitFor(slowStarted,options.signal);
+      if(contract.nodeId==='slow') {
+        startedSlow();
+        if(dependent && !preparationRace) await waitFor(dependentStarted,options.signal);
+      }
+      if(contract.nodeId==='dependent') startedDependent();
+      for(const path of contract.ownedPaths){await mkdir(dirname(join(contract.worktree.path,path)),{recursive:true});await writeFile(join(contract.worktree.path,path),contract.nodeId+'\n');}
+      if(preparationRace && contract.nodeId==='slow') {
+        const deadline=Date.now()+30000;
+        while(true) {
+          options.signal.throwIfAborted();
+          if(Date.now()>deadline)throw new Error('dependent preparation did not start');
+          try{await access(preparingMarker);break;}catch{await new Promise(resolve=>setTimeout(resolve,25));}
+        }
+        const {acquireLock}=await import('../../src/state/lock.js');
+        let peerLock; let contention;
+        try{peerLock=await acquireLock(join((await resolveStatePaths(root,run.runId)).instanceDir,'integration.lock'));}
+        catch(error){contention=error;}
+        finally{await peerLock?.release();await writeFile(releasePreparation,'release');}
+        assert.equal(contention?.code,'ERR_STATE_LOCKED','peer acceptance must wait until dependent checkout is reserved');
+      }
+      if(outerFailure && contract.nodeId==='fast') {
+        const deadline=Date.now()+30000;
+        while(true) {
+          options.signal.throwIfAborted();
+          if(Date.now()>deadline)throw new Error('slow verification did not start');
+          try{await access(slowMarker);break;}catch{await new Promise(resolve=>setTimeout(resolve,25));}
+        }
+        const {taskGovernance}=await import('../../src/feature/governance.js');
+        await taskGovernance({project:root,runId:run.runId,gitClient,operation:'decide',input:{
+          id:'needs-human',tier:2,title:'Choose output format',
+          options:[{id:'json',description:'Use JSON'},{id:'text',description:'Use text'}],
+          choice:'json',rationale:'Requires human approval.',
+        }});
+        // A missing cancellation path eventually releases and incorrectly accepts
+        // the slow candidate, so the regression fails instead of hanging forever.
+        releaseTimer=setTimeout(()=>writeFile(releaseMarker,'release').catch(()=>{}),15000);
+      }
+      if(beforeResult) await beforeResult({root,run,contract,gitClient});
+      if(stoppedProof) await options.onExecution({...receipt,status:'stopped'});
+      active--;events.push(`finish:${contract.nodeId}`);
+      return {version:1,status:'success',output:{summary:'Complete',evidence:[...contract.evidence]},usage:{tokens:10,costUsd:0}};
+    }})});
+  const cancellationController=new AbortController();
+  let cancellationError;
+  const cancellation=cancelPreparation ? (async()=>{
+    const deadline=Date.now()+30000;
+    while(true){
+      if(Date.now()>deadline)throw new Error('slow preparation did not start');
+      try{await access(preparingMarker);break;}catch{await new Promise(resolve=>setTimeout(resolve,25));}
+    }
+    cancellationController.abort();
+  })().catch(error=>{cancellationError=error;}) : Promise.resolve();
+  const result=await executor({project:root,run},{signal:cancellationController.signal});
+  await cancellation;
+  if(cancellationError)throw cancellationError;
+  const accepted=await createAcceptedIntegrationStore(await acceptedIntegrationPaths(await resolveFeatureRunPaths(root,run.runId))).readOnly();
+  return {result,accepted,root,run,gitClient,maximum,bases,events,baselineCommit,gateLog};
+}
+
+test('explicit adapter workers overlap and both same-base siblings are verified and accepted',async t=>{
+  const fixture=await parallelFixture(t);
+  assert.equal(fixture.result.status,'awaiting-final-approval',fixture.result.summary);
+  assert.equal(fixture.maximum,2);
+  assert.equal(fixture.bases[0],fixture.bases[1]);
+  for(const id of ['fast','slow'])assert.equal(await readFile(join(fixture.accepted.path,`app/${id}.txt`),'utf8'),id+'\n');
+});
+
+test('explicit adapter starts accepted fast dependency before slow sibling finishes',async t=>{
+  const fixture=await parallelFixture(t,{dependent:true});
+  assert.equal(fixture.result.status,'awaiting-final-approval',fixture.result.summary);
+  assert.ok(fixture.events.indexOf('start:dependent')<fixture.events.indexOf('finish:slow'));
+});
+
+test('explicit adapter refuses failed candidate quality without accepting a worker',async t=>{
+  const fixture=await parallelFixture(t,{failure:true});
+  assert.match(await readFile(fixture.gateLog,'utf8'),/candidate-worker-/);
+  assert.equal(fixture.result.status,'blocked');
+  assert.equal(fixture.accepted,null);
+});
+
+test('explicit adapter rejects live run cancellation before candidate acceptance',async t=>{
+  let cancelled = false;
+  const fixture=await parallelFixture(t,{beforeResult:async({root,run,contract})=>{
+    if(cancelled || contract.nodeId!=='fast')return;
+    cancelled=true;
+    const store=createFeatureRunStore(await resolveFeatureRunPaths(root,run.runId));
+    const current=await store.readOnly();
+    await store.update({status:'cancelled',updatedAt:NOW,runtimeRefs:current.runtimeRefs,evidenceRefs:current.evidenceRefs},{expectedVersion:current.version});
+  }});
+  assert.equal(fixture.result.status,'blocked');
+  assert.equal(fixture.accepted,null);
+});
+
+test('explicit adapter retains workers without stopped session proof and never verifies them',async t=>{
+  const fixture=await parallelFixture(t,{stoppedProof:false});
+  assert.equal(fixture.result.status,'blocked');
+  assert.equal(fixture.accepted,null);
+  await assert.rejects(()=>access(fixture.gateLog));
+});
+
+test('explicit adapter outer governance failure aborts in-flight candidate verification before acceptance',async t=>{
+  const fixture=await parallelFixture(t,{outerFailure:true});
+  assert.equal(fixture.result.status,'blocked');
+  assert.match(fixture.result.summary,/ERR_TASK_GOVERNANCE/);
+  assert.ok(fixture.accepted,'fast worker was accepted before the next governance check');
+  assert.equal(await readFile(join(fixture.accepted.path,'app/fast.txt'),'utf8'),'fast\n');
+  await assert.rejects(()=>access(join(fixture.accepted.path,'app/slow.txt')));
+});
+
+test('explicit adapter holds acceptance lock while a dependent checkout is reserved, then accepts its peer',async t=>{
+  const fixture=await parallelFixture(t,{dependent:true,preparationRace:true});
+  assert.equal(fixture.result.status,'awaiting-final-approval',fixture.result.summary);
+  for(const id of ['fast','slow','dependent'])assert.equal(await readFile(join(fixture.accepted.path,`app/${id}.txt`),'utf8'),id+'\n');
+});
+
+
+test('explicit adapter waits through a slow cooperating checkout instead of blocking its sibling',async t=>{
+  const fixture=await parallelFixture(t,{slowPreparation:true});
+  assert.equal(fixture.result.status,'awaiting-final-approval',fixture.result.summary);
+  for(const id of ['fast','slow'])assert.equal(await readFile(join(fixture.accepted.path,`app/${id}.txt`),'utf8'),id+'\n');
+});
+
+test('explicit adapter cancellation stops the waiter during slow checkout without launching either worker',async t=>{
+  const fixture=await parallelFixture(t,{slowPreparation:true,cancelPreparation:true});
+  assert.equal(fixture.result.status,'blocked');
+  assert.equal(fixture.accepted,null);
+  assert.equal(fixture.maximum,0);
+  assert.equal(await fixture.gitClient.branchTip(fixture.root,'worker/parallel-run/slow'),null);
+});
