@@ -129,6 +129,18 @@ export async function resolveStatePaths(projectRoot, instance, options = {}) {
 
 // Dependency ownership lives outside executable checkout contents. Read-only
 // inspection must never create directories or adopt a self-asserted marker.
+export async function resolveCleanupRetentionPaths(projectRoot, {existing=false, ...options}={}) {
+  const gitCommonDir=await resolveGitCommonDirectory(projectRoot,options,'Unable to resolve the Git common directory');
+  const stateRoot=join(gitCommonDir,'rivet'),instanceDir=join(stateRoot,'cleanup-retention');
+  for(const path of [stateRoot,instanceDir]) {
+    if(existing){if(!(await existingPrivateDirectory(path,gitCommonDir)))return null;}
+    else await createPrivateDirectory(path,gitCommonDir);
+  }
+  return registerPaths(Object.freeze({gitCommonDir,stateRoot,instanceDir,
+    snapshotPath:join(instanceDir,'policy.json'),lockPath:join(instanceDir,'state.lock'),
+    runtimeLockPath:join(instanceDir,'operation.lock')}));
+}
+
 export async function resolveLegacyDependencyPaths(projectRoot, checkoutKey, { existing = false, ...options } = {}) {
   if (!/^[a-f0-9]{64}$/.test(checkoutKey)) throw new TypeError('Invalid dependency checkout key');
   const gitCommonDir = await resolveGitCommonDirectory(projectRoot, options, 'Unable to resolve the Git common directory');

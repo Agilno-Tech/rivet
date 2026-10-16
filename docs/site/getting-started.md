@@ -120,6 +120,8 @@ Projects that enable [batch verification](./orchestration.md#verify-selected-tas
 
 After a task finishes, `rivet task cleanup --preview` shows which owned Worker checkouts can be removed. Run `rivet task cleanup` to review their exact paths and confirm removal. Branches, commits and task evidence remain available. See [cleanup rules](./orchestration.md#completed-work-cleanup) for retained checkouts and recovery.
 
+For optional future cleanup, `rivet task cleanup --retention=7d` asks for separate approval. Eligible older checkouts are then removed in bounded sweeps during foreground task execution. Use `--retention=off` to revoke that policy. Status inspection never performs cleanup.
+
 ## Report a problem
 
 Human-readable command failures show a next step and the path to a private JSON diagnostic report when it can be saved. Review that file before attaching it to a [GitHub issue](https://github.com/Agilno-Tech/rivet/issues/new), along with reproduction steps and expected behavior. To collect broader sanitized diagnostics:

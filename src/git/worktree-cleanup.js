@@ -1,3 +1,4 @@
+import {dependencyKinds, inspectCleanupDependency, lockDependencyCleanup, removeCleanupDependency} from '../runtime/legacy-dependency-directory.js';
 import { createHash } from 'node:crypto';
 import { acquireLock } from '../state/lock.js';
 import { acquireHostRunLock } from '../feature/host-run-lock.js';
@@ -13,13 +14,14 @@ import { validateRuntimeSnapshot } from '../runtime/orchestrator.js';
 const observations = new WeakMap();
 const approvals = new WeakMap();
 
-export async function confirmTaskWorktreeCleanup(preview, confirm) {
+export async function confirmTaskWorktreeCleanup(preview, confirm, {beforeRemoval,maxRemovals=64}={}) {
+  if(!Number.isInteger(maxRemovals)||maxRemovals<1||maxRemovals>64)throw new Error('Invalid cleanup bound.');
   const original = observations.get(preview);
   if (!original || original.digest !== digest(preview) || typeof confirm !== 'function') throw new Error('A fresh cleanup preview is required for approval.');
   if (await confirm(structuredClone(preview)) !== true) return null;
   if (original.digest !== digest(preview)) changed();
   const approval = Object.freeze({});
-  approvals.set(approval, original);
+  approvals.set(approval, {...original,beforeRemoval,maxRemovals});
   return approval;
 }
 
@@ -89,7 +91,15 @@ export async function previewTaskWorktreeCleanup({projectRoot, runId}, {gitClien
         || registered[0].branch !== item.branch || await client.branchTip(projectRoot,item.branch) !== item.commit
         || !(await client.isAncestor(projectRoot,reservation.baseSha,item.commit))) {retain('identity-changed'); continue;}
       if (observed.dirty) {retain('dirty-checkout'); continue;}
-      if ((await client.statusPaths(item.path,{includeIgnoredDirectories:true,includeManagedDependencies:true})).length) {
+      const artifacts=[];
+      try {for(const name of dependencyKinds) {
+        if(await client.hasTrackedPaths(item.path,name))throw new Error('Tracked dependency root');
+        const priorArtifact=interrupted?.artifacts?.find(value=>value.name===name);
+        const artifact=await inspectCleanupDependency(item.path,name,priorArtifact);
+        if(artifact)artifacts.push(artifact);
+      }}catch{retain('ignored-or-untracked-content');continue;}
+      if(artifacts.length)item.artifacts=artifacts;
+      if ((await client.statusPaths(item.path,{includeIgnoredDirectories:true,includeManagedDependencies:true})).some(path=>!artifacts.some(a=>path===a.name || path.startsWith(a.name+'/')))) {
         retain('ignored-or-untracked-content'); continue;
       }
       item.eligible = true;
@@ -126,7 +136,7 @@ export async function applyTaskWorktreeCleanup({projectRoot,runId,preview,approv
   const paths = await resolveExistingStatePaths(projectRoot,runId);
   const runPaths = await resolveExistingFeatureRunPaths(projectRoot,runId);
   if (!paths || !runPaths) changed();
-  const locks = [];
+  const locks = [],completed=[];
   try {
     locks.push(await acquireHostRunLock(runPaths));
     locks.push(await acquireLock(runPaths.lockPath));
@@ -155,7 +165,7 @@ export async function applyTaskWorktreeCleanup({projectRoot,runId,preview,approv
     }
     if (fresh.runVersion !== captured.runVersion || fresh.runtimeVersion !== captured.runtimeVersion
       || fresh.reservationVersion !== captured.reservationVersion) changed();
-    const targets = captured.checkouts.filter(item => item.eligible);
+    const targets = captured.checkouts.filter(item => item.eligible).slice(0,authorized.maxRemovals);
     if (!stored) stored = await store.write({approvalDigest,preview:captured,checkouts:[]},{expectedVersion:0,environment:{}});
     const save = async entries => { stored = await store.write({...stored.data,checkouts:entries},{expectedVersion:stored.version,environment:{}}); };
     for (const item of targets) {
@@ -167,24 +177,48 @@ export async function applyTaskWorktreeCleanup({projectRoot,runId,preview,approv
         if (absent && !(await client.listWorktrees(projectRoot)).some(value=>value.path===item.path || value.branch===item.branch)
           && await client.branchTip(projectRoot,item.branch)===item.commit) {
           await save(stored.data.checkouts.map(value=>value.path===item.path?{...value,status:'removed'}:value));
+          completed.push(item.path);
           continue;
         }
         if (entry.status === 'removed') changed(); // Never adopt a replacement checkout.
       }
       if (!observed?.eligible || digest(observed)!==digest(item)) changed();
+      locks.push(await lockDependencyCleanup(item.path));
       entry = {...item,status:'removing'};
       await save([...stored.data.checkouts.filter(value=>value.path!==item.path),entry]);
       try {
         // Re-observe after journaling, while all owner/reservation mutation locks remain held.
         const current = await previewTaskWorktreeCleanup({projectRoot,runId},{gitClient:client});
         if (digest(current.checkouts.find(value=>value.path===item.path))!==digest(item)) changed();
+        await authorized.beforeRemoval?.();
+        for(const artifact of item.artifacts??[]) {
+          await authorized.beforeRemoval?.();
+          if(await client.hasTrackedPaths(item.path,artifact.name))changed();
+          await removeCleanupDependency(item.path,artifact);
+        }
+        await authorized.beforeRemoval?.();
         await client.removePreservedWorktree(projectRoot,{path:item.path,branch:item.branch,commit:item.commit,dev:item.identity.dev,ino:item.identity.ino});
         await save(stored.data.checkouts.map(value=>value.path===item.path?{...value,status:'removed'}:value));
+          completed.push(item.path);
       } catch (error) {
         // Keep 'removing' when filesystem outcome is unknown, allowing only exact absent-path replay.
         throw error;
       }
     }
     return {runId,checkouts:stored.data.checkouts};
-  } finally { for(const lock of locks.reverse()) await lock.release(); }
+  } catch(error) {error.cleanupRemoved=completed;throw error;} finally { for(const lock of locks.reverse()) await lock.release(); }
+}
+
+// Avoid rescanning fully removed tasks on every foreground retention invocation.
+export async function taskCleanupCompleted(projectRoot,run) {
+ const paths=await resolveExistingStatePaths(projectRoot,run.runId);
+ if(!paths)return false;
+ const saved=await readSnapshotWithoutLock(await worktreeCleanupPaths(paths));
+ if(!saved)return false;
+ validateJournal(saved.data,run.runId);
+ const snapshot=await readSnapshotWithoutLock(paths);
+ const reservation=await createReservationStore(paths).readOnly();
+ if(saved.data.preview.runVersion!==run.version||saved.data.preview.runtimeVersion!==snapshot?.version||saved.data.preview.reservationVersion!==reservation.version)return false;
+ const records=[...(saved.data.history??[]),saved.data].flatMap(v=>v.checkouts);
+ return reservation.reservations.length>0&&reservation.reservations.every(r=>records.some(v=>v.path===r.worktreePath&&v.identity?.leaseId===r.leaseId&&v.status==='removed'));
 }

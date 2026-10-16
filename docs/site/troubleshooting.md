@@ -133,6 +133,12 @@ Before sharing, open the file and review it. Attach it to a [GitHub issue](https
 
 Closing or declining the activation prompt leaves the plan saved. Run `rivet task start` inside the project to see the exact proposal again and approve it. `rivet task resume` also offers this review for a proposed terminal task. If several tasks are active, choose from the numbered interactive list or add `--run=<id>`. The activation prompt has no reading timeout.
 
+## Cleanup retains a checkout
+
+Use `rivet task cleanup --preview` to read the reason. A completed task alone is insufficient: Rivet needs stopped-owner evidence, the original checkout identity, preserved commits, and no unknown contents. Only exact dependency directories backed by protected completed install receipts can be removed; older `.rivet-deps` markers, tracked files and unknown build outputs do not qualify. An interrupted cleanup can be previewed and approved again, but a replacement directory cannot inherit the earlier approval.
+
+Retention is off unless separately approved. A project or configuration change suspends it; review the policy again with `rivet task cleanup --retention=7d`, or revoke it with `--retention=off`. Retention runs during foreground execution rather than on a timer, and each sweep is bounded. `task status` and cleanup preview preserve all files.
+
 ## Combined verification is waiting or blocked
 
 Inspect `rivet task status` for the candidate and next action. `dependencies-needed` requires explicit installation approval through `rivet task deps`, followed by `rivet task verify --batch`. Paused or expired participants cannot borrow another task's allowance. Resume an eligible paused task before retrying; an expired approved allowance needs a new approved task.

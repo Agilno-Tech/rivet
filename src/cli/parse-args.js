@@ -66,7 +66,7 @@ const STRICT_OPTIONS = {
   },
   task: {
     boolean: new Set(['details', 'preview', 'batch']),
-    valued: new Set(['project', 'run', 'for', 'input', 'input-json', 'phase', 'decision']),
+    valued: new Set(['project', 'run', 'for', 'input', 'input-json', 'phase', 'decision', 'retention']),
   },
   setup: {
     boolean: new Set(['global', 'write', 'json']),

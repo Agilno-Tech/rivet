@@ -458,6 +458,12 @@ export async function createGitClient(options = {}) {
       return Object.freeze({path, blob:match[2], content:result.output});
     },
 
+    async hasTrackedPaths(cwd, path) {
+      repositoryPath(path);
+      const result=await run(absoluteInput(cwd),['ls-files','-z','--',path]);
+      return result.output.length>0;
+    },
+
     async inspectTrackedFile(cwd, commit, path) {
       if (!validSha(commit)) fail('invalid-input');
       repositoryPath(path);

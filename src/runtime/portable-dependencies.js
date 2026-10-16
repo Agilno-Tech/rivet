@@ -1,3 +1,4 @@
+import {beginLegacyDependencyInstall,pinDependencyInstallDirectory,finishLegacyDependencyInstall,abandonLegacyDependencyInstall} from './legacy-dependency-directory.js';
 import {createHash,randomUUID} from 'node:crypto';
 import {lstat,mkdir,writeFile} from 'node:fs/promises';
 import {dirname,join} from 'node:path';
@@ -64,8 +65,12 @@ export async function bootstrapPortableDependencies(value,options) {
  cancelled(options.signal);
  if(!samePlan(plan,await inspectPortableDependencies(value,options)))fail();
  cancelled(options.signal);
+ let dependencyOwner;
+ try {dependencyOwner=await beginLegacyDependencyInstall(plan.worktreePath,'.rivet-deps',{allowUnowned:true});}catch{fail();}
+ let successful=false,executionStatus='stopped';
+ try {
  let ownership;
- try {ownership=await ensureOwned(plan.worktreePath,plan.ownership,options.signal);}catch{fail();}
+ try {ownership=await ensureOwned(plan.worktreePath,plan.ownership,options.signal);await pinDependencyInstallDirectory(dependencyOwner,ownership.identity);}catch{executionStatus=null;fail();}
  async function revalidate() {
   cancelled(options.signal);
   const current=await inspectPortableDependencies(value,options);
@@ -80,15 +85,21 @@ export async function bootstrapPortableDependencies(value,options) {
   const nowMs=Date.now(),commandId=step.id;
   const registry=createApprovalRegistry({approvers:[{id:'human-owner',principal:'human'}]});
   const approval=createApprovalReceipt({id:`approval-${randomUUID()}`,approverId:'human-owner',approverPrincipal:'human',subjectId:'rivet-bootstrap',action:'dependency.install',resource:`command:${commandId}:${plan.worktreePath}`,policyId:'dependency.install',decision:'approved',expiresAt:new Date(nowMs+60000).toISOString(),singleUse:true});
-  const result=await runCommand({worktree:plan.worktreePath,authority:createAuthorityEnvelope({actorId:'rivet-bootstrap',principal:'agent',actions:['dependency.install'],ownedPaths:[],providers:[],commands:[commandId]}),commands:{[commandId]:{execution:'argv',executable,args:step.argv.slice(1),action:'dependency.install',elevated:true,approvalPolicyId:'dependency.install',approverId:'human-owner'}},environment:{PATH:[dirname(executable),dirname(process.execPath),'/usr/bin','/bin'].join(':')},timeoutMs:10*60000,maxOutputBytes:16384,maxStreamOutputBytes:16384},{actorId:'rivet-bootstrap',commandId,cwd:step.cwd,approval,approvalRegistry:registry,nowMs},{signal:options.signal});
+  executionStatus=null;
+  const result=await runCommand({worktree:plan.worktreePath,authority:createAuthorityEnvelope({actorId:'rivet-bootstrap',principal:'agent',actions:['dependency.install'],ownedPaths:[],providers:[],commands:[commandId]}),commands:{[commandId]:{execution:'argv',executable,args:step.argv.slice(1),action:'dependency.install',elevated:true,approvalPolicyId:'dependency.install',approverId:'human-owner'}},environment:{PATH:[dirname(executable),dirname(process.execPath),'/usr/bin','/bin'].join(':')},timeoutMs:10*60000,maxOutputBytes:16384,maxStreamOutputBytes:16384},{actorId:'rivet-bootstrap',commandId,cwd:step.cwd,approval,approvalRegistry:registry,nowMs},{signal:options.signal,onExecution:receipt=>{executionStatus=receipt.status;}});
   results.push(result);
   await revalidate();
-  if(result.status!=='success')return Object.freeze({status:'failed',result,results:Object.freeze(results)});
+  if(result.status!=='success'||executionStatus!=='stopped')return Object.freeze({status:'failed',result,results:Object.freeze(results)});
  }
  for(const name of plan.provides) {
   const executable=await options.resolveCommandExecutable(name,{execution:'argv',worktree:plan.worktreePath,cwd:'.'});
   await verifyCommandExecutable(executable,{execution:'argv'});
  }
  await revalidate();
+ successful=true;
  return Object.freeze({status:'ready',results:Object.freeze(results)});
+ }finally {
+ if(executionStatus==='stopped')await finishLegacyDependencyInstall(dependencyOwner,successful);
+ else await abandonLegacyDependencyInstall(dependencyOwner);
+ }
 }

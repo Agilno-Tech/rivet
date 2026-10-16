@@ -134,6 +134,26 @@ export const catalog = {
       ['partial-removal-recovery', 'fresh confirmed preview resumes a partial multi-worker cleanup without original approval objects'],
       ['reject-replacement-work', 'fresh partial-cleanup approval cannot adopt a changed still-present pending checkout'],
     ]),
+    scenario('orchestration-owned-artifact-cleanup', 'test/runtime/worktree-cleanup.test.js', [
+      ['owned-roots-external-links', 'cleanup removes protected regenerable dependencies but preserves external symlink targets and evidence'],
+      ['pending-and-tracked-retained', 'pending installer and tracked regenerable roots retain checkout'],
+      ['absent-root-install-lock', 'dependency installer locks fence cleanup even when directory is absent'],
+      ['partial-root-recovery', 'partial artifact deletion resumes only the approved inode and preserves replacement content'],
+      ['portable-install-to-cleanup', 'fresh approved portable install is reclaimable with its protected receipt'],
+    ]),
+    scenario('orchestration-retention', 'test/runtime/worktree-cleanup.test.js', [
+      ['separate-authority-age-revoke', 'retention is disabled by default, requires separate approval, honors age and revocation'],
+      ['configuration-and-cli-approval', 'retention configuration drift suspends removal and CLI approval is separate from one-time cleanup'],
+      ['execution-only-hook', 'application status never runs retention but foreground host execution does'],
+      ['bounded-continuation', 'retention makes bounded progress on a task with more than eight Worker checkouts'],
+    ]),
+    scenario('orchestration-portable-ownership', 'test/runtime/portable-dependencies.test.js', [
+      ['protected-install-receipt', 'fresh portable bootstrap establishes protected cleanup receipt; self marker alone does not'],
+      ['legacy-marker-not-authority', 'legacy portable marker is never promoted to cleanup authority during a later install'],
+      ['reject-replaced-root', 'portable install cannot complete ownership for a replaced dependency root'],
+      ['unknown-stop-fenced', 'portable unknown-stop pending receipt blocks retry and cleanup even before directory creation'],
+      ['stopped-failure-retry', 'portable known-stopped failed install retries the same owned directory safely'],
+    ]),
     scenario('orchestration-telemetry', 'test/runtime/session-capabilities.test.js', [
       ['literal-arguments', 'bounded selected model and effort become literal argv'],
       ['independent-selection', 'independent review dispatches selection without duplicate legacy model'],

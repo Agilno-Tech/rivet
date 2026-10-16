@@ -1,3 +1,4 @@
+import {sweepWorktreeRetention} from './worktree-retention.js';
 import {activateTaskAdmission} from './task-orchestration.js';
 import {homedir} from 'node:os';
 import {createManagedOrchestration} from './managed-orchestration.js';
@@ -155,6 +156,13 @@ export function createRivetApplication(input = {}) {
     })();
     return gitClientPromise;
   };
+  async function foregroundCleanup(project,signal) {
+    let result;
+    try {result=await sweepWorktreeRetention(project,{gitClient:await gitClient(),now:()=>Date.parse(now()),signal});}
+    catch(error){result={removed:[],diagnostics:[`Cleanup retention unavailable: ${error.message}`]};}
+    for(const message of [...result.removed.map(path=>`Cleanup removed eligible Worker checkout: ${path}. Branch and evidence preserved.`),...result.diagnostics])
+      process.stderr.write(String(message).replace(/[\u0000-\u001f\u007f]/g,' ')+'\n');
+  }
   let workflowPromise;
   let executorPromise;
   let hostExecutionPromise;
@@ -366,6 +374,7 @@ export function createRivetApplication(input = {}) {
                   throw Object.assign(new Error('Task state changed; inspect task status.'), {code:'ERR_FEATURE_WORKFLOW_STATE_CONFLICT',safeMessage:'Task state changed; inspect task status.'});
                 await activateTaskAdmission(managed.coordinator,record,request.project,{allowanceMs:options.allowanceMs,resume:method==='resume'});
               } else if(options.allowanceMs!==undefined) await activateTaskAdmission(managed.coordinator,record,request.project,options);
+              await foregroundCleanup(request.project,options.signal);
               const {allowanceMs,...executionOptions}=options;
               return withMachineContext(
                 managed.coordinator,
@@ -410,6 +419,7 @@ export function createRivetApplication(input = {}) {
           args[1]?.signal?.throwIfAborted();
           if (['prepare','nextAction'].includes(method))
             args[0]=captureHostExecutionRequest(args[0],method==='prepare'?'expectedRunVersion':'expectedRuntimeVersion');
+          if(['prepare','nextAction'].includes(method))await foregroundCleanup(args[0].project,args[1]?.signal);
           if (method === 'prepare') {
             const record = await rawWorkflow.status({project:args[0].project,runId:args[0].runId});
             if (record.featurePlan?.executionPolicy && record.featurePlan.client === 'host'

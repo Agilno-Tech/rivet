@@ -1,3 +1,4 @@
+import {configureWorktreeRetention} from '../runtime/worktree-retention.js';
 import {verifyTaskBatch,bootstrapTaskBatchDependencies} from '../quality/verification-batch.js';
 import {batchForRun} from '../quality/verification-batch-queue.js';
 import { previewTaskWorktreeCleanup, applyTaskWorktreeCleanup, confirmTaskWorktreeCleanup } from '../git/worktree-cleanup.js';
@@ -192,14 +193,26 @@ function renderWorkerCheckouts(status, output) {
 
 export async function humanTaskCommand(parsed, dependencies) {
   if (parsed.command !== 'task' || !['status', 'start', 'approve', 'pause', 'resume', 'deps', 'verify', 'cleanup', 'recover', 'decisions', 'decide', 'approve-decision', 'review', 'checkpoint', 'handoff'].includes(parsed.subcommand)
-    || parsed.operands.length !== 0 || Object.keys(parsed.flags).some(key => !['project', 'run', 'for', 'details', 'preview', 'batch', 'input', 'input-json', 'phase', 'decision'].includes(key))) {
+    || parsed.operands.length !== 0 || Object.keys(parsed.flags).some(key => !['project', 'run', 'for', 'details', 'preview', 'batch', 'retention', 'input', 'input-json', 'phase', 'decision'].includes(key))) {
     fail('Use rivet task status|start|approve|resume|deps|recover [--project=<path>] [--run=<id>].');
   }
   if ((parsed.subcommand === 'verify') !== (parsed.flags.batch === true)) fail('Use rivet task verify --batch for combined candidate checks.');
   if (parsed.subcommand !== 'cleanup' && parsed.flags.preview !== undefined) fail('--preview requires task cleanup.');
+  if(parsed.flags.retention!==undefined && parsed.subcommand!=='cleanup')fail('--retention requires task cleanup.');
   const allowanceMs=taskAllowance(parsed.flags.for);
   if(allowanceMs!==undefined&&!['start','resume'].includes(parsed.subcommand))fail('--for is available on task start or resume.');
   const project = await resolveConfiguredProject(dependencies.cwd(), parsed.flags.project, { env: dependencies.env });
+  if(parsed.subcommand==='cleanup' && parsed.flags.retention!==undefined) {
+    if(Object.keys(parsed.flags).some(key=>!['project','retention'].includes(key)))fail('Retention setup accepts only --project and --retention.');
+    if(parsed.flags.retention!=='off' && dependencies.terminalIsInteractive?.()!==true)fail('Retention requires separate interactive approval of future removals.');
+    const result=await configureWorktreeRetention({projectRoot:project.root,retention:parsed.flags.retention},{confirm:async policy=>{
+      dependencies.output.log(`Enable automatic cleanup for completed/cancelled Worker checkouts older than ${policy.days} days in ${visible(policy.projectRoot)}?`);
+      dependencies.output.log('Future foreground execution may remove eligible checkouts and protected node_modules/.rivet-deps. Branches, commits and evidence remain. Unknown contents are retained.');
+      return dependencies.confirmWorktreeRetention?.(policy);
+    }});
+    dependencies.output.log(result.status==='enabled'?`Cleanup retention enabled: ${result.days} days. Foreground execution will apply this approved policy.`:result.status==='disabled'?'Cleanup retention disabled.':'Cleanup retention unchanged; approval declined.');
+    return EXIT_CODES.SUCCESS;
+  }
   if(parsed.subcommand==='verify') {
     if(Object.keys(parsed.flags).some(key=>!['project','run','batch'].includes(key)))fail('Batch verification accepts only --batch, --project and --run.');
     let ids;
@@ -231,10 +244,11 @@ export async function humanTaskCommand(parsed, dependencies) {
     dependencies.output.log('Cleanup plan. Branches, commits and task evidence will be preserved.');
     for (const item of preview.checkouts) {
       dependencies.output.log(`${item.eligible ? 'Eligible' : 'Retained'}: ${visible(item.path)} (${visible(item.reason)}).`);
+      for(const artifact of item.artifacts??[])dependencies.output.log(`  Remove owned regenerable directory: ${visible(item.path+'/'+artifact.name)} (receipt ${artifact.token}; identity ${artifact.directoryIdentity}).`);
       dependencies.output.log(`  Preserve branch: ${visible(item.branch)}; commit: ${visible(item.commit ?? 'unknown')}.`);
     }
     if (!preview.checkouts.length) dependencies.output.log('No owned Worker checkouts are available for cleanup.');
-    dependencies.output.log('Integration and candidate checkouts, and checkouts containing ignored artifacts, are retained.');
+    dependencies.output.log('Integration and candidate checkouts, and checkouts containing unproven artifacts, are retained.');
     if (parsed.flags.preview === true) {
       dependencies.output.log('Preview only. No checkout, branch, commit or evidence was removed.');
     } else if (preview.checkouts.some(item => item.eligible)) {

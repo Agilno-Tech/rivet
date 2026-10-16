@@ -195,3 +195,40 @@ process.exitCode = ${exitCode};
     assert.equal(await readFile(join(f.input.worktreePath, '.rivet-deps/installed'), 'utf8'), 'ready');
   }
 });
+
+test('fresh portable bootstrap establishes protected cleanup receipt; self marker alone does not',async t=>{
+ const f=await fixture(t);const {inspectCleanupDependency}=await import('../../src/runtime/legacy-dependency-directory.js');
+ assert.equal((await bootstrapWorktreeDependencies(f.input,f.options)).status,'ready');
+ const receipt=await inspectCleanupDependency(f.input.worktreePath,'.rivet-deps');assert.equal(receipt.name,'.rivet-deps');assert.ok(receipt.token);
+});
+
+test('legacy portable marker is never promoted to cleanup authority during a later install',async t=>{
+ const f=await fixture(t);const {createHash}=await import('node:crypto');const {resolveLegacyDependencyPaths}=await import('../../src/state/paths.js');const {inspectCleanupDependency}=await import('../../src/runtime/legacy-dependency-directory.js');
+ assert.equal((await bootstrapWorktreeDependencies(f.input,f.options)).status,'ready');
+ const paths=await resolveLegacyDependencyPaths(f.input.worktreePath,createHash('sha256').update(f.input.worktreePath+'/.rivet-deps').digest('hex'),{existing:true});
+ await rm(paths.snapshotPath);await assert.rejects(inspectCleanupDependency(f.input.worktreePath,'.rivet-deps'));
+ assert.equal((await bootstrapWorktreeDependencies(f.input,f.options)).status,'ready');await assert.rejects(inspectCleanupDependency(f.input.worktreePath,'.rivet-deps'));
+});
+
+test('portable install cannot complete ownership for a replaced dependency root',async t=>{
+ const f=await fixture(t);const {inspectCleanupDependency}=await import('../../src/runtime/legacy-dependency-directory.js');let changed=false;
+ await assert.rejects(bootstrapWorktreeDependencies(f.input,{...f.options,resolveCommandExecutable:async(...args)=>{
+  if(!changed){changed=true;await rename(join(f.input.worktreePath,'.rivet-deps'),join(f.parent,'original-dependencies'));await mkdir(join(f.input.worktreePath,'.rivet-deps'));await writeFile(join(f.input.worktreePath,'.rivet-deps','foreign'),'keep');}
+  return f.options.resolveCommandExecutable(...args);
+ }}));
+ await assert.rejects(inspectCleanupDependency(f.input.worktreePath,'.rivet-deps'));assert.equal(await readFile(join(f.input.worktreePath,'.rivet-deps','foreign'),'utf8'),'keep');
+});
+
+test('portable unknown-stop pending receipt blocks retry and cleanup even before directory creation',async t=>{
+ const f=await fixture(t);const {beginLegacyDependencyInstall,abandonLegacyDependencyInstall,inspectCleanupDependency}=await import('../../src/runtime/legacy-dependency-directory.js');
+ const owner=await beginLegacyDependencyInstall(f.input.worktreePath,'.rivet-deps');await abandonLegacyDependencyInstall(owner);
+ await assert.rejects(bootstrapWorktreeDependencies(f.input,f.options),/unsafe/);await assert.rejects(inspectCleanupDependency(f.input.worktreePath,'.rivet-deps'));await assert.rejects(access(join(f.input.worktreePath,'.rivet-deps')));
+});
+
+test('portable known-stopped failed install retries the same owned directory safely',async t=>{
+ const script='const fs=require("node:fs");const p=".rivet-deps/attempt";if(!fs.existsSync(p)){fs.writeFileSync(p,"retry");process.exit(1)}';
+ const f=await fixture(t,[{cwd:'.',argv:['node','-e',script]}]);f.input.dependencies.provides=[];
+ const {inspectCleanupDependency}=await import('../../src/runtime/legacy-dependency-directory.js');
+ assert.equal((await bootstrapWorktreeDependencies(f.input,f.options)).status,'failed');await assert.rejects(inspectCleanupDependency(f.input.worktreePath,'.rivet-deps'));
+ assert.equal((await bootstrapWorktreeDependencies(f.input,f.options)).status,'ready');assert.equal((await inspectCleanupDependency(f.input.worktreePath,'.rivet-deps')).name,'.rivet-deps');
+});

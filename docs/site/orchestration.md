@@ -4,7 +4,7 @@ Managed orchestration coordinates approved tasks on one machine through the norm
 
 ## Scope
 
-Managed orchestration adds approved model/effort routing, bounded session replacement, shared resource admission and dependency-aware work within a task. Independent work can run concurrently when the approved plan and role capacities allow it. Plans without explicit work dependencies retain serial execution. Opt-in multi-task verification batches check selected task heads in an isolated combined candidate through `rivet task verify --batch`; their reports are advisory and preserve each task’s separate verification and delivery approval. Completed-work cleanup offers a read-only preview and explicit confirmation before removing eligible Worker checkouts. Automatic retention is not yet available.
+Managed orchestration adds approved model/effort routing, bounded session replacement, shared resource admission and dependency-aware work within a task. Independent work can run concurrently when the approved plan and role capacities allow it. Plans without explicit work dependencies retain serial execution. Opt-in multi-task verification batches check selected task heads in an isolated combined candidate through `rivet task verify --batch`; their reports are advisory and preserve each task’s separate verification and delivery approval. Completed-work cleanup offers a read-only preview and explicit confirmation before removing eligible Worker checkouts. Optional retention uses a separately approved policy during foreground execution.
 
 Default ceilings are four active tasks, four agent executions, one heavy verification and one dependency installation. These are cooperative limits for participating Rivet processes. They do not measure or control unrelated applications. Approved project limits apply across active runs in the same project, while run limits may lower them further. Stricter limits from an active run remain in force until its held work settles; other projects retain their own limits. Task deadlines remain independent.
 
@@ -161,13 +161,17 @@ The successor case preserves dirty work without repeating dependency installatio
 
 ### Completed-work cleanup
 
-Run `rivet task cleanup --preview` to inspect owned Worker checkouts for a selected task. Completed or cancelled tasks need recorded proof that the owner stopped, an unchanged checkout identity, a preserved branch and a clean checkout, including ignored dependency and build files. Unsafe or unproven checkouts are retained with a reason.
+Run `rivet task cleanup --preview` to inspect owned Worker checkouts for a selected task. Completed or cancelled tasks need recorded proof that the owner stopped, an unchanged checkout identity, a preserved branch and a clean checkout. Protected Rivet install receipts permit removal of the exact owned `node_modules` and `.rivet-deps` directories; tracked files or unknown artifacts prevent removal. Unsafe or unproven checkouts are retained with a reason.
 
 The preview removes nothing and is not approval for later deletion. Run `rivet task cleanup` to display the exact eligible checkout paths, branches and commits, then confirm removal interactively. Declining keeps everything. Noninteractive calls cannot approve removal.
 
 Rivet rechecks the task, stopped owner generation, reservation, checkout identity, branch tip and clean working tree while holding the task and runtime locks. Removal preserves branches, commits and task evidence. A private journal records each approved checkout before removal, so an interrupted operation can be inspected and explicitly retried without adopting a replacement directory. Removed checkouts remain visible as removed with their branches preserved.
 
-Integration and verification candidate checkouts are retained. Checkouts containing ignored build or dependency artifacts are retained, including Rivet-owned dependencies; this first manual removal path does not force-delete artifacts. Automatic retention is not yet available.
+Integration and verification candidate checkouts are retained. Unknown ignored files, build outputs, foreign dependency directories, and older `.rivet-deps` directories with only a checkout marker are retained. Cleanup never deletes branch refs, commits, task evidence or global caches. The preview lists each protected dependency directory and its receipt identity. Interrupted artifact removal is journaled; a replacement directory cannot inherit the old approval.
+
+To approve future cleanup separately, run `rivet task cleanup --retention=7d` (1–365 days). The confirmation covers this canonical project, its current configuration, eligible Worker checkouts and the two protected dependency roots. Declining changes nothing; `rivet task cleanup --retention=off` revokes approval. Configuration or project identity changes suspend the policy until you approve it again.
+
+Retention is disabled by default. Approved retention runs only during foreground task resume/watch or host prepare/next-action operations. Discovery reads at most 256 task records; a sweep attempts removal from at most four eligible old tasks and eight checkouts, with a time limit checked between removals. Already-cleaned and ineligible tasks do not consume that removal allowance. Status and cleanup preview never delete anything. There is no background daemon. Busy owners, incomplete installer receipts and unknown contents remain untouched; foreground execution reports retained or removed outcomes.
 
 ### Verify selected tasks together
 

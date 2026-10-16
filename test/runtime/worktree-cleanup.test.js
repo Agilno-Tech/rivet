@@ -20,10 +20,10 @@ async function fixture(t,{parallel=false}={}){
  const parent=await realpath(await mkdtemp(join(tmpdir(),'rivet-cleanup-'))),root=join(parent,'project');
  t.after(()=>rm(parent,{recursive:true,force:true}));await mkdir(root);
  await cp(new URL('../fixtures/config/valid/.rivet/',import.meta.url),join(root,'.rivet'),{recursive:true});
- const policyPath=join(root,'.rivet','orchestration.yaml');const policy=YAML.parse(await readFile(policyPath,'utf8'));policy.executionPolicy=managedPolicy();if(parallel)for(const role of policy.roles)if(['worker','manager'].includes(role.kind))role.capacity=2;await writeFile(policyPath,YAML.stringify(policy));
+ const policyPath=join(root,'.rivet','orchestration.yaml');const policy=YAML.parse(await readFile(policyPath,'utf8'));policy.executionPolicy=managedPolicy();if(typeof parallel==='number'){policy.executionPolicy.limits.workersPerTask=parallel;policy.executionPolicy.limits.agentExecutions=parallel;}if(parallel)for(const role of policy.roles){if(['worker','manager'].includes(role.kind))role.capacity=typeof parallel==='number'?parallel:2;if(typeof parallel==='number'&&role.kind==='worker')role.budget={timeMinutes:1,tokenLimit:1000,costUsd:1,taskLimit:1};}await writeFile(policyPath,YAML.stringify(policy));
  await writeFile(join(root,'.gitignore'),'ignored/\n');await git(root,'init','-q','-b','main');await git(root,'add','.');await git(root,'-c','user.name=Test','-c','user.email=test@example.invalid','commit','-qm','fixture');
  const gitClient=await createGitClient({gitExecutable:await realpath('/usr/bin/git')});const workflow=createFeatureWorkflow({gitClient,now:()=>NOW,protocolsFor:async()=>[],planningClientFor:async()=>{throw Error('no provider');},executeFeature:async()=>{throw Error('no provider');}});
- const proposal=await workflow.propose({project:root,source:{kind:'inline',value:'# Add agenda\n\n## Acceptance criteria\n\n- Add agenda.\n'},client:'host',decomposition:{schemaVersion:1,kind:'agilno.feature-decomposition',workItems:parallel?['one','two'].map(id=>({id,dependencies:[],objective:`Add ${id}.`,ownedPaths:[`${id}.js`],acceptanceCriterionIndexes:[1]})):[{objective:'Add agenda.',ownedPaths:['agenda.js'],acceptanceCriterionIndexes:[1]}]}});
+ const proposal=await workflow.propose({project:root,source:{kind:'inline',value:'# Add agenda\n\n## Acceptance criteria\n\n- Add agenda.\n'},client:'host',decomposition:{schemaVersion:1,kind:'agilno.feature-decomposition',workItems:parallel?Array.from({length:typeof parallel==='number'?parallel:2},(_,i)=>`item${i}`).map(id=>({id,dependencies:[],objective:`Add ${id}.`,ownedPaths:[`${id}.js`],acceptanceCriterionIndexes:[1]})):[{objective:'Add agenda.',ownedPaths:['agenda.js'],acceptanceCriterionIndexes:[1]}]}});
  const approved=await workflow.start({project:root,runId:proposal.runId,expectedVersion:proposal.version,proposalDigest:proposal.proposalDigest});
  const execution=createHostExecution({gitClient,now:()=>NOW});const prepared=await execution.prepare({project:root,runId:approved.runId,expectedRunVersion:approved.version});
  const next=await execution.nextAction({project:root,runId:approved.runId,expectedRuntimeVersion:prepared.runtimeVersion});
@@ -139,4 +139,115 @@ test('fresh partial-cleanup approval cannot adopt a changed still-present pendin
  const fresh=await previewTaskWorktreeCleanup({projectRoot:f.root,runId:f.runId},{gitClient:f.gitClient});assert.equal(fresh.checkouts[1].eligible,true);assert.notEqual(fresh.checkouts[1].commit,pending.commit);
  await assert.rejects(applyTaskWorktreeCleanup({projectRoot:f.root,runId:f.runId,preview:fresh,approval:await confirmTaskWorktreeCleanup(fresh,async()=>true)},{gitClient:f.gitClient}),/changed/);
  assert.equal(await readFile(join(pending.path,'new.js'),'utf8'),'changed after partial cleanup');
+});
+
+test('cleanup removes protected regenerable dependencies but preserves external symlink targets and evidence',async t=>{
+ const f=await fixture(t);
+ const {beginLegacyDependencyInstall,finishLegacyDependencyInstall}=await import('../../src/runtime/legacy-dependency-directory.js');
+ await git(f.root,'config','core.excludesFile',join(f.root,'.git','cleanup-ignore'));
+ await writeFile(join(f.root,'.git','cleanup-ignore'),'node_modules/\n');
+ const owner=await beginLegacyDependencyInstall(f.path);await mkdir(join(f.path,'node_modules'));
+ const outside=join(f.root,'keep');await writeFile(outside,'precious');await symlink(outside,join(f.path,'node_modules','outside'));
+ await finishLegacyDependencyInstall(owner,true);
+ const before=await git(f.root,'show-ref');const preview=await previewTaskWorktreeCleanup({projectRoot:f.root,runId:f.runId},{gitClient:f.gitClient});
+ assert.equal(preview.checkouts[0].eligible,true);assert.equal(preview.checkouts[0].artifacts[0].name,'node_modules');
+ await applyTaskWorktreeCleanup({projectRoot:f.root,runId:f.runId,preview,approval:await confirmTaskWorktreeCleanup(preview,async()=>true)},{gitClient:f.gitClient});
+ assert.equal(await readFile(outside,'utf8'),'precious');assert.equal(await git(f.root,'show-ref'),before);await assert.rejects(lstat(f.path),{code:'ENOENT'});
+});
+
+test('pending installer and tracked regenerable roots retain checkout',async t=>{
+ const f=await fixture(t);const deps=await import('../../src/runtime/legacy-dependency-directory.js');
+ const owner=await deps.beginLegacyDependencyInstall(f.path);await deps.abandonLegacyDependencyInstall(owner);
+ let preview=await previewTaskWorktreeCleanup({projectRoot:f.root,runId:f.runId},{gitClient:f.gitClient});assert.equal(preview.checkouts[0].eligible,false);
+ const g=await fixture(t);await mkdir(join(g.path,'node_modules'));await writeFile(join(g.path,'node_modules','tracked'),'keep');await git(g.path,'add','.');await git(g.path,'-c','user.name=Test','-c','user.email=test@example.invalid','commit','-qm','tracked artifact');
+ preview=await previewTaskWorktreeCleanup({projectRoot:g.root,runId:g.runId},{gitClient:g.gitClient});assert.equal(preview.checkouts[0].eligible,false);assert.equal(await readFile(join(g.path,'node_modules','tracked'),'utf8'),'keep');
+});
+
+test('dependency installer locks fence cleanup even when directory is absent',async t=>{
+ const f=await fixture(t);const deps=await import('../../src/runtime/legacy-dependency-directory.js');
+ const preview=await previewTaskWorktreeCleanup({projectRoot:f.root,runId:f.runId},{gitClient:f.gitClient});
+ const owner=await deps.beginLegacyDependencyInstall(f.path,'.rivet-deps');
+ await assert.rejects(applyTaskWorktreeCleanup({projectRoot:f.root,runId:f.runId,preview,approval:await confirmTaskWorktreeCleanup(preview,async()=>true)},{gitClient:f.gitClient}));
+ await deps.abandonLegacyDependencyInstall(owner);assert.ok((await lstat(f.path)).isDirectory());
+});
+
+test('retention is disabled by default, requires separate approval, honors age and revocation',async t=>{
+ const f=await fixture(t);const {configureWorktreeRetention,sweepWorktreeRetention}=await import('../../src/runtime/worktree-retention.js');
+ const options={gitClient:f.gitClient,now:()=>Date.parse(NOW)+8*86400000};
+ assert.equal((await sweepWorktreeRetention(f.root,options)).status,'disabled');
+ assert.equal((await configureWorktreeRetention({projectRoot:f.root,retention:'7d'},{confirm:async()=>false})).status,'declined');
+ assert.equal((await sweepWorktreeRetention(f.root,options)).status,'disabled');
+ await configureWorktreeRetention({projectRoot:f.root,retention:'7d'},{confirm:async policy=>{assert.deepEqual(policy.roots,['node_modules','.rivet-deps']);return true;}});
+ assert.equal((await sweepWorktreeRetention(f.root,{...options,now:()=>Date.parse(NOW)+6*86400000})).removed.length,0);
+ await configureWorktreeRetention({projectRoot:f.root,retention:'off'});
+ assert.equal((await sweepWorktreeRetention(f.root,options)).status,'disabled');
+ await configureWorktreeRetention({projectRoot:f.root,retention:'7d'},{confirm:async()=>true});
+ const refs=await git(f.root,'show-ref');const result=await sweepWorktreeRetention(f.root,options);assert.equal(result.removed.length,1,JSON.stringify(result));assert.equal(await git(f.root,'show-ref'),refs);
+});
+
+test('retention configuration drift suspends removal and CLI approval is separate from one-time cleanup',async t=>{
+ const f=await fixture(t);const {configureWorktreeRetention,sweepWorktreeRetention}=await import('../../src/runtime/worktree-retention.js');
+ const output={log(){},error(){},json(){}};
+ const options={resolveCommandExecutable:async()=>realpath('/usr/bin/git'),cwd:()=>f.root,output,terminalIsInteractive:()=>true,confirmWorktreeCleanup:async()=>{throw Error('wrong approval');},confirmWorktreeRetention:async()=>false};
+ assert.equal(await main(['task','cleanup','--retention=7d'],options),0);
+ assert.notEqual(await main(['task','cleanup','--retention=7d'],{...options,terminalIsInteractive:()=>false}),0);
+ assert.equal(await main(['task','cleanup','--retention=7d'],{...options,confirmWorktreeRetention:async()=>true}),0);
+ const file=join(f.root,'.rivet','orchestration.yaml'),policy=YAML.parse(await readFile(file,'utf8'));policy.executionPolicy.sessions.maxMinutes+=1;await writeFile(file,YAML.stringify(policy));
+ const result=await sweepWorktreeRetention(f.root,{gitClient:f.gitClient,now:()=>Date.parse(NOW)+8*86400000});assert.equal(result.removed.length,0);assert.equal(result.status,'retained');assert.ok((await lstat(f.path)).isDirectory());
+ assert.equal(await main(['task','cleanup','--retention=off'],{...options,terminalIsInteractive:()=>false}),0);
+ await assert.rejects(configureWorktreeRetention({projectRoot:f.root,retention:'0d'},{confirm:async()=>true}));
+});
+
+test('application status never runs retention but foreground host execution does',async t=>{
+ const f=await fixture(t);const {configureWorktreeRetention}=await import('../../src/runtime/worktree-retention.js');const {createRivetApplication}=await import('../../src/runtime/application.js');
+ await configureWorktreeRetention({projectRoot:f.root,retention:'7d'},{confirm:async()=>true});
+ const app=createRivetApplication({env:{...process.env,RIVET_GIT_EXECUTABLE:await realpath('/usr/bin/git')},now:()=>new Date(Date.parse(NOW)+8*86400000).toISOString()});
+ await app.work.status({project:f.root,runId:f.runId});assert.ok((await lstat(f.path)).isDirectory());
+ // This task is terminal, so preparation itself can reject after the foreground sweep.
+ await app.work.prepare({project:f.root,runId:f.runId,expectedRunVersion:f.run.version}).catch(()=>{});
+ await assert.rejects(lstat(f.path),{code:'ENOENT'});
+});
+
+test('bounded cleanup makes progress over successive approvals and never repeats old removals',async t=>{
+ const f=await fixture(t,{parallel:true});
+ let preview=await previewTaskWorktreeCleanup({projectRoot:f.root,runId:f.runId},{gitClient:f.gitClient});assert.equal(preview.checkouts.filter(v=>v.eligible).length,2);
+ let result=await applyTaskWorktreeCleanup({projectRoot:f.root,runId:f.runId,preview,approval:await confirmTaskWorktreeCleanup(preview,async()=>true,{maxRemovals:1})},{gitClient:f.gitClient});assert.equal(result.checkouts.filter(v=>v.status==='removed').length,1);
+ preview=await previewTaskWorktreeCleanup({projectRoot:f.root,runId:f.runId},{gitClient:f.gitClient});assert.equal(preview.checkouts.filter(v=>v.eligible).length,1);
+ result=await applyTaskWorktreeCleanup({projectRoot:f.root,runId:f.runId,preview,approval:await confirmTaskWorktreeCleanup(preview,async()=>true,{maxRemovals:1})},{gitClient:f.gitClient});assert.equal(result.checkouts.filter(v=>v.status==='removed').length,1);
+ const {configureWorktreeRetention,sweepWorktreeRetention}=await import('../../src/runtime/worktree-retention.js');await configureWorktreeRetention({projectRoot:f.root,retention:'1d'},{confirm:async()=>true});
+ assert.deepEqual((await sweepWorktreeRetention(f.root,{gitClient:f.gitClient,now:()=>Date.parse(NOW)+8*86400000})).removed,[]);
+});
+
+test('partial artifact deletion resumes only the approved inode and preserves replacement content',async t=>{
+ const f=await fixture(t);const deps=await import('../../src/runtime/legacy-dependency-directory.js');
+ await git(f.root,'config','core.excludesFile',join(f.root,'.git','cleanup-ignore'));await writeFile(join(f.root,'.git','cleanup-ignore'),'node_modules/\n');
+ const owner=await deps.beginLegacyDependencyInstall(f.path);await mkdir(join(f.path,'node_modules'));await writeFile(join(f.path,'node_modules','file'),'rebuild');await deps.finishLegacyDependencyInstall(owner);
+ let preview=await previewTaskWorktreeCleanup({projectRoot:f.root,runId:f.runId},{gitClient:f.gitClient});let calls=0;
+ await assert.rejects(applyTaskWorktreeCleanup({projectRoot:f.root,runId:f.runId,preview,approval:await confirmTaskWorktreeCleanup(preview,async()=>true,{beforeRemoval:async()=>{if(++calls===3)throw Error('stop after artifact');}})},{gitClient:f.gitClient}),/stop after artifact/);
+ await assert.rejects(lstat(join(f.path,'node_modules')),{code:'ENOENT'});
+ await mkdir(join(f.path,'node_modules'));await writeFile(join(f.path,'node_modules','foreign'),'keep');
+ preview=await previewTaskWorktreeCleanup({projectRoot:f.root,runId:f.runId},{gitClient:f.gitClient});assert.equal(preview.checkouts[0].eligible,false);assert.equal(await readFile(join(f.path,'node_modules','foreign'),'utf8'),'keep');
+ await rm(join(f.path,'node_modules'),{recursive:true});
+ preview=await previewTaskWorktreeCleanup({projectRoot:f.root,runId:f.runId},{gitClient:f.gitClient});assert.equal(preview.checkouts[0].eligible,true);
+ await applyTaskWorktreeCleanup({projectRoot:f.root,runId:f.runId,preview,approval:await confirmTaskWorktreeCleanup(preview,async()=>true)},{gitClient:f.gitClient});await assert.rejects(lstat(f.path),{code:'ENOENT'});
+});
+
+test('fresh approved portable install is reclaimable with its protected receipt',async t=>{
+ const f=await fixture(t);const {bootstrapWorktreeDependencies}=await import('../../src/runtime/worktree-bootstrap.js');
+ const input={projectRoot:f.root,worktreePath:f.path,expectedCommit:await git(f.path,'rev-parse','HEAD'),expectedBranch:await git(f.path,'branch','--show-current'),dependencies:{inputs:['.gitignore'],provides:[],steps:[{cwd:'.',argv:['node','-e','require("node:fs").writeFileSync(".rivet-deps/cache", "regenerable")']}]}};
+ assert.equal((await bootstrapWorktreeDependencies(input,{gitClient:f.gitClient,confirm:async()=>true,resolveCommandExecutable:async()=>realpath(process.execPath)})).status,'ready');
+ const preview=await previewTaskWorktreeCleanup({projectRoot:f.root,runId:f.runId},{gitClient:f.gitClient});assert.equal(preview.checkouts[0].eligible,true);assert.equal(preview.checkouts[0].artifacts[0].name,'.rivet-deps');
+ await applyTaskWorktreeCleanup({projectRoot:f.root,runId:f.runId,preview,approval:await confirmTaskWorktreeCleanup(preview,async()=>true)},{gitClient:f.gitClient});await assert.rejects(lstat(f.path),{code:'ENOENT'});
+});
+
+test('retention makes bounded progress on a task with more than eight Worker checkouts',async t=>{
+ const f=await fixture(t,{parallel:9});const {configureWorktreeRetention,sweepWorktreeRetention}=await import('../../src/runtime/worktree-retention.js');
+ const initial=await previewTaskWorktreeCleanup({projectRoot:f.root,runId:f.runId},{gitClient:f.gitClient});assert.equal(initial.checkouts.filter(v=>v.eligible).length,9);
+ await configureWorktreeRetention({projectRoot:f.root,retention:'1d'},{confirm:async()=>true});const seen=new Set();
+ for(let i=0;i<10&&seen.size<9;i++){
+  const result=await sweepWorktreeRetention(f.root,{gitClient:f.gitClient,now:()=>Date.parse(NOW)+8*86400000});assert.ok(result.removed.length<=8);assert.ok(result.removed.length>0,JSON.stringify(result));
+  for(const path of result.removed){assert.equal(seen.has(path),false);seen.add(path);}
+ }
+ assert.equal(seen.size,9);
+ assert.deepEqual((await sweepWorktreeRetention(f.root,{gitClient:f.gitClient,now:()=>Date.parse(NOW)+8*86400000})).removed,[]);
 });

@@ -482,6 +482,80 @@
       ]
     },
     {
+      "id": "orchestration-owned-artifact-cleanup",
+      "file": "test/runtime/worktree-cleanup.test.js",
+      "criteria": [
+        {
+          "id": "owned-roots-external-links",
+          "test": "cleanup removes protected regenerable dependencies but preserves external symlink targets and evidence"
+        },
+        {
+          "id": "pending-and-tracked-retained",
+          "test": "pending installer and tracked regenerable roots retain checkout"
+        },
+        {
+          "id": "absent-root-install-lock",
+          "test": "dependency installer locks fence cleanup even when directory is absent"
+        },
+        {
+          "id": "partial-root-recovery",
+          "test": "partial artifact deletion resumes only the approved inode and preserves replacement content"
+        },
+        {
+          "id": "portable-install-to-cleanup",
+          "test": "fresh approved portable install is reclaimable with its protected receipt"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-retention",
+      "file": "test/runtime/worktree-cleanup.test.js",
+      "criteria": [
+        {
+          "id": "separate-authority-age-revoke",
+          "test": "retention is disabled by default, requires separate approval, honors age and revocation"
+        },
+        {
+          "id": "configuration-and-cli-approval",
+          "test": "retention configuration drift suspends removal and CLI approval is separate from one-time cleanup"
+        },
+        {
+          "id": "execution-only-hook",
+          "test": "application status never runs retention but foreground host execution does"
+        },
+        {
+          "id": "bounded-continuation",
+          "test": "retention makes bounded progress on a task with more than eight Worker checkouts"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-portable-ownership",
+      "file": "test/runtime/portable-dependencies.test.js",
+      "criteria": [
+        {
+          "id": "protected-install-receipt",
+          "test": "fresh portable bootstrap establishes protected cleanup receipt; self marker alone does not"
+        },
+        {
+          "id": "legacy-marker-not-authority",
+          "test": "legacy portable marker is never promoted to cleanup authority during a later install"
+        },
+        {
+          "id": "reject-replaced-root",
+          "test": "portable install cannot complete ownership for a replaced dependency root"
+        },
+        {
+          "id": "unknown-stop-fenced",
+          "test": "portable unknown-stop pending receipt blocks retry and cleanup even before directory creation"
+        },
+        {
+          "id": "stopped-failure-retry",
+          "test": "portable known-stopped failed install retries the same owned directory safely"
+        }
+      ]
+    },
+    {
       "id": "orchestration-telemetry",
       "file": "test/runtime/session-capabilities.test.js",
       "criteria": [

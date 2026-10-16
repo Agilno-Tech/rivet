@@ -140,6 +140,7 @@ Usage:
   rivet task review [--phase=plan|final] [--input=<report.json>] [--project=<path>] [--run=<id>]
   rivet task deps [--project=<path>] [--run=<id>]
   rivet task cleanup [--preview] [--project=<path>] [--run=<id>]
+  rivet task cleanup --retention=<1d..365d|off> [--project=<path>]
   rivet protocols add <slug> [--from=<path>] [--project=<path>] [--json]
   rivet protocols import <slug> --from=<path> [--project=<path>] [--json]
   rivet protocols validate [<slug>] [--project=<path>] [--json]
@@ -234,10 +235,16 @@ async function defaultConfirmModelDelegation(_preview, options = {}) {
   finally { options.signal?.removeEventListener('abort', abort); readline.close(); }
 }
 
+async function defaultConfirmWorktreeRetention() {
+  const readline=createInterface({input:process.stdin,output:process.stdout});
+  try {return /^(?:y|yes)$/i.test(String(await readline.question('Approve this future automatic cleanup policy? [y/N] ')).trim());}
+  catch{return false;}finally{readline.close();}
+}
+
 async function defaultConfirmWorktreeCleanup() {
   const readline = createInterface({input:process.stdin,output:process.stdout});
   try {
-    const answer = await readline.question('Remove exactly the eligible checkouts displayed above, preserving their branches? [y/N] ');
+    const answer = await readline.question('Remove exactly the eligible checkouts and owned artifacts displayed above, preserving their branches? [y/N] ');
     return /^(?:y|yes)$/i.test(String(answer).trim());
   } catch { return false; }
   finally { readline.close(); }
@@ -305,6 +312,7 @@ function resolveDependencies(overrides = {}) {
     delivery: overrides.delivery,
     confirmOverwrite: overrides.confirmOverwrite ?? defaultConfirmOverwrite,
     confirmFeatureActivation: overrides.confirmFeatureActivation ?? defaultConfirmFeatureActivation,
+    confirmWorktreeRetention: overrides.confirmWorktreeRetention ?? defaultConfirmWorktreeRetention,
     confirmWorktreeCleanup: overrides.confirmWorktreeCleanup ?? defaultConfirmWorktreeCleanup,
     confirmDependencyInstall: overrides.confirmDependencyInstall ?? defaultConfirmDependencyInstall,
     setupRemotePrompt: overrides.setupRemotePrompt,
