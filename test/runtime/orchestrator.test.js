@@ -2233,3 +2233,98 @@ for(const elapsed of [2,11])test(`managed host final result cannot erase ${elaps
  assert.equal(instance.inspect().usage.timeMinutes,elapsed);assert.equal(instance.inspect().usage.tokens,5);
  if(elapsed>10){assert.deepEqual(instance.inspect().evidence,[]);assert.equal(instance.inspect().terminal,'budget-exhausted');}
 });
+
+test('completion-driven advance starts a dependent while an unrelated worker remains active', async () => {
+  const initial = memoryInstance({activated:true}).inspect();
+  initial.graph.nodes.find(n => n.id === 'integration').dependencies = ['api'];
+  const instance = memoryInstance(initial);
+  let finishSlow;
+  const slow = new Promise(resolve => {finishSlow=resolve;});
+  const started=[];
+  const runtime=createOrchestrator({now:()=>NOW,launchFor,reservationId:id=>`${id}-lease`,client:{launch:async contract=>{
+    started.push(contract.nodeId);
+    if(contract.nodeId==='design')await slow;
+    return {version:1,status:'success',output:{summary:'Done',evidence:contract.nodeId==='integration'?['integration-commit','integration-test','integration-journey']:[`${contract.nodeId}-commit`,`${contract.nodeId}-test`]},usage:{tokens:1,costUsd:0}};
+  }}});
+  try {
+    const first=await runtime.advance(instance,{expectedVersion:0,maxActiveNodes:2});
+    assert.equal(first.pending,1);
+    assert.equal(instance.inspect().graph.nodes.find(n=>n.id==='design').status,'running');
+    const second=await runtime.advance(instance,{expectedVersion:first.version,maxActiveNodes:2});
+    assert.ok(started.includes('integration'));
+    assert.equal(second.pending,1);
+    finishSlow();
+    const final=await runtime.advance(instance,{expectedVersion:second.version,maxActiveNodes:2});
+    assert.equal(final.pending,0);
+  } finally {finishSlow();}
+});
+
+test('completion-driven advance aborts and drains its remaining workers on a blocked result', async () => {
+  const instance=memoryInstance({activated:true});
+  let slowStarted, aborted=false;
+  const started=new Promise(resolve=>{slowStarted=resolve;});
+  const runtime=createOrchestrator({now:()=>NOW,launchFor,reservationId:id=>`${id}-lease`,client:{launch:async (contract,{signal})=>{
+    if(contract.nodeId==='api') {
+      await started;
+      return {version:1,status:'blocked',output:{summary:'Needs correction',evidence:[]},usage:{tokens:1,costUsd:0}};
+    }
+    slowStarted();
+    await new Promise(resolve=>signal.addEventListener('abort',()=>{aborted=true;resolve();},{once:true}));
+    const {AgentContractError}=await import('../../src/clients/contract.js');
+    throw new AgentContractError('aborted');
+  }}});
+  const result=await runtime.advance(instance,{expectedVersion:0,maxActiveNodes:2});
+  assert.equal(aborted,true);
+  assert.equal(result.pending,0);
+  assert.equal(result.terminal,'blocked');
+});
+
+test('runtime forwards approved owner and parent capacities to its existing scheduler', async () => {
+  const instance=memoryInstance({activated:true});
+  const runtime=createOrchestrator({now:()=>NOW,launchFor,reservationId:id=>`${id}-lease`,client:createFakeClient({scripts:await scripted('parallel-success')})});
+  const result=await runtime.tick(instance,{expectedVersion:0,maxActiveNodes:2,childCapacityByParent:{'manager-plan':1},capacityByOwner:{'api-worker':1}});
+  assert.deepEqual(result.launched,['api']);
+});
+
+test('a later advance signal cancels and drains workers started by an earlier advance', async () => {
+  const instance=memoryInstance({activated:true});
+  let releaseSlow, aborted=false;
+  const runtime=createOrchestrator({now:()=>NOW,launchFor,reservationId:id=>`${id}-lease`,client:{launch:async(contract,{signal})=>{
+    if(contract.nodeId==='design')await new Promise(resolve=>{
+      releaseSlow=resolve;
+      signal.addEventListener('abort',()=>{aborted=true;resolve();},{once:true});
+    });
+    return {version:1,status:'success',output:{summary:'Done',evidence:[`${contract.nodeId}-commit`,`${contract.nodeId}-test`]},usage:{tokens:1,costUsd:0}};
+  }}});
+  const first=await runtime.advance(instance,{expectedVersion:0,maxActiveNodes:2});
+  const controller=new AbortController();
+  const next=runtime.advance(instance,{expectedVersion:first.version,maxActiveNodes:2,childCapacityByParent:{'manager-plan':1},signal:controller.signal});
+  const timer=setTimeout(()=>controller.abort(),10);
+  let timeout;
+  try {
+    const result=await Promise.race([next,new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('Cancellation did not drain existing worker')),1000);})]);
+    assert.equal(aborted,true);
+    assert.equal(result.pending,0);
+  } finally {clearTimeout(timer);clearTimeout(timeout);releaseSlow();await next;}
+});
+
+test('advance preserves late durable worker failures for subsequent advancement', async () => {
+  const instance=memoryInstance({activated:true});
+  const originalCommit=instance.commit;
+  let inject=false;
+  instance.commit=async(version,next)=>{
+    if(inject&&next.graph.nodes.find(n=>n.id==='design').status==='completed')throw Error('durable-write-failed');
+    return originalCommit(version,next);
+  };
+  let release;
+  const wait=new Promise(resolve=>{release=resolve;});
+  const runtime=createOrchestrator({now:()=>NOW,launchFor,reservationId:id=>`${id}-lease`,client:{launch:async contract=>{
+    if(contract.nodeId==='design')await wait;
+    return {version:1,status:'success',output:{summary:'Done',evidence:[`${contract.nodeId}-commit`,`${contract.nodeId}-test`]},usage:{tokens:1,costUsd:0}};
+  }}});
+  await runtime.advance(instance,{expectedVersion:0,maxActiveNodes:2});
+  inject=true;release();
+  await new Promise(resolve=>setImmediate(resolve));
+  await assert.rejects(runtime.advance(instance,{expectedVersion:instance.inspect().version,maxActiveNodes:2}),/durable-write-failed/);
+  await assert.rejects(runtime.advance(instance,{expectedVersion:instance.inspect().version,maxActiveNodes:2}),/durable-write-failed/);
+});

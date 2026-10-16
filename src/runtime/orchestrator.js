@@ -547,6 +547,7 @@ export function createOrchestrator(input) {
   const runTransaction = (instance, expectedVersion, operation) => transaction(instance, expectedVersion, operation, retryDelaysMs);
   const controllers = new Map();
   const inflight = new Map();
+  const advancementFailures = new Map();
   const resultQueues = new Map();
 
   async function settleApprovalFailure(instance, expectedVersion, claim, persisted) {
@@ -991,7 +992,12 @@ export function createOrchestrator(input) {
   }
 
   async function tickInternal(instance, inputOptions, launchWork) {
-    const options = captureOptions(inputOptions, ['expectedVersion', 'maxActiveNodes', 'signal'], ['expectedVersion']);
+    if (launchWork === 'first' && advancementFailures.has(instance.id)) {
+      for (const [key, controller] of controllers) if (key.startsWith(`${instance.id}:`)) controller.abort();
+      await Promise.allSettled([...inflight.entries()].filter(([key]) => key.startsWith(`${instance.id}:`)).map(([,promise]) => promise));
+      throw advancementFailures.get(instance.id);
+    }
+    const options = captureOptions(inputOptions, ['expectedVersion', 'maxActiveNodes', 'capacityByOwner', 'childCapacityByParent', 'signal'], ['expectedVersion']);
     const maxActiveNodes = options.maxActiveNodes ?? 4;
     try { if (options.signal !== undefined && !(options.signal instanceof AbortSignal)) fail('invalid-runtime-input'); }
     catch { fail('invalid-runtime-input'); }
@@ -1036,7 +1042,7 @@ export function createOrchestrator(input) {
       deriveTerminal(state, config.now());
       if (TERMINAL.has(state.terminal)) return state;
       const recoverable = state.graph.nodes.filter(node => node.status === 'reserved' && ['committed', 'prepared'].includes(state.launchIntents[node.id]?.status));
-      const scheduledIds = scheduleReadyNodes(state.graph, { maxActiveNodes }).filter(id => {
+      const scheduledIds = scheduleReadyNodes(state.graph, { maxActiveNodes, ...(options.capacityByOwner === undefined ? {} : {capacityByOwner:options.capacityByOwner}), ...(options.childCapacityByParent === undefined ? {} : {childCapacityByParent:options.childCapacityByParent}) }).filter(id => {
         const node = state.graph.nodes.find(item => item.id === id); const intent = state.launchIntents[id];
         const retryAtMs = state.retryAtMs?.[id] ?? intent?.retryAtMs;
         return !node.approvalGate && (!Number.isSafeInteger(retryAtMs) || retryAtMs <= config.now());
@@ -1089,15 +1095,50 @@ export function createOrchestrator(input) {
       .filter(node => node.status === 'reserved' && ['committed', 'prepared'].includes(committed.launchIntents[node.id]?.status))
       .sort((left, right) => committed.launchIntents[left.id].eventSequence - committed.launchIntents[right.id].eventSequence)
       .slice(0, maxActiveNodes);
-    if (launchWork) await Promise.all(launches.map(node => launch(instance, committed.launchIntents[node.id], node, options.signal)));
+    if (launchWork === 'first') {
+      // Observe every launched promise even when returning after the first result.
+      const started = launches.map(node => launch(instance, committed.launchIntents[node.id], node, options.signal).catch(error => {
+        if (!advancementFailures.has(instance.id)) advancementFailures.set(instance.id, error);
+        throw error;
+      }));
+      void Promise.allSettled(started);
+      const active = [...inflight.entries()].filter(([key]) => key.startsWith(`${instance.id}:`)).map(([,promise]) => promise);
+      const abortActive = () => {
+        for (const [key, controller] of controllers) if (key.startsWith(`${instance.id}:`)) controller.abort();
+      };
+      options.signal?.addEventListener('abort', abortActive, {once:true});
+      try {
+        if (TERMINAL.has(committed.terminal) || options.signal?.aborted) {
+          abortActive();
+          await Promise.allSettled(active);
+        }
+        if (active.length) await Promise.race(active);
+      }
+      catch (error) {
+        abortActive();
+        await Promise.allSettled(active);
+        throw error;
+      } finally { options.signal?.removeEventListener('abort', abortActive); }
+    } else if (launchWork) await Promise.all(launches.map(node => launch(instance, committed.launchIntents[node.id], node, options.signal)));
     const lock = await instance.acquire();
     let final;
     try { final = clone(await instance.read()); } finally { await lock.release(); }
-    return Object.freeze({ version: final.version, terminal: final.terminal, launched: Object.freeze(launches.map(node => node.id).sort()) });
+    if (launchWork === 'first' && (TERMINAL.has(final.terminal) || options.signal?.aborted)) {
+      for (const [key, controller] of controllers) if (key.startsWith(`${instance.id}:`)) controller.abort();
+      await Promise.allSettled([...inflight.entries()].filter(([key]) => key.startsWith(`${instance.id}:`)).map(([,promise]) => promise));
+      const settledLock = await instance.acquire();
+      try { final = clone(await instance.read()); } finally { await settledLock.release(); }
+    }
+    return Object.freeze({ version: final.version, terminal: final.terminal, launched: Object.freeze(launches.map(node => node.id).sort()),
+      ...(launchWork === 'first' ? {pending: [...inflight.keys()].filter(key => key.startsWith(`${instance.id}:`)).length} : {}) });
   }
 
   async function tick(instance, inputOptions) {
     return tickInternal(instance, inputOptions, true);
+  }
+
+  async function advance(instance, inputOptions) {
+    return tickInternal(instance, inputOptions, 'first');
   }
 
   async function prepareAction(instance, inputOptions) {
@@ -1268,6 +1309,6 @@ export function createOrchestrator(input) {
 
   async function retryNode(instance, inputOptions) { return recoverRetryNode(instance, inputOptions, { retryPolicy }); }
 
-  const runtime = Object.freeze({ sessionOperation, activate, approveNode, recordHeartbeat, tick, prepareAction, submitAction, retryNode, recoverStalledNode, cancelNode, cancelGoal });
+  const runtime = Object.freeze({ sessionOperation, activate, approveNode, recordHeartbeat, tick, advance, prepareAction, submitAction, retryNode, recoverStalledNode, cancelNode, cancelGoal });
   return runtime;
 }
