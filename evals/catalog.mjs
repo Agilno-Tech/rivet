@@ -99,7 +99,14 @@ export const catalog = {
     scenario('orchestration-cleanup-preview', 'test/runtime/worktree-cleanup.test.js', [
       ['read-only-observation', 'cleanup preview observes exact stopped completed Worker without changing state, refs or files'],
       ['retain-unsafe-checkouts', 'cleanup retains active/failed/blocked tasks, unknown owners, dirt, ignored contents and symlinks'],
-      ['preview-only-interface', 'task cleanup requires preview, selects completed tasks and rejects apply'],
+      ['explicit-approval-interface', 'task cleanup previews completed tasks and requires interactive exact approval'],
+    ]),
+    scenario('orchestration-cleanup-removal', 'test/runtime/worktree-cleanup.test.js', [
+      ['preserve-commits-and-evidence', 'approved cleanup removes only checkout, preserves worker commits and durable evidence, and replay is explicit'],
+      ['approval-capability', 'cleanup rejects copied previews, changed approval and active owners'],
+      ['immediate-identity-check', 'cleanup rechecks after confirmation and rejects changed checkout inode and commit'],
+      ['partial-removal-recovery', 'fresh confirmed preview resumes a partial multi-worker cleanup without original approval objects'],
+      ['reject-replacement-work', 'fresh partial-cleanup approval cannot adopt a changed still-present pending checkout'],
     ]),
     scenario('orchestration-telemetry', 'test/runtime/session-capabilities.test.js', [
       ['literal-arguments', 'bounded selected model and effort become literal argv'],

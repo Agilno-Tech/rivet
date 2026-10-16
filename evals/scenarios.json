@@ -354,8 +354,34 @@
           "test": "cleanup retains active/failed/blocked tasks, unknown owners, dirt, ignored contents and symlinks"
         },
         {
-          "id": "preview-only-interface",
-          "test": "task cleanup requires preview, selects completed tasks and rejects apply"
+          "id": "explicit-approval-interface",
+          "test": "task cleanup previews completed tasks and requires interactive exact approval"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-cleanup-removal",
+      "file": "test/runtime/worktree-cleanup.test.js",
+      "criteria": [
+        {
+          "id": "preserve-commits-and-evidence",
+          "test": "approved cleanup removes only checkout, preserves worker commits and durable evidence, and replay is explicit"
+        },
+        {
+          "id": "approval-capability",
+          "test": "cleanup rejects copied previews, changed approval and active owners"
+        },
+        {
+          "id": "immediate-identity-check",
+          "test": "cleanup rechecks after confirmation and rejects changed checkout inode and commit"
+        },
+        {
+          "id": "partial-removal-recovery",
+          "test": "fresh confirmed preview resumes a partial multi-worker cleanup without original approval objects"
+        },
+        {
+          "id": "reject-replacement-work",
+          "test": "fresh partial-cleanup approval cannot adopt a changed still-present pending checkout"
         }
       ]
     },
