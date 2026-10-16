@@ -247,6 +247,18 @@ export function acceptedIntegrationPaths(featurePaths) {
   }));
 }
 
+export function integrationCandidatePaths(paths, candidateId) {
+  assertResolvedStatePaths(paths);
+  if (typeof candidateId !== 'string' || candidateId.length > 64 || !INSTANCE_ID.test(candidateId)) {
+    throw new TypeError('Invalid integration candidate identifier');
+  }
+  return registerPaths(Object.freeze({
+    ...paths,
+    snapshotPath: join(paths.instanceDir, `candidate-${candidateId}.json`),
+    lockPath: join(paths.instanceDir, `candidate-${candidateId}.state.lock`),
+  }));
+}
+
 export function assertResolvedStatePaths(paths) {
   if (!paths || typeof paths !== 'object' || !resolvedStatePaths.has(paths)) {
     throw new TypeError('State storage requires verified private state paths');

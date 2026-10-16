@@ -229,7 +229,7 @@ function diffPaths(output) {
   return Object.freeze([...new Set(paths)].sort());
 }
 
-function parseStatusPaths(output, managedDependencies = false) {
+function parseStatusPaths(output, managedDependencies = false, includeIgnoredDirectories = false) {
   if (output === '') return Object.freeze([]);
   if (!output.endsWith('\0')) fail('git-output-invalid');
   const records = output.slice(0, -1).split('\0');
@@ -242,8 +242,8 @@ function parseStatusPaths(output, managedDependencies = false) {
     // slash (for example, `!! node_modules/`). It is a directory marker, not
     // an evidence path; ignored files inside it are still reported separately.
     if (!(record[0] === '!' && record[1] === '!'
-      && (path.endsWith('/') || (managedDependencies && path.startsWith('.rivet-deps/'))))) {
-      paths.push(repositoryPath(path));
+      && ((!includeIgnoredDirectories && path.endsWith('/')) || (managedDependencies && path.startsWith('.rivet-deps/'))))) {
+      paths.push(repositoryPath(record.startsWith('!! ') && path.endsWith('/') ? path.slice(0, -1) : path));
     }
     if (record[0] === 'R' || record[0] === 'C' || record[1] === 'R' || record[1] === 'C') {
       index += 1;
@@ -491,7 +491,15 @@ export async function createGitClient(options = {}) {
       return Object.freeze(second);
     },
 
-    async statusPaths(cwd) {
+    async isIgnoredPath(cwd, path) {
+      repositoryPath(path);
+      const result = await run(absoluteInput(cwd), ['check-ignore', '--quiet', '--', path], [0, 1]);
+      return result.code === 0;
+    },
+
+    async statusPaths(cwd, options = {}) {
+      const value = captureRecord(options, new Set(['includeIgnoredDirectories']));
+      if (value.includeIgnoredDirectories !== undefined && typeof value.includeIgnoredDirectories !== 'boolean') fail('invalid-input');
       const result = await run(absoluteInput(cwd), [
         'status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching',
       ]);
@@ -499,7 +507,7 @@ export async function createGitClient(options = {}) {
       // validated owned directory. Foreign or damaged metadata remains evidence.
       let managedDependencies = false;
       try { managedDependencies = (await inspectDependencyDirectory(absoluteInput(cwd))) !== null; } catch {}
-      return parseStatusPaths(result.output, managedDependencies);
+      return parseStatusPaths(result.output, managedDependencies, value.includeIgnoredDirectories === true);
     },
 
     async commitPaths(cwdInput, input) {
@@ -537,6 +545,26 @@ export async function createGitClient(options = {}) {
       if (!validSha(ancestorSha) || !validSha(descendantSha)) fail('invalid-input');
       const result = await run(absoluteInput(cwd), ['merge-base', '--is-ancestor', ancestorSha, descendantSha], [0, 1]);
       return result.code === 0;
+    },
+
+    async mergeCommit(cwdInput, input) {
+      const value = captureRecord(input, new Set(['branch', 'expectedTip', 'sourceSha']), ['branch', 'expectedTip', 'sourceSha']);
+      if (!validBranch(value.branch) || !validSha(value.expectedTip) || !validSha(value.sourceSha)) fail('invalid-input');
+      const cwd = absoluteInput(cwdInput);
+      const before = await client.inspectRepository(cwd);
+      if (before.root !== cwd || before.dirty || before.branch !== value.branch || before.headSha !== value.expectedTip) fail('repository-changed');
+      await run(cwd, [
+        '-c', 'user.name=Rivet Integration', '-c', 'user.email=rivet-integration@invalid',
+        '-c', 'commit.gpgsign=false', '-c', 'rerere.enabled=false',
+        'merge', '--no-ff', '--no-edit', '--no-verify', '--no-gpg-sign', '--no-overwrite-ignore',
+        '-m', 'Integrate verified Rivet participant', value.sourceSha,
+      ]);
+      const after = await client.inspectRepository(cwd);
+      if (after.repositoryId !== before.repositoryId || after.rootIdentity.dev !== before.rootIdentity.dev
+        || after.rootIdentity.ino !== before.rootIdentity.ino || after.branch !== value.branch || after.dirty
+        || !(await client.isAncestor(cwd, value.expectedTip, after.headSha))
+        || !(await client.isAncestor(cwd, value.sourceSha, after.headSha))) fail('repository-changed');
+      return after;
     },
 
     async fastForward(cwd, input) {
