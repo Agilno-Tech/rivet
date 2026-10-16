@@ -338,6 +338,9 @@ export async function prepareCommand(contractInput, requestInput) {
     preparedData.set(prepared, Object.freeze({
       worktree: verifiedWorktree.path,
       environment: input.environment,
+      // Approved installs may emit large cold-cache logs. Keep capture bounded,
+      // but let the actual exit status decide whether installation succeeded.
+      allowOutputOverflow: input.action === 'dependency.install',
       execution: input.execution,
       invocation: executable.invocation,
       identities: Object.freeze({
@@ -503,7 +506,7 @@ function executeAnchored(prepared, data, abortHandle) {
       if (accepted.length < buffer.length) {
         rawOverflow = true;
         overflowStream = stream;
-        stop();
+        if (!data.allowOutputOverflow) stop();
       }
     };
     const malformed = () => { bootstrapError = true; bootstrapFailure ??= 'invalid-bootstrap-message'; stop(); };
@@ -778,10 +781,10 @@ function sanitizeAndLimit(raw, prepared, environment) {
   });
 }
 
-function commandStatus(raw, truncated) {
+function commandStatus(raw, truncated, allowOutputOverflow) {
   if (raw.aborted) return 'aborted';
   if (raw.timedOut) return 'timeout';
-  if (truncated.stdout || truncated.stderr || truncated.combined) return 'output-overflow';
+  if (!allowOutputOverflow && (truncated.stdout || truncated.stderr || truncated.combined)) return 'output-overflow';
   if (raw.bootstrapError) return 'bootstrap-error';
   if (raw.signal) return 'signal';
   if (raw.code !== 0) return 'nonzero';
@@ -799,7 +802,7 @@ export async function runCommand(contractInput, requestInput, optionsInput = {})
     const raw = await executeAnchored(prepared, data, abortHandle);
     const output = sanitizeAndLimit(raw, prepared, data.environment);
     return Object.freeze({
-      status: commandStatus(raw, output.truncated),
+      status: commandStatus(raw, output.truncated, data.allowOutputOverflow),
       ...(raw.bootstrapFailure ? { bootstrapFailure: raw.bootstrapFailure } : {}),
       code: raw.code,
       signal: raw.signal,

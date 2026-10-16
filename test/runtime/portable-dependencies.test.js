@@ -171,3 +171,27 @@ test('Corepack-shaped Yarn symlinks run through the application resolver with th
   assert.equal(result.status, 'ready', JSON.stringify(result));
   assert.equal(await readFile(join(f.input.worktreePath, '.rivet-deps/installed'), 'utf8'), 'ready');
  });
+
+test('verbose cold-cache dependency installs complete with bounded output and preserve nonzero exits', async t => {
+  for (const exitCode of [0, 7]) {
+    const f = await fixture(t, [{cwd: '.', argv: ['yarn', 'install', '--immutable']}]);
+    const installer = join(f.parent, 'yarn');
+    await writeFile(installer, `#!/usr/bin/env node
+const fs = require('node:fs');
+for (let i = 0; i < 6775; i++) fs.writeSync(i % 2 ? 1 : 2, 'YN0013: package cannot be found in the cache ' + 'x'.repeat(100) + '\\n');
+fs.writeFileSync('.rivet-deps/installed', 'ready');
+process.exitCode = ${exitCode};
+`, {mode: 0o700});
+    f.input.dependencies.provides = [];
+    const result = await bootstrapWorktreeDependencies(f.input, {...f.options, resolveCommandExecutable: async () => installer});
+    const command = result.result ?? result.results[0];
+    assert.equal(result.status, exitCode === 0 ? 'ready' : 'failed', JSON.stringify(result));
+    assert.equal(command.status, exitCode === 0 ? 'success' : 'nonzero');
+    assert.equal(command.code, exitCode);
+    assert.equal(command.suppressed, true);
+    assert.equal(command.truncated.combined, true);
+    assert.equal(command.stdout, '');
+    assert.equal(command.stderr, '');
+    assert.equal(await readFile(join(f.input.worktreePath, '.rivet-deps/installed'), 'utf8'), 'ready');
+  }
+});

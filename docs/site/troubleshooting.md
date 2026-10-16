@@ -50,6 +50,8 @@ Claude defaults to $1 per planning call and $2 per Worker launch (or its lower a
 
 ## Dependency preparation fails without output
 
+Cold-cache Yarn installs can emit hundreds of kilobytes of fetch messages. Approved dependency installs keep output capture bounded but continue running when that limit is exceeded; success or failure comes from the actual exit status. Excessive output is suppressed and marked truncated rather than cancelling the install. Timeouts, cancellation, and checkout/executable verification remain enforced. Verification commands still fail on output overflow.
+
 A failed task preparation summary includes the command status and exit code when the command runner returns a result. `bootstrap-error` means the command boundary failed; `nonzero` means the package manager exited unsuccessfully. A missing exit code or missing output alone does not establish that Corepack was rejected. Portable dependency commands support symlinked executables, including Corepack-shaped Yarn shims. Capture the Rivet version, dependency plan, and exact reported status when reporting a failure. Installation still requires approval for each isolated checkout.
 
 Bootstrap failures also include a bounded reason: `target-spawn-failed` means the operating system could not start the executable (check its interpreter and permissions); `anchor-invalid` or `anchor-changed` means executable or checkout identity verification failed; `startup-timeout` means the bootstrap handshake timed out. `bootstrap-process-failed` means the bootstrap exited or could not start without supplying a more specific reason. Raw bootstrap output remains suppressed. Include this reason in the failure report so a launch failure can be distinguished from a package-manager error.

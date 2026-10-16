@@ -121,3 +121,21 @@ test('install errors expose only recognized bootstrap failure reasons', () => {
   });
   assert.doesNotMatch(untrusted.safeMessage, /secret-untrusted-path/);
 });
+
+test('legacy dependency installs also finish after exceeding the output capture limit', async t => {
+  const value = await fixture(t, { 'package-lock.json': '{"lockfileVersion":3}\n' });
+  await writeFile(value.installer, `#!/usr/bin/env node
+const fs = require('node:fs');
+fs.writeSync(1, 'x'.repeat(800000));
+fs.mkdirSync('node_modules', {recursive: true});
+fs.writeFileSync('node_modules/installed', 'ready');
+`, {mode: 0o700});
+  const result = await bootstrapWorktreeDependencies(value.input, {
+    gitClient: value.gitClient, resolveCommandExecutable: async () => value.installer, confirm: async () => true,
+  });
+  assert.equal(result.status, 'ready');
+  assert.equal(result.result.code, 0);
+  assert.equal(result.result.suppressed, true);
+  assert.equal(result.result.truncated.combined, true);
+  assert.equal(await readFile(join(value.input.worktreePath, 'node_modules/installed'), 'utf8'), 'ready');
+});

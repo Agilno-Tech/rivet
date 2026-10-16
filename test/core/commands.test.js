@@ -898,3 +898,33 @@ test('pre-launch failures retain a bounded bootstrap reason without exposing pro
   assert.equal(result.stderr, '');
   assert.equal(result.suppressed, true);
 });
+
+test('verbose dependency installs still obey timeout and cancellation', async t => {
+  for (const stop of ['timeout', 'aborted']) {
+    const { root, worktree } = await fixture(t);
+    const marker = join(worktree, 'output-written');
+    const installer = await executableFixture(root, 'installer', `#!${process.execPath}
+const fs = require('node:fs');
+fs.writeSync(1, 'x'.repeat(100000));
+fs.writeFileSync('output-written', 'ready');
+setInterval(() => {}, 1000);
+`);
+    const nowMs = Date.now();
+    const approval = createApprovalReceipt({
+      id: 'install-approval', approverId: 'human-owner', approverPrincipal: 'human',
+      subjectId: 'worker-one', action: 'dependency.install', resource: `command:install:${worktree}`,
+      policyId: 'dependency.install', decision: 'approved', expiresAt: new Date(nowMs + 60000).toISOString(), singleUse: true,
+    });
+    const controller = new AbortController();
+    const pending = runCommand({
+      worktree, authority: createAuthorityEnvelope({actorId: 'worker-one', principal: 'agent', actions: ['dependency.install'], ownedPaths: [], providers: [], commands: ['install']}),
+      commands: {install: {executable: installer, args: [], action: 'dependency.install', elevated: true, approvalPolicyId: 'dependency.install', approverId: 'human-owner'}},
+      timeoutMs: stop === 'timeout' ? 1000 : 5000, maxOutputBytes: 16384,
+    }, {actorId: 'worker-one', commandId: 'install', cwd: '.', approval, approvalRegistry: approvalRegistry(), nowMs}, {signal: controller.signal});
+    await waitForPath(marker);
+    if (stop === 'aborted') controller.abort();
+    const result = await pending;
+    assert.equal(result.status, stop);
+    assert.equal(result.suppressed, true);
+  }
+});
