@@ -441,3 +441,54 @@ test('published legacy client profile schema rejects managed execution selection
   assert.equal(validate(CLAUDE_FEATURE_PROFILE), true);
   assert.equal(validate({ ...CLAUDE_FEATURE_PROFILE, executionSelection: resolveExecutionSelection(managedPolicy(), 'implementation') }), false);
 });
+
+test('configured Claude spending caps are sealed in planning and Worker profiles and reject policy drift', async () => {
+  const original = await configuration(), workRequest = request();
+  for (const caps of [{planningMaxCostUsd: 3.5}, {workerMaxCostUsd: 4.25}, {planningMaxCostUsd: 3.5, workerMaxCostUsd: 4.25}]) {
+    for (const [client, harness] of [['claude', undefined], ['codex', 'claude'], ['claude', 'codex']]) {
+      const config = structuredClone(original);
+      config.project.claude = caps;
+      if (harness) config.orchestration.roles.find(role => role.kind === 'worker').harness = harness;
+      let contract;
+      const planner = createFeaturePlanner({planningClient: {propose: async input => { contract = input; return decomposition(); }}});
+      const plan = await planner.propose({config, workRequest, baselineCommit: BASELINE, client});
+      const expectedPlanning = caps.planningMaxCostUsd ?? 1, expectedWorker = caps.workerMaxCostUsd ?? 2;
+      if (client === 'claude') {
+        assert.equal(contract.clientProfile.planning.maxCostUsd, expectedPlanning);
+        assert.equal(plan.clientProfile.planning.maxCostUsd, expectedPlanning);
+        assert.equal(plan.clientProfile.execution.maxCostUsd, expectedWorker);
+      } else assert.equal(plan.clientProfile, undefined);
+      const worker = plan.nodes.find(node => node.role === 'worker');
+      if (harness === 'claude') assert.equal(worker.execution.clientProfile.execution.maxCostUsd, expectedWorker);
+      if (harness === 'codex') assert.equal(worker.execution.clientProfile, undefined);
+      const changed = structuredClone(config);
+      changed.project.claude.workerMaxCostUsd = 8;
+      assert.throws(() => createFeaturePlan({proposal: plan, config: changed, workRequest, baselineCommit: BASELINE, client}), FeaturePlanError);
+      assert.ok(Object.isFrozen(plan));
+    }
+  }
+});
+
+test('managed Claude routes retain configured spending caps across planner harnesses', async () => {
+  const {managedPolicy} = await import('../fixtures/execution-policy.js');
+  const {executionForNode} = await import('../../src/feature/client-profile.js');
+  for (const client of ['claude', 'codex']) for (const cap of [0.25, 4.5]) {
+    const config = structuredClone(await configuration());
+    config.project.claude = {planningMaxCostUsd: cap, workerMaxCostUsd: cap};
+    config.orchestration.executionPolicy = managedPolicy();
+    config.orchestration.executionPolicy.profiles.implementation.harness = 'claude';
+    let contract;
+    const planner = createFeaturePlanner({planningClient: {propose: async input => {contract = input; return decomposition();}}});
+    const workRequest = request();
+    const plan = await planner.propose({config, workRequest, baselineCommit: BASELINE, client});
+    assert.equal(contract.clientProfile.planning.maxCostUsd, cap);
+    const worker = plan.nodes.find(node => node.role === 'worker');
+    assert.equal(executionForNode(plan, worker).clientProfile.execution.maxCostUsd, cap);
+    for (const mutate of [p => {delete p.managedClaudeProfile;}, p => {p.managedClaudeProfile.execution.maxCostUsd = 9;}]) {
+      const proposal = structuredClone(plan); mutate(proposal);
+      assert.throws(() => createFeaturePlan({proposal, config, workRequest, baselineCommit: BASELINE, client}), FeaturePlanError);
+    }
+    const changed = structuredClone(config); changed.project.claude.workerMaxCostUsd = 8;
+    assert.throws(() => createFeaturePlan({proposal: plan, config: changed, workRequest, baselineCommit: BASELINE, client}), FeaturePlanError);
+  }
+});

@@ -114,7 +114,7 @@ function dependsOn(node, targetId, nodeMap) {
 
 function validatePlanSemantics(plan, { config, workRequest, baselineCommit, client }) {
   if (plan.baselineCommit !== baselineCommit || plan.workRequestDigest !== workRequest.digest || plan.client !== client
-    || !matchesClientProfile(client, plan.clientProfile)) fail();
+    || !matchesClientProfile(client, plan.clientProfile, config.project.claude)) fail();
   if (client === 'host' && config.orchestration.roles.some(role => role.harness !== undefined)) fail();
   if (plan.branchNaming !== undefined) {
     let expected;
@@ -122,6 +122,8 @@ function validatePlanSemantics(plan, { config, workRequest, baselineCommit, clie
     if (canonical(expected) !== canonical(plan.branchNaming)) fail();
   }
   const executionPolicy = config.orchestration.executionPolicy;
+  const needsManagedClaude = executionPolicy && client !== 'host' && Object.values(executionPolicy.profiles).some(profile => profile.harness === 'claude');
+  if (needsManagedClaude ? !matchesClientProfile('claude', plan.managedClaudeProfile, config.project.claude) : plan.managedClaudeProfile !== undefined) fail();
   if (canonical(plan.executionPolicy) !== canonical(executionPolicyIdentity(executionPolicy))) fail();
   const configuredProviders = new Set(config.providers.providers.map(provider => provider.id));
   if (plan.providerRefs.some(provider => !configuredProviders.has(provider))) fail();
@@ -147,7 +149,7 @@ function validatePlanSemantics(plan, { config, workRequest, baselineCommit, clie
   for (const node of plan.nodes) {
     const role = roles.get(node.roleId);
     if (!role || role.kind !== node.role || node.dependencies.includes(node.id)) fail();
-    if (!matchesWorkerExecution(role, node.execution)) fail();
+    if (!matchesWorkerExecution(role, node.execution, config.project.claude)) fail();
     if (executionPolicy !== undefined && ['worker', 'manager'].includes(node.role)) {
       const classification = node.executionSelection?.classification;
       if (node.role === 'worker' ? !['bounded-fix', 'implementation'].includes(classification) : classification !== 'coordination') fail();

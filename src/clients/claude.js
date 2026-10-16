@@ -9,10 +9,10 @@ import { featureDecompositionResultContract } from '../feature/decomposition-con
 import { serializeLaunchContract } from '../prompts/launch-contract.js';
 import { serializeProtocolLaunch } from '../protocols/presentation.js';
 import { serializePlanningContract } from '../prompts/planning-contract.js';
-import { CLAUDE_FEATURE_PROFILE } from '../feature/client-profile.js';
+import { CLAUDE_FEATURE_PROFILE, isClientProfile } from '../feature/client-profile.js';
 
 const ARGS = Object.freeze([
-  '--print', '--input-format', 'text', '--output-format', 'json', '--no-session-persistence', '{stdin}',
+  '--print', '--input-format', 'text', '--output-format', 'json', '--no-session-persistence', '--strict-mcp-config', '{stdin}',
 ]);
 const PLANNING_TOOLS = 'Read,Glob,Grep';
 const PLANNING_SCHEMA = JSON.stringify(featureDecompositionResultContract().schema);
@@ -21,7 +21,7 @@ export const CLAUDE_ADAPTER_SYNTAX = Object.freeze({
   provider: 'claude',
   observedVersion: '2.1.207 (Claude Code)',
   testedVersions: Object.freeze(['2.1.207 (Claude Code)', '2.1.274 (Claude Code)']),
-  requiredOptions: Object.freeze(['--print', '--input-format', '--output-format', '--no-session-persistence', '--model', '--effort', '--permission-mode', '--tools', '--json-schema', '--max-budget-usd']),
+  requiredOptions: Object.freeze(['--print', '--input-format', '--output-format', '--no-session-persistence', '--strict-mcp-config', '--model', '--effort', '--permission-mode', '--tools', '--json-schema', '--max-budget-usd']),
   versionArgs: Object.freeze(['--version']),
   args: ARGS,
   inputMode: 'stdin-text',
@@ -168,15 +168,6 @@ export function createClaudePlanningClient(input) {
     || typeof config.worktree !== 'string' || !config.worktree.startsWith('/') || config.worktree.length > 1024) {
     failAgent('template-invalid');
   }
-  const args = captureArgs([
-    ...ARGS.slice(0, -1),
-    ...(config.executionSelection === undefined ? ['--model', CLAUDE_FEATURE_PROFILE.model, '--effort', CLAUDE_FEATURE_PROFILE.planning.effort] : selectionArguments('claude', config.executionSelection)),
-    '--max-budget-usd', String(CLAUDE_FEATURE_PROFILE.planning.maxCostUsd),
-    '--permission-mode', 'dontAsk',
-    '--tools', PLANNING_TOOLS,
-    '--json-schema', PLANNING_SCHEMA,
-    '{stdin}',
-  ]);
   const environment = captureEnvironment(config.environment);
   const executable = config.executable;
   const interpreter = config.interpreter;
@@ -190,6 +181,17 @@ export function createClaudePlanningClient(input) {
       failAgent('template-invalid');
     }
     if (signal?.aborted) failAgent('aborted');
+    const profile = contract?.clientProfile ?? CLAUDE_FEATURE_PROFILE;
+    if (!isClientProfile('claude', profile)) failAgent('template-invalid');
+    const args = captureArgs([
+      ...ARGS.slice(0, -1),
+      ...(config.executionSelection === undefined ? ['--model', profile.model, '--effort', profile.planning.effort] : selectionArguments('claude', config.executionSelection)),
+      '--max-budget-usd', String(profile.planning.maxCostUsd),
+      '--permission-mode', 'dontAsk',
+      '--tools', PLANNING_TOOLS,
+      '--json-schema', PLANNING_SCHEMA,
+      '{stdin}',
+    ]);
     let metadata;
     try { metadata = await lstat(worktree, { bigint: true }); } catch { failAgent('provider-unavailable'); }
     if (!metadata.isDirectory() || metadata.isSymbolicLink()) failAgent('provider-unavailable');
@@ -197,7 +199,7 @@ export function createClaudePlanningClient(input) {
     const runner = await createProcessRunner({
       executable, interpreter, worktree, worktreeIdentity: identity, environment, signal,
       timeoutMs: config.timeoutMs, maxInputBytes: 512 * 1024, onExecution:options.onExecution,
-      maxOutputBytes: config.maxOutputBytes ?? 512 * 1024, onTelemetry: config.onTelemetry, telemetryProvider: 'claude', allowOptionArgs: true,
+      maxOutputBytes: config.maxOutputBytes ?? 512 * 1024, onTelemetry: config.onTelemetry, telemetryProvider: 'claude', allowOptionArgs: true, resultFormat: 'claude-json',
     });
     await checkCompatibility(runner, 'claude', [...args, '--json-schema', '--max-budget-usd'], expectedVersion);
     return runner.runPlanning({

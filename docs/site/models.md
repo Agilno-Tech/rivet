@@ -224,4 +224,6 @@ The plan compiler records policy and profile digests alongside each worker's cla
 
 Policy changes, including wider machine limits or changed session settings, invalidate the saved managed plan at activation or resume. Node budgets and authority remain bounded by existing roles and approval identity. There is no implicit model fallback or escalation route. Effort syntax is bounded; actual model, effort and tool support must be checked by the executor before dispatch. Managed terminal planning, worker execution and independent review pass the selected model and effort to their CLI adapters. Bounded session handoffs and automatic managed-task admission use the same policy. Feature workers within one task remain sequential; see [managed orchestration](./orchestration.md) for operational limits and qualification.
 
-When `executionPolicy` is absent, legacy serial plans and the fixed Claude profile remain unchanged. The existing `enabled: false` field keeps its legacy meaning; it is not a managed-execution switch.
+When `executionPolicy` is absent, legacy serial plans retain their configured Claude spending caps. The existing `enabled: false` field keeps its legacy meaning; it is not a managed-execution switch.
+
+Configured `project.claude` spending caps also apply when a managed route selects Claude from a Codex-started task. Rivet captures these caps in the approved plan, shows them alongside managed routing before activation, and requires renewed validation when they change.

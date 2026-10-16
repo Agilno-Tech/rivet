@@ -269,6 +269,7 @@ for (const details of [false, true]) {
   test(`managed proposal shows effective worker and coordination routing (details=${details})`, async t => {
     const {root}=await fixture(t); const s=services(root,{approve:false});
     s.proposal.featurePlan.client='codex';
+    s.proposal.featurePlan.managedClaudeProfile={planning:{maxCostUsd:0.25},execution:{maxCostUsd:0.5}};
     const worker=s.proposal.featurePlan.nodes[0];
     worker.execution={client:'claude',clientProfile:{model:'legacy-sonnet'}};
     worker.executionSelection={harness:'codex',model:'implementation-model',effort:'high',reason:'Approved implementation route.',recommendationOnly:false};
@@ -276,6 +277,7 @@ for (const details of [false, true]) {
     assert.equal(await main(['run','Add greeting',...(details?['--details']:[])],s.overrides),EXIT_CODES.SUCCESS);
     const shown=s.messages.join('\n');
     assert.match(shown,/Planning harness: claude; model: coordination-model; reasoning: high/);
+    assert.match(shown,/Planning spending cap: \$0.25/);
     assert.match(shown,/executor: codex/); assert.match(shown,/model: implementation-model; reasoning: high/);
     assert.match(shown,/coordination routing: claude; model: coordination-model; reasoning: high/);
     assert.match(shown,/Approved implementation route/);assert.match(shown,/Approved coordination route/);
@@ -296,4 +298,13 @@ test('managed run checks selected worker before approval and ignores unused lega
     assert.equal(await main(['run','Add greeting'],s.overrides),unavailable?EXIT_CODES.PROVIDER_UNAVAILABLE:EXIT_CODES.SUCCESS,s.messages.join('\n'));
     assert.equal(approved,!unavailable);assert.equal(s.calls.some(call=>call[0]==='start'),false);
   }
+});
+
+
+test('managed Claude worker preview shows its captured spending cap', async t => {
+  const {root}=await fixture(t); const s=services(root,{approve:false});
+  s.proposal.featurePlan.managedClaudeProfile={planning:{maxCostUsd:0.25},execution:{maxCostUsd:0.5}};
+  s.proposal.featurePlan.nodes[0].executionSelection={harness:'claude',model:'opus',effort:'high',reason:'Approved route.',recommendationOnly:false};
+  assert.equal(await main(['run','Add greeting'],s.overrides),EXIT_CODES.SUCCESS);
+  assert.match(s.messages.join('\n'),/executor spending cap: \$0.5/);
 });

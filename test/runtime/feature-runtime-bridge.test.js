@@ -347,6 +347,13 @@ for (const managed of [false,true]) test(`executes all Workers sequentially with
   assert.equal(deferred.status, 'blocked');
   assert.equal(launches.length, 0);
 
+  await writeFile(gateExecutable, '#!/bin/sh\nexit 23\n', { mode: 0o700 });
+  const failedInstall = await executor({ project: root, run }, { confirmDependencyInstall: async () => true });
+  assert.equal(failedInstall.status, 'blocked');
+  assert.match(failedInstall.summary, /Dependency command status: nonzero; exit code: 23/);
+  assert.equal(launches.length, 0);
+  await writeFile(gateExecutable, '#!/bin/sh\nif [ -n "$RIVET_GATE_LOG" ]; then printf "%s\\n" "$*" >> "$RIVET_GATE_LOG"; fi\nif [ "$1" = ci ]; then mkdir -p node_modules; printf ready > node_modules/installed; exit 0; fi\n[ "$RIVET_GATE_ENV" = present ]\n', { mode: 0o700 });
+
   const result = await executor({ project: root, run }, {
     confirmDependencyInstall: async plan => {
       assert.deepEqual(plan.args, ['ci']);
@@ -785,5 +792,19 @@ test('worker-specific profile caps its sealed launch budget independently of the
     const selected={...planNode,execution:{client:worker,...(clientProfileFor(worker)?{clientProfile:clientProfileFor(worker)}:{})}};
     const run={featurePlan:{client:planner,clientProfile:clientProfileFor(planner),providerRefs:[]},workRequest:{digest:'a'.repeat(64),contextRefs:[]}};
     assert.equal(createFeatureLaunchInput(node,intent,selected,run).budget.maxCostUsd,expected);
+  }
+});
+
+test('custom Worker ceiling respects lower approved allocations and the saved profile', async () => {
+  const {clientProfileFor} = await import('../../src/feature/client-profile.js');
+  const caps = {planningMaxCostUsd: 3, workerMaxCostUsd: 4.25};
+  const profile = clientProfileFor('claude', caps);
+  caps.workerMaxCostUsd = 99;
+  const planNode = {objective: 'Implement', ownedPaths: ['src/file.js'], authorityScopes: ['implement'], commandIds: []};
+  const node = {id: 'worker', evidenceRefs: []};
+  const run = {featurePlan: {client: 'claude', clientProfile: profile, providerRefs: []}, workRequest: {digest: 'a'.repeat(64), contextRefs: []}};
+  for (const [allocated, expected] of [['20', 4.25], ['0.75', 0.75]]) {
+    const intent = {allocation: {costUsd: allocated, tokenLimit: 100, timeMinutes: 1}, worktree: {}};
+    assert.equal(createFeatureLaunchInput(node, intent, planNode, run).budget.maxCostUsd, expected);
   }
 });

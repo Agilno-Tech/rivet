@@ -114,6 +114,8 @@ test('exports the stable CLI exit-code map', () => {
     BLOCKED_AUTHORITY: 3,
     FAILED_GATE: 4,
     PROVIDER_UNAVAILABLE: 5,
+    AUTHENTICATION_REQUIRED: 5,
+    BUDGET_EXHAUSTED: 4,
     REPOSITORY_CONFLICT: 6,
     INTERNAL_ERROR: 7,
   });

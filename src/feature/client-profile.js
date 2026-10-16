@@ -30,28 +30,60 @@ function exactObject(value, expected) {
   });
 }
 
-export function clientProfileFor(client) {
-  return client === 'claude' ? CLAUDE_FEATURE_PROFILE : undefined;
+export function clientProfileFor(client, caps = {}) {
+  if (client !== 'claude') return undefined;
+  if (!caps || typeof caps !== 'object' || Array.isArray(caps)
+    || ![Object.prototype, null].includes(Object.getPrototypeOf(caps))) throw new TypeError('Invalid Claude spending caps.');
+  const values = {};
+  for (const key of Reflect.ownKeys(caps)) {
+    const descriptor = Object.getOwnPropertyDescriptor(caps, key);
+    const value = descriptor?.value;
+    if (!['planningMaxCostUsd', 'workerMaxCostUsd'].includes(key) || !descriptor?.enumerable
+      || typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 10_000
+      || !/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(String(value))) throw new TypeError('Invalid Claude spending caps.');
+    values[key] = value;
+  }
+  if (Object.keys(values).length === 0) return CLAUDE_FEATURE_PROFILE;
+  return Object.freeze({
+    ...CLAUDE_FEATURE_PROFILE,
+    planning: Object.freeze({...CLAUDE_FEATURE_PROFILE.planning, maxCostUsd: values.planningMaxCostUsd ?? CLAUDE_FEATURE_PROFILE.planning.maxCostUsd}),
+    execution: Object.freeze({maxCostUsd: values.workerMaxCostUsd ?? CLAUDE_FEATURE_PROFILE.execution.maxCostUsd}),
+  });
 }
 
-export function matchesClientProfile(client, value) {
-  const expected = clientProfileFor(client);
+// Validate a captured profile without comparing it to today's project settings.
+// Policy matching happens when the proposal is created or resumed.
+export function isClientProfile(client, value) {
+  if (client !== 'claude') return value === undefined;
+  try {
+    const planning = Object.getOwnPropertyDescriptor(value, 'planning')?.value;
+    const execution = Object.getOwnPropertyDescriptor(value, 'execution')?.value;
+    const expected = clientProfileFor(client, {
+      planningMaxCostUsd: Object.getOwnPropertyDescriptor(planning, 'maxCostUsd')?.value,
+      workerMaxCostUsd: Object.getOwnPropertyDescriptor(execution, 'maxCostUsd')?.value,
+    });
+    return exactObject(value, expected);
+  } catch { return false; }
+}
+
+export function matchesClientProfile(client, value, caps) {
+  const expected = clientProfileFor(client, caps);
   return expected === undefined ? value === undefined : exactObject(value, expected);
 }
 
-export function workerExecutionFor(role) {
+export function workerExecutionFor(role, caps) {
   if (role.harness === undefined) return undefined;
   if (role.kind !== 'worker' || !['claude', 'codex'].includes(role.harness)) throw new TypeError('Invalid worker harness.');
-  const clientProfile = clientProfileFor(role.harness);
+  const clientProfile = clientProfileFor(role.harness, caps);
   return Object.freeze({ client: role.harness, ...(clientProfile === undefined ? {} : { clientProfile }) });
 }
 
-export function matchesWorkerExecution(role, execution) {
-  const expected = workerExecutionFor(role);
+export function matchesWorkerExecution(role, execution, caps) {
+  const expected = workerExecutionFor(role, caps);
   return expected === undefined ? execution === undefined : exactObject(execution, expected);
 }
 
 export function executionForNode(plan, node) {
-  if (node.executionSelection && !node.executionSelection.recommendationOnly) return { client: node.executionSelection.harness, clientProfile: clientProfileFor(node.executionSelection.harness), executionSelection: node.executionSelection };
+  if (node.executionSelection && !node.executionSelection.recommendationOnly) return { client: node.executionSelection.harness, clientProfile: node.executionSelection.harness === 'claude' ? plan.managedClaudeProfile ?? plan.clientProfile ?? clientProfileFor('claude') : undefined, executionSelection: node.executionSelection };
   return node.execution ?? { client: plan.client, clientProfile: plan.clientProfile };
 }

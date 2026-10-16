@@ -43,7 +43,15 @@
       }
     },
     "commands": {},
-    "dependencies": { "$ref": "#/$defs/dependencies" }
+    "dependencies": { "$ref": "#/$defs/dependencies" },
+    "claude": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "planningMaxCostUsd": { "type": "number", "minimum": 0.000001, "maximum": 10000 },
+        "workerMaxCostUsd": { "type": "number", "minimum": 0.000001, "maximum": 10000 }
+      }
+    }
   },
   "allOf": [
     { "if": { "properties": { "dependencies": {} }, "required": ["dependencies"] }, "then": { "properties": { "schemaVersion": { "const": 3 } } } },

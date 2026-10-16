@@ -71,7 +71,7 @@ function requiredEvidence(config, role, { humanApproval = false } = {}) {
 function compileFeaturePlan({ decomposition, config, workRequest, baselineCommit, client }) {
   if (client === 'host' && config.orchestration.roles.some(role => role.harness !== undefined)) fail('compiled-plan-invalid');
   const { boss, manager, worker } = roleChain(config);
-  const execution = workerExecutionFor(worker);
+  const execution = workerExecutionFor(worker, config.project.claude);
   const policy = config.orchestration.executionPolicy;
   const selection = classification => policy === undefined ? {} : { executionSelection: resolveExecutionSelection(policy, classification, { hostOnly: client === 'host' }) };
   const managerScopes = intersect(manager.authorityScopes, boss.authorityScopes);
@@ -105,10 +105,11 @@ function compileFeaturePlan({ decomposition, config, workRequest, baselineCommit
     workers[index].dependencies = [workers[index - 1].id];
   }
   const finalScopes = boss.authorityScopes.includes('verify') ? ['verify'] : [boss.authorityScopes[0]];
-  const clientProfile = clientProfileFor(client);
+  const clientProfile = clientProfileFor(client, config.project.claude);
   return {
     schemaVersion: 1,
     ...(policy === undefined ? {} : { executionPolicy: executionPolicyIdentity(policy) }),
+    ...(policy && client !== 'host' && Object.values(policy.profiles).some(profile => profile.harness === 'claude') ? { managedClaudeProfile: clientProfileFor('claude', config.project.claude) } : {}),
     id: slug(workRequest.title),
     branchNaming: selectBranchNaming(config.project.repository,workRequest,decomposition.workType),
     baselineCommit,
@@ -172,10 +173,12 @@ export function createHostFeaturePlan(input) {
 }
 
 function planningContract({ config, workRequest, baselineCommit, client }) {
+  const planningHarness = resolveExecutionSelection(config.orchestration.executionPolicy, 'coordination')?.harness ?? client;
   return immutableJson({
     schemaVersion: 1,
     baselineCommit,
     client,
+    ...(planningHarness === 'claude' ? {clientProfile: clientProfileFor('claude', config.project.claude)} : {}),
     workRequest,
     policy: {
       ...(config.orchestration.executionPolicy === undefined ? {} : { executionPolicy: config.orchestration.executionPolicy }),

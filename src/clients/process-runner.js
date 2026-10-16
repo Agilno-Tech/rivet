@@ -87,12 +87,12 @@ async function verifyExecutable(path, expected, guard = () => {}) {
   try {
     const before = await lstat(path, { bigint: true });
     guard();
-    if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1n || (before.mode & 0o111n) === 0n) failAgent('executable-unsafe');
+    if (!before.isFile() || before.isSymbolicLink() || (before.mode & 0o111n) === 0n) failAgent('executable-unsafe');
     const canonical = await realpath(path);
     guard();
     const after = await lstat(path, { bigint: true });
     guard();
-    if (canonical !== path || !after.isFile() || after.isSymbolicLink() || after.nlink !== 1n || !sameIdentity(before, after)) failAgent('executable-unsafe');
+    if (canonical !== path || !after.isFile() || after.isSymbolicLink() || !sameIdentity(before, after)) failAgent('executable-unsafe');
     const current = Object.freeze({
       ...identity(after), size: after.size.toString(), mode: after.mode.toString(),
       mtimeMs: after.mtimeMs.toString(), ctimeMs: after.ctimeMs.toString(),
@@ -312,6 +312,22 @@ function claudeMeasuredUsage(envelope) {
     }
   }
   return {tokens, costUsd: envelope.total_cost_usd};
+}
+
+// Classify only native Claude terminal envelopes. Never surface provider text,
+// which may contain account details or credentials.
+function claudeFailure(buffer, protocol) {
+  let result;
+  try { result = JSON.parse(strictDecode(buffer)); } catch { return null; }
+  if (!result || result.type !== 'result' || result.is_error !== true) return null;
+  if (protocol === 'planning' && result.subtype === 'error_max_budget_usd') return 'budget-exhausted';
+  if (!['error_during_execution', 'success'].includes(result.subtype)) return null;
+  const messages = [...(Array.isArray(result.errors) ? result.errors : []), result.result];
+  if (messages.some(message => typeof message === 'string'
+    && /OAuth token (?:has )?expired|not logged in|authentication_failed|invalid authentication credentials/i.test(message))) {
+    return 'authentication-required';
+  }
+  return null;
 }
 
 function parseEnvelope(buffer, contract, resultFormat, requireBudgetStop = false) {
@@ -690,6 +706,9 @@ export async function createProcessRunner(input) {
           }
           clearTimeout(launchTimer);
           // Keep the runtime deadline while awaiting telemetry persistence.
+          const bytes = Buffer.concat(stdout);
+          const providerFailure = config.resultFormat === 'claude-json' ? claudeFailure(bytes, protocol) : null;
+          if (providerFailure) { finish(new AgentContractError(providerFailure)); return; }
           // The child emitted a close event, so it did spawn successfully. A
           // non-zero exit is a provider execution failure, not a spawn failure;
           // classify it as unavailable so the runtime can apply its bounded
@@ -698,7 +717,6 @@ export async function createProcessRunner(input) {
             finish(new AgentContractError('provider-unavailable')); return;
           }
           try {
-            const bytes = Buffer.concat(stdout);
             // A native cost-cap result can accompany a nonzero process exit.
             // Only that validated terminal envelope preserves its accounting;
             // any other nonzero exit remains a failed provider execution.

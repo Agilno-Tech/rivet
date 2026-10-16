@@ -38,6 +38,24 @@ Interactive `rivet run "task"` offers a choice between compatible installed adap
 
 The status-server tests require loopback networking. A sandbox that prohibits listeners can fail these checks independently of application behavior. Run them in an environment that permits loopback, and record that environment with the result.
 
+## Claude fails during startup or planning
+
+Rivet launches Claude planning and Workers with `--strict-mcp-config`, so personal and Team MCP configuration is not inherited by these runs. This avoids loading unrelated connector tools into each task. The flag is described in the [Claude CLI reference](https://code.claude.com/docs/en/cli-reference).
+
+Hard-linked npm installations are accepted. Rivet still checks canonical paths, executable permissions, file identity and metadata before launch; replacing or modifying the executable invalidates the captured launch target.
+
+Recognized native authentication failures report `AUTHENTICATION_REQUIRED`: run `claude auth login`, then retry. Recognized planning cost-limit results report `BUDGET_EXHAUSTED`, rather than provider unavailability. Other provider failures may still require investigation. These categories retain the existing numeric exits for provider failures (5) and failed gates (4).
+
+Claude defaults to $1 per planning call and $2 per Worker launch (or its lower approved allocation). Configure `claude.planningMaxCostUsd` and `claude.workerMaxCostUsd` in `.rivet/project.yaml` to change these ceilings, then commit the policy and create a new proposal. Project role budgets still constrain Worker spending; resuming does not increase an approved budget. See [Claude spending caps](./runtime-reference.md#claude-spending-caps).
+
+## Dependency preparation fails without output
+
+Cold-cache Yarn installs can emit hundreds of kilobytes of fetch messages. Approved dependency installs keep output capture bounded but continue running when that limit is exceeded; success or failure comes from the actual exit status. Excessive output is suppressed and marked truncated rather than cancelling the install. Timeouts, cancellation, and checkout/executable verification remain enforced. Verification commands still fail on output overflow.
+
+A failed task preparation summary includes the command status and exit code when the command runner returns a result. `bootstrap-error` means the command boundary failed; `nonzero` means the package manager exited unsuccessfully. A missing exit code or missing output alone does not establish that Corepack was rejected. Portable dependency commands support symlinked executables, including Corepack-shaped Yarn shims. Capture the Rivet version, dependency plan, and exact reported status when reporting a failure. Installation still requires approval for each isolated checkout.
+
+Bootstrap failures also include a bounded reason: `target-spawn-failed` means the operating system could not start the executable (check its interpreter and permissions); `anchor-invalid` or `anchor-changed` means executable or checkout identity verification failed; `startup-timeout` means the bootstrap handshake timed out. `bootstrap-process-failed` means the bootstrap exited or could not start without supplying a more specific reason. Raw bootstrap output remains suppressed. Include this reason in the failure report so a launch failure can be distinguished from a package-manager error.
+
 ## A Claude task exhausts its token budget despite a low cost
 
 Cached context still contributes to the token count. Rivet uses Claude's native counters, including repeated cache reads, and retains an overrun as `budget-exhausted`. Inspect task status, review the token and cost allocations in project orchestration policy, then create and approve a new plan if a larger allowance is appropriate. Resuming the same approved task does not increase its budget. See [native usage and task budgets](./runtime-reference.md#native-usage-and-task-budgets).

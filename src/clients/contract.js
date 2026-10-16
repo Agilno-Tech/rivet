@@ -24,6 +24,8 @@ export class AgentContractError extends Error {
       'launch-timeout': 'Agent provider launch timed out.',
       'unsupported-platform': 'Agent clients are unsupported on this platform.',
       aborted: 'Agent execution was cancelled.',
+      'authentication-required': 'Claude authentication has expired or is missing. Run claude auth login, then retry.',
+      'budget-exhausted': 'Claude planning reached its configured spending cap. Reduce the request scope or review claude.planningMaxCostUsd in .rivet/project.yaml before proposing again.',
       'provider-unavailable': 'Configured agent provider is unavailable.',
       'executable-unsafe': 'Configured agent executable is unsafe.',
       'cwd-unsafe': 'Agent working directory is unsafe.',

@@ -14,6 +14,7 @@
     "client": { "enum": ["claude", "codex", "host"] },
     "executionPolicy": {"type": "object", "additionalProperties": false, "required": ["version", "policyDigest"], "properties": {"version": {"const": 1}, "policyDigest": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}},
     "clientProfile": { "$ref": "#/$defs/clientProfile" },
+    "managedClaudeProfile": { "$ref": "#/$defs/clientProfile" },
     "providerRefs": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
     "nodes": { "type": "array", "minItems": 4, "maxItems": 128, "items": { "$ref": "#/$defs/node" } }
   },
@@ -52,14 +53,14 @@
           "properties": {
             "effort": { "const": "low" },
             "timeoutMs": { "const": 120000 },
-            "maxCostUsd": { "const": 1 }
+            "maxCostUsd": { "type": "number", "minimum": 0.000001, "maximum": 10000 }
           }
         },
         "execution": {
           "type": "object",
           "additionalProperties": false,
           "required": ["maxCostUsd"],
-          "properties": { "maxCostUsd": { "const": 2 } }
+          "properties": { "maxCostUsd": { "type": "number", "minimum": 0.000001, "maximum": 10000 } }
         },
         "fallbackModel": { "type": "null" }
       }

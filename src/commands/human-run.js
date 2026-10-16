@@ -64,6 +64,7 @@ function reviewLines(project, task, harness, proposal, details = false) {
     `Base commit: ${plan.baselineCommit}`,
     ...(plan.branchNaming ? [`Branch: ${plan.branchNaming.pattern.replace('{slug}',`${plan.id}-<run-id>`)} (${plan.branchNaming.workType})`] : []),
     `Providers: ${(plan.providerRefs ?? []).join(', ') || 'none'}`,
+    ...(planning?.harness === 'claude' && plan.managedClaudeProfile ? [`Planning spending cap: $${plan.managedClaudeProfile.planning.maxCostUsd}`] : []),
     ...(!planning && plan.clientProfile ? [`Planning client limits: ${JSON.stringify(plan.clientProfile)}`] : []),
     'Request:', task,
     'Acceptance criteria:', ...request.acceptanceCriteria.map((item,index) => `  ${index+1}. ${item}`),
@@ -84,6 +85,7 @@ function reviewLines(project, task, harness, proposal, details = false) {
     const selection = node.executionSelection;
     if (node.role === 'worker') {
       lines.push(`    executor: ${execution.client ?? harness.kind}`);
+      if (execution.executionSelection && execution.clientProfile) lines.push(`    executor spending cap: $${execution.clientProfile.execution.maxCostUsd}`);
       if (!execution.executionSelection && execution.clientProfile) lines.push(`    executor limits: ${JSON.stringify(execution.clientProfile)}`);
     }
     if (selection) {

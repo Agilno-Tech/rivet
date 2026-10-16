@@ -17,12 +17,13 @@ if (process.argv[2] === '--version') {
 if (process.argv.includes('--help')) {
   const options = provider === 'codex'
     ? ['--ephemeral', '--ignore-user-config', '--color', '--sandbox']
-    : ['--print', '--input-format', '--output-format', '--no-session-persistence', '--model', '--effort', '--permission-mode', '--tools', '--json-schema', '--max-budget-usd'];
+    : ['--print', '--input-format', '--output-format', '--no-session-persistence', '--strict-mcp-config', '--model', '--effort', '--permission-mode', '--tools', '--json-schema', '--max-budget-usd'];
   process.stdout.write(options.join('\n'));
   process.exit(0);
 }
 
 const args = process.argv.slice(2);
+if (provider === 'claude' && !args.includes('--strict-mcp-config')) process.exit(48);
 const mode = provider === 'codex'
   ? args[args.indexOf('--sandbox') + 1]
   : args[args.indexOf('--permission-mode') + 1];
@@ -37,7 +38,7 @@ if (planning && provider === 'claude') {
   if (args[args.indexOf('--tools') + 1] !== 'Read,Glob,Grep'
     || !args[args.indexOf('--json-schema') + 1]?.includes('agilno.feature-decomposition')) process.exit(45);
 }
-record({ provider, mode, kind: payload.kind });
+record({ provider, mode, kind: payload.kind, ...(provider === 'claude' ? {maxBudgetUsd: Number(args[args.indexOf('--max-budget-usd') + 1])} : {}) });
 
 if (planning) {
   if (payload.resultContract?.kind !== 'agilno.feature-decomposition'
