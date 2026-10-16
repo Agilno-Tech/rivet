@@ -4,7 +4,7 @@ Managed orchestration coordinates approved tasks on one machine through the norm
 
 ## Scope
 
-Managed orchestration adds approved model/effort routing, bounded session replacement, shared resource admission and dependency-aware work within a task. Independent work can run concurrently when the approved plan and role capacities allow it. Plans without explicit work dependencies retain serial execution. Multi-task verification batches are not yet available. Completed-work cleanup offers a read-only preview; removal and automatic retention are not yet available.
+Managed orchestration adds approved model/effort routing, bounded session replacement, shared resource admission and dependency-aware work within a task. Independent work can run concurrently when the approved plan and role capacities allow it. Plans without explicit work dependencies retain serial execution. Multi-task verification batches are not yet available. Completed-work cleanup offers a read-only preview and explicit confirmation before removing eligible Worker checkouts. Automatic retention is not yet available.
 
 Default ceilings are four active tasks, four agent executions, one heavy verification and one dependency installation. These are cooperative limits for participating Rivet processes. They do not measure or control unrelated applications. Approved project limits apply across active runs in the same project, while run limits may lower them further. Stricter limits from an active run remain in force until its held work settles; other projects retain their own limits. Task deadlines remain independent.
 
@@ -159,8 +159,12 @@ On 2026-10-12, the two-worker fixtures in `test/runtime/feature-runtime-bridge.t
 
 The successor case preserves dirty work without repeating dependency installation or final verification. Native token/cost coverage is unmeasured in these fixtures. Separate tests exercise cross-project resource contention, restart with uncertain owners, and cancellation against real owned subprocesses. These qualify local mechanics, not an unattended live-model pilot.
 
-### Cleanup preview
+### Completed-work cleanup
 
 Run `rivet task cleanup --preview` to inspect owned Worker checkouts for a selected task. Completed or cancelled tasks need recorded proof that the owner stopped, an unchanged checkout identity, a preserved branch and a clean checkout, including ignored dependency and build files. Unsafe or unproven checkouts are retained with a reason.
 
-The preview removes nothing and is not approval for later deletion. Branches, commits, evidence, integration checkouts and verification candidates remain available.
+The preview removes nothing and is not approval for later deletion. Run `rivet task cleanup` to display the exact eligible checkout paths, branches and commits, then confirm removal interactively. Declining keeps everything. Noninteractive calls cannot approve removal.
+
+Rivet rechecks the task, stopped owner generation, reservation, checkout identity, branch tip and clean working tree while holding the task and runtime locks. Removal preserves branches, commits and task evidence. A private journal records each approved checkout before removal, so an interrupted operation can be inspected and explicitly retried without adopting a replacement directory. Removed checkouts remain visible as removed with their branches preserved.
+
+Integration and verification candidate checkouts are retained. Checkouts containing ignored build or dependency artifacts are retained, including Rivet-owned dependencies; this first manual removal path does not force-delete artifacts. Automatic retention is not yet available.

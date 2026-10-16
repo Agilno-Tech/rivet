@@ -273,6 +273,14 @@ export function hostReconciliationPaths(paths, nodeId) {
   }));
 }
 
+export function worktreeCleanupPaths(paths) {
+  assertResolvedStatePaths(paths);
+  return registerPaths(Object.freeze({...paths,
+    snapshotPath: join(paths.instanceDir, 'worktree-cleanup.json'),
+    lockPath: join(paths.instanceDir, 'worktree-cleanup.state.lock'),
+  }));
+}
+
 export function integrationCandidatePaths(paths, candidateId) {
   assertResolvedStatePaths(paths);
   if (typeof candidateId !== 'string' || candidateId.length > 64 || !INSTANCE_ID.test(candidateId)) {

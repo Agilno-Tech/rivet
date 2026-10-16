@@ -381,6 +381,25 @@ export async function createGitClient(options = {}) {
       await run(absoluteInput(repoRoot), ['worktree', 'add', '--quiet', '-b', value.branch, value.path, value.baseSha]);
     },
 
+    async removePreservedWorktree(repoRoot, input) {
+      const value = captureRecord(input, new Set(['path', 'branch', 'commit', 'dev', 'ino']), ['path', 'branch', 'commit', 'dev', 'ino']);
+      if (!validPath(value.path) || !validBranch(value.branch) || !validSha(value.commit)) fail('invalid-input');
+      const root = absoluteInput(repoRoot);
+      const topology = await client.listWorktrees(root);
+      const worker = await client.inspectRepository(value.path);
+      const primary = await client.inspectRepository(root);
+      if (value.path === root || topology[0]?.path === value.path
+        || topology.filter(item => item.path === value.path || item.branch === value.branch).length !== 1
+        || !topology.some(item => item.path === value.path && item.branch === value.branch && item.head === value.commit)
+        || worker.rootIdentity.dev !== value.dev || worker.rootIdentity.ino !== value.ino
+        || worker.gitCommonDir !== primary.gitCommonDir || worker.branch !== value.branch || worker.headSha !== value.commit
+        || worker.dirty || await client.branchTip(root, value.branch) !== value.commit
+        || (await client.statusPaths(value.path, {includeIgnoredDirectories:true,includeManagedDependencies:true})).length) fail('repository-changed');
+      // Never force removal: Git must reject dirt/submodules that appeared since inspection.
+      await run(root, ['worktree', 'remove', value.path]);
+      if (await client.branchTip(root, value.branch) !== value.commit) fail('repository-changed');
+    },
+
     async rollbackWorktreeCreation(repoRoot, input) {
       const value = captureRecord(input, new Set(['path', 'branch', 'baseSha']), ['path', 'branch', 'baseSha']);
       if (!validPath(value.path) || !validBranch(value.branch) || !validSha(value.baseSha)) fail('invalid-input');

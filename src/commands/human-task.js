@@ -1,4 +1,4 @@
-import { previewTaskWorktreeCleanup } from '../git/worktree-cleanup.js';
+import { previewTaskWorktreeCleanup, applyTaskWorktreeCleanup, confirmTaskWorktreeCleanup } from '../git/worktree-cleanup.js';
 import { executionForNode } from '../feature/client-profile.js';
 import {taskAllowance,requireManagedAllowance,activateTaskAdmission,taskCapacity} from '../runtime/task-orchestration.js';
 import {findRegistration} from '../runtime/machine-admission.js';
@@ -192,7 +192,6 @@ export async function humanTaskCommand(parsed, dependencies) {
     || parsed.operands.length !== 0 || Object.keys(parsed.flags).some(key => !['project', 'run', 'for', 'details', 'preview', 'input', 'input-json', 'phase', 'decision'].includes(key))) {
     fail('Use rivet task status|start|approve|resume|deps|recover [--project=<path>] [--run=<id>].');
   }
-  if (parsed.subcommand === 'cleanup' && parsed.flags.preview !== true) fail('Cleanup currently requires --preview; removal and retention are not available.');
   if (parsed.subcommand !== 'cleanup' && parsed.flags.preview !== undefined) fail('--preview requires task cleanup.');
   const allowanceMs=taskAllowance(parsed.flags.for);
   if(allowanceMs!==undefined&&!['start','resume'].includes(parsed.subcommand))fail('--for is available on task start or resume.');
@@ -205,13 +204,24 @@ export async function humanTaskCommand(parsed, dependencies) {
   if (parsed.subcommand === 'cleanup') {
     const gitClient = await createGitClient({gitExecutable:await dependencies.resolveCommandExecutable('git')});
     const preview = await previewTaskWorktreeCleanup({projectRoot:project.root, runId:record.runId}, {gitClient});
-    dependencies.output.log('Cleanup preview only. No checkout, branch, commit or evidence was removed.');
+    dependencies.output.log('Cleanup plan. Branches, commits and task evidence will be preserved.');
     for (const item of preview.checkouts) {
       dependencies.output.log(`${item.eligible ? 'Eligible' : 'Retained'}: ${visible(item.path)} (${visible(item.reason)}).`);
       dependencies.output.log(`  Preserve branch: ${visible(item.branch)}; commit: ${visible(item.commit ?? 'unknown')}.`);
     }
     if (!preview.checkouts.length) dependencies.output.log('No owned Worker checkouts are available for cleanup.');
-    dependencies.output.log('Integration and candidate checkouts are retained. Removal and automatic retention are not available.');
+    dependencies.output.log('Integration and candidate checkouts, and checkouts containing ignored artifacts, are retained.');
+    if (parsed.flags.preview === true) {
+      dependencies.output.log('Preview only. No checkout, branch, commit or evidence was removed.');
+    } else if (preview.checkouts.some(item => item.eligible)) {
+      if (dependencies.terminalIsInteractive?.() !== true) fail('Cleanup requires an interactive confirmation of these exact paths. Use --preview to inspect them.');
+      const approval = await confirmTaskWorktreeCleanup(preview, dependencies.confirmWorktreeCleanup);
+      if (!approval) {dependencies.output.log('Cleanup cancelled. No checkout was removed.');return EXIT_CODES.SUCCESS;}
+      const result = await applyTaskWorktreeCleanup({projectRoot:project.root,runId:record.runId,preview,approval},{gitClient});
+      for (const item of result.checkouts) dependencies.output.log(item.status === 'removed'
+        ? `Removed checkout: ${visible(item.path)}. Preserved branch: ${visible(item.branch)}.`
+        : `Cleanup incomplete: ${visible(item.path)}. Checkout retained or outcome requires inspection; branch preserved: ${visible(item.branch)}.`);
+    }
     return EXIT_CODES.SUCCESS;
   }
   requireManagedAllowance(record,allowanceMs);

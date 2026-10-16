@@ -80,7 +80,7 @@ Everyday commands:
   rivet task start                Reopen an unapproved plan
   rivet task approve              Review and finish verified work
   rivet task deps                 Approve configured dependency setup
-  rivet task cleanup --preview    Preview completed-task checkout cleanup
+  rivet task cleanup [--preview]  Review and approve completed-task checkout cleanup
   rivet task recover              Inspect abandoned operation locks
   rivet task checkpoint           Preserve a managed host checkpoint
   rivet task handoff              Fence and transfer a managed session
@@ -138,7 +138,7 @@ Usage:
   rivet task approve-decision --decision=<id> [--project=<path>] [--run=<id>]
   rivet task review [--phase=plan|final] [--input=<report.json>] [--project=<path>] [--run=<id>]
   rivet task deps [--project=<path>] [--run=<id>]
-  rivet task cleanup --preview [--project=<path>] [--run=<id>]
+  rivet task cleanup [--preview] [--project=<path>] [--run=<id>]
   rivet protocols add <slug> [--from=<path>] [--project=<path>] [--json]
   rivet protocols import <slug> --from=<path> [--project=<path>] [--json]
   rivet protocols validate [<slug>] [--project=<path>] [--json]
@@ -233,6 +233,15 @@ async function defaultConfirmModelDelegation(_preview, options = {}) {
   finally { options.signal?.removeEventListener('abort', abort); readline.close(); }
 }
 
+async function defaultConfirmWorktreeCleanup() {
+  const readline = createInterface({input:process.stdin,output:process.stdout});
+  try {
+    const answer = await readline.question('Remove exactly the eligible checkouts displayed above, preserving their branches? [y/N] ');
+    return /^(?:y|yes)$/i.test(String(answer).trim());
+  } catch { return false; }
+  finally { readline.close(); }
+}
+
 async function defaultConfirmDependencyInstall(_plan, options = {}) {
   if (options.signal?.aborted) return false;
   const readline = createInterface({ input: process.stdin, output: process.stdout });
@@ -295,6 +304,7 @@ function resolveDependencies(overrides = {}) {
     delivery: overrides.delivery,
     confirmOverwrite: overrides.confirmOverwrite ?? defaultConfirmOverwrite,
     confirmFeatureActivation: overrides.confirmFeatureActivation ?? defaultConfirmFeatureActivation,
+    confirmWorktreeCleanup: overrides.confirmWorktreeCleanup ?? defaultConfirmWorktreeCleanup,
     confirmDependencyInstall: overrides.confirmDependencyInstall ?? defaultConfirmDependencyInstall,
     setupRemotePrompt: overrides.setupRemotePrompt,
     projectChecksPrompt: overrides.projectChecksPrompt,
