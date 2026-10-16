@@ -255,6 +255,9 @@ function validateConfigSemantics(config) {
   }
 
   const commandNames = new Set(Object.keys(config.project.commands));
+  for (const [index,path] of (config.quality.verificationOutputs ?? []).entries()) {
+    if (path.normalize('NFKC') !== path) fail(`/quality/verificationOutputs/${index}`, 'unsafe-path');
+  }
   const gateIds = uniqueBy(config.quality.commandGates, 'id', '/quality/commandGates');
   for (const gate of config.quality.commandGates) {
     if (!commandNames.has(gate.command)) fail(`/quality/commandGates/${gate.id}/command`, 'command-reference');

@@ -24,6 +24,7 @@ import { createApprovalReceipt, createApprovalRegistry } from '../policy/approva
 import { createAuthorityEnvelope } from '../policy/authority.js';
 import { buildLaunchContract, validateLaunchPayload } from '../prompts/launch-contract.js';
 import { runQualityGates } from '../quality/runner.js';
+import { configuredVerificationReuse } from '../quality/configuration.js';
 import { createRuntimeInstance } from '../runtime/instance-store.js';
 import { createOrchestrator } from '../runtime/orchestrator.js';
 import { bootstrapWorktreeDependencies, inspectWorktreeDependencies, WorktreeBootstrapError } from '../runtime/worktree-bootstrap.js';
@@ -811,6 +812,7 @@ export function createFeatureExecutor(input) {
     try {
       if (config.project.dependencies) await prepareDependencies({root:integration.path}, integration.branch, identity.commitSha);
       quality = await runQualityGates({
+        ...configuredVerificationReuse(config),
         projectRoot: integration.path,
         commitSha: identity.commitSha,
         authority: featureQualityAuthority(config),
@@ -819,6 +821,9 @@ export function createFeatureExecutor(input) {
       }, { gitClient: configured.gitClient, now: nowMs, signal });
       if(quality.status==='pass') await requireGovernance({project,run,gitClient:configured.gitClient,config,phase:'final',checkout:{path:integration.path,branch:integration.branch,commitSha:identity.commitSha}});
     } catch (error) {
+      if(error?.code === 'ERR_VERIFICATION_PENDING') {
+        return blocked(run,state,'Verification is still owned by another execution. Inspect the task and retry verification after that owner finishes; no failed check was recorded.');
+      }
       failure = typeof error?.safeMessage === 'string' ? error.safeMessage : 'Configured quality gates could not complete safely.';
     }
     const afterChecks = await configured.gitClient.inspectRepository(integration.path);

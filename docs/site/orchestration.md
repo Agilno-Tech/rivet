@@ -113,6 +113,26 @@ The owning harness uses the checkpoint and handoff protocol for host sessions; n
 
 ## Evidence and limits
 
+### Optional verification reuse
+
+By default, Rivet runs the configured quality gates each time. Projects with reproducible, local checks can opt into sharing an exact passing result in `.rivet/quality.yaml`:
+
+```yaml
+verificationReuse:
+  enabled: true
+  reproducible: true
+  dependencyRoots: [node_modules]
+  toolchainRoots: [tools]
+```
+
+Replace these directories with the actual dependency and toolchain inputs used by the checks. Both lists must explicitly name existing checkout-relative directories. `reproducible: true` asserts that the checks do not depend on changing external services or undeclared local inputs. Leave reuse disabled when that cannot be established.
+
+Reuse requires the same clean checkout and commit, loaded project configuration, commands, authority, environment, executables and declared input contents. Rivet fingerprints bounded inputs and keeps environment values out of the persisted records. Unsafe or oversized inputs, unsupported interpreter resolution, and gates that produce evidence artifacts bypass reuse and execute normally. Changed inputs invalidate the result.
+
+Spawned tasks and host task verification use this policy automatically. Task verification reports include `verificationReuse`, such as `executed`, `reused`, `disabled`, or a reason reuse was bypassed. Concurrent callers share verification ownership; stopping a waiter does not stop the owner. Uncertain ownership never authorizes a second execution. Reuse certifies the same checkout and commit; it does not certify a different task branch or replace delivery CI.
+
+### Accounting
+
 Claude structured output provides native token accounting and a native cost estimate. Codex's current result envelope supplies model-reported tokens; cost is unknown. Context occupancy is unknown for both current adapters. Unknown values stay null with their source and assurance; they are not measured zero.
 
 A fresh bounded invocation can continue a verified checkpoint. This does not imply arbitrary live compaction or provider-session reset support. Host tools have their own capabilities and trust boundary.

@@ -17,6 +17,7 @@ import { createReservationStore } from '../git/reservations.js';
 import { createReservedWorktree } from '../git/worktrees.js';
 import { buildLaunchContract } from '../prompts/launch-contract.js';
 import { runQualityGates } from '../quality/runner.js';
+import { configuredVerificationReuse } from '../quality/configuration.js';
 import { createRuntimeInstance } from '../runtime/instance-store.js';
 import { createOrchestrator, validateRuntimeSnapshot } from '../runtime/orchestrator.js';
 import {
@@ -757,6 +758,7 @@ export function createHostExecution(input) {
       let failure;
       try {
         quality = await runQualityGates({
+          ...configuredVerificationReuse(config),
           projectRoot: integration.path,
           commitSha: integrated.headSha,
           authority: featureQualityAuthority(config),
@@ -765,7 +767,7 @@ export function createHostExecution(input) {
         }, { gitClient, now: () => featureNowMilliseconds(now) });
         if(quality.status==='pass') await requireGovernance({project:value.project,run,gitClient,config,phase:'final',checkout:{path:integration.path,branch:integration.branch,commitSha:integrated.headSha}});
       } catch (error) {
-        if(error?.queued)return immutableJson({status:'queued',reason:error.claim?.reason,runtimeVersion:value.expectedRuntimeVersion});
+        if(error?.queued)return immutableJson({status:'queued',reason:error.claim?.reason??error.reason,runtimeVersion:value.expectedRuntimeVersion});
         failure = typeof error?.safeMessage === 'string' ? error.safeMessage : 'Verification could not complete safely.';
       }
       const afterChecks = await gitClient.inspectRepository(integration.path);

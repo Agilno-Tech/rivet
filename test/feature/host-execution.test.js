@@ -40,7 +40,7 @@ async function npmExecutable() {
   return realpath(stdout.trim());
 }
 
-async function fixture(t, { now = NOW, schemaV2 = false, ownedPaths = ['app/agenda.js'], lockedDependencies = false, hostContext = false, repositoryRemote, workType, managed = false } = {}) {
+async function fixture(t, { now = NOW, schemaV2 = false, ownedPaths = ['app/agenda.js'], lockedDependencies = false, hostContext = false, repositoryRemote, workType, managed = false, verificationReuse = false } = {}) {
   const parent = await realpath(await mkdtemp(join(tmpdir(), 'rivet-host-execution-')));
   const root = join(parent, 'project');
   await mkdir(root);
@@ -141,6 +141,16 @@ async function fixture(t, { now = NOW, schemaV2 = false, ownedPaths = ['app/agen
         resourceId: 'DEMO-1', sourceUrl: 'https://jira.example.test/browse/DEMO-1', revision: '1', capturedAt: NOW,
         content: { title: 'Add agenda', description: 'Add the agenda implementation.', acceptanceCriteria: ['Add the agenda implementation.'] } }],
     } };
+  }
+  if (verificationReuse) {
+    const path=join(root,'.rivet','quality.yaml');
+    const quality=YAML.parse(await readFile(path,'utf8'));
+    quality.verificationReuse={enabled:true,reproducible:true,dependencyRoots:['inputs'],toolchainRoots:['tools']};
+    await writeFile(path,YAML.stringify(quality));
+    for(const directory of ['inputs','tools']) {
+      await mkdir(join(root,directory));
+      await writeFile(join(root,directory,'.keep'),'fixture\n');
+    }
   }
   await mkdir(join(root, '.rivet', 'protocols'), {recursive: true});
   await writeFile(join(root, '.rivet', 'protocols', 'database-changes.md'), '---\n' + YAML.stringify(PROTOCOL_METADATA) + '---\n\n' + PROTOCOL_BODY);
@@ -1484,4 +1494,63 @@ test('application enrolls a previously prepared managed host at first valid next
  await assert.rejects(app.work.nextAction({...base,expectedRuntimeVersion:prepared.runtimeVersion+1}));assert.equal((await app.machine.inspect()).configured,false);
  for(const key of ['hidden',Symbol('hidden')]){await assert.rejects(app.work.nextAction(Object.defineProperty({...base,expectedRuntimeVersion:prepared.runtimeVersion},key,{value:true})));assert.equal((await app.machine.inspect()).configured,false);}
  const next=await app.work.nextAction({...base,expectedRuntimeVersion:prepared.runtimeVersion});assert.ok(next.action);assert.equal((await app.machine.inspect()).registrations.length,1);
+});
+
+
+test('host verification consumes exact configured reuse and reports that evidence was reused',async t=>{
+  const {root,approved,gate,gitClient,execution,verifyInput}=await completedWorker(t,{verificationReuse:true});
+  const {loadProjectConfig}=await import('../../src/config/load.js');
+  const {configuredVerificationReuse}=await import('../../src/quality/configuration.js');
+  const {runQualityGates}=await import('../../src/quality/runner.js');
+  const {configuredFeatureGates,featureQualityAuthority}=await import('../../src/feature/runtime-bridge.js');
+  const {createAcceptedIntegrationStore}=await import('../../src/feature/accepted-integration.js');
+  const {acceptedIntegrationPaths}=await import('../../src/state/paths.js');
+  const paths=await resolveFeatureRunPaths(root,approved.runId);
+  const accepted=await createAcceptedIntegrationStore(await acceptedIntegrationPaths(paths)).readOnly();
+  const config=await loadProjectConfig(root);
+  const counter=join(dirname(root),'gate-count');
+  await writeFile(gate,`#!/bin/sh\nprintf 'run\\n' >> '${counter}'\nexit 0\n`);
+  const quality=await runQualityGates({
+    ...configuredVerificationReuse(config),projectRoot:accepted.path,commitSha:accepted.commitSha,
+    authority:featureQualityAuthority(config),gates:await configuredFeatureGates(config,async()=>gate,accepted.path),
+    environment:{PATH:process.env.PATH},
+  },{gitClient,now:()=>Date.parse(NOW)});
+  assert.equal(quality.verificationReuse.status,'executed');
+  const before=await readFile(counter,'utf8');
+  assert.equal((await execution.verify(verifyInput)).status,'awaiting-final-approval');
+  const report=await createVerificationReportStore(await verificationReportPaths(paths)).readOnly();
+  assert.equal(report.verificationReuse,'reused');
+  assert.equal(await readFile(counter,'utf8'),before);
+});
+
+test('host and verify command leave long shared verification pending without recording failure',async t=>{
+  const {root,approved,gate,gitClient,execution,verifyInput}=await completedWorker(t,{verificationReuse:true});
+  const {loadProjectConfig}=await import('../../src/config/load.js');
+  const {configuredVerificationReuse}=await import('../../src/quality/configuration.js');
+  const {runQualityGates}=await import('../../src/quality/runner.js');
+  const {verifyProject}=await import('../../src/commands/verify.js');
+  const {configuredFeatureGates,featureQualityAuthority}=await import('../../src/feature/runtime-bridge.js');
+  const {createAcceptedIntegrationStore}=await import('../../src/feature/accepted-integration.js');
+  const {acceptedIntegrationPaths}=await import('../../src/state/paths.js');
+  const paths=await resolveFeatureRunPaths(root,approved.runId);
+  const accepted=await createAcceptedIntegrationStore(await acceptedIntegrationPaths(paths)).readOnly();
+  const config=await loadProjectConfig(root);
+  const marker=join(dirname(root),'long-owner-started');
+  await writeFile(gate,`#!/bin/sh\nprintf started > '${marker}'\nexec /bin/sleep 120\n`);
+  const quality={...configuredVerificationReuse(config),projectRoot:accepted.path,commitSha:accepted.commitSha,
+    authority:featureQualityAuthority(config),gates:await configuredFeatureGates(config,async()=>gate,accepted.path),environment:{PATH:process.env.PATH}};
+  const controller=new AbortController();
+  const owner=runQualityGates(quality,{gitClient,now:()=>Date.parse(NOW),signal:controller.signal}).catch(error=>error);
+  try {
+    await waitForFile(marker);
+    const [host,command]=await Promise.all([
+      execution.verify(verifyInput),
+      verifyProject({quality,traceability:{subjectId:'review-owner',acceptanceCriteria:[],manualReviews:[]}},{gitClient,now:()=>Date.parse(NOW)}),
+    ]);
+    assert.equal(host.status,'queued');
+    assert.equal(host.reason,'verification-running');
+    assert.equal(command.status,'queued');
+    assert.equal(command.ok,false);
+    assert.equal(await createVerificationReportStore(await verificationReportPaths(paths)).readOnly(),null);
+  } finally {controller.abort();await owner;}
 });

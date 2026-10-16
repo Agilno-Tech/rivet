@@ -126,10 +126,16 @@ export async function verifyProject(input, options = {}) {
   const request = snapshot(input, ['quality', 'traceability'], ['quality', 'traceability']);
   const configured = snapshot(options, ['now', 'approvalRegistry', 'nowMs', 'gitClient'], ['gitClient']);
   const traceRequest = traceabilityRequest(request.traceability);
-  const quality = await runQualityGates(request.quality, {
-    gitClient: configured.gitClient,
-    ...(configured.now === undefined ? {} : { now: configured.now }),
-  });
+  let quality;
+  try {
+    quality = await runQualityGates(request.quality, {
+      gitClient: configured.gitClient,
+      ...(configured.now === undefined ? {} : { now: configured.now }),
+    });
+  } catch(error) {
+    if(error?.code !== 'ERR_VERIFICATION_PENDING')throw error;
+    return immutable({ok:false,status:'queued',reason:error.reason});
+  }
   const traceability = validateTraceability({
     subjectId: traceRequest.subjectId,
     qualityRun: quality,
@@ -166,6 +172,7 @@ export async function verifyCommand(parsed, dependencies = {}) {
   const exitCode = result.ok ? EXIT_CODES.SUCCESS : EXIT_CODES.FAILED_GATE;
   if (parsed.flags.json) dependencies.output.json({ ok: result.ok, command: 'verify', result }, result.ok ? 'stdout' : 'stderr');
   else if (result.ok) dependencies.output.log('Verification: pass.');
+  else if (result.status === 'queued') dependencies.output.error('Verification: waiting for its existing owner. Retry after it finishes; no failed check was recorded.');
   else dependencies.output.error('Verification: fail.');
   return exitCode;
 }

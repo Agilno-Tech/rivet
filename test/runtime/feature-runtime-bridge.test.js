@@ -280,6 +280,17 @@ for (const managed of [false,true]) test(`executes all Workers sequentially with
     await writeFile(path,stringify(orchestration));
   }
   await writeFile(join(root, 'README.md'), '# Runtime fixture\n');
+  if(managed) {
+    const {parse,stringify}=await import('yaml');
+    const path=join(root,'.rivet','quality.yaml');
+    const quality=parse(await readFile(path,'utf8'));
+    quality.verificationReuse={enabled:true,reproducible:true,dependencyRoots:['inputs'],toolchainRoots:['tools']};
+    await writeFile(path,stringify(quality));
+    for(const directory of ['inputs','tools']) {
+      await mkdir(join(root,directory));
+      await writeFile(join(root,directory,'.keep'),'fixture\n');
+    }
+  }
   await writeFile(join(root, '.gitignore'), 'node_modules/\n');
   await writeFile(join(root, 'package.json'), JSON.stringify({
     scripts: { build: 'x', test: 'x', lint: 'x', typecheck: 'x', dev: 'x' },
@@ -373,6 +384,14 @@ for (const managed of [false,true]) test(`executes all Workers sequentially with
   assert.equal(launches.length, 2);
   const observedCommands = (await readFile(gateLog, 'utf8')).trim().split('\n');
   assert.deepEqual(observedCommands, ['run build', 'run test', 'run lint']);
+  if(managed) {
+    assert.equal(verification.verificationReuse,'executed');
+    const repeated=await executor({project:root,run});
+    assert.equal(repeated.status,'awaiting-final-approval',repeated.summary);
+    const reused=await createVerificationReportStore(await verificationReportPaths(featurePaths)).readOnly();
+    assert.equal(reused.verificationReuse,'reused');
+    assert.deepEqual((await readFile(gateLog,'utf8')).trim().split('\n'),observedCommands);
+  }
   assert.equal(maxActiveLaunches, 1);
   t.diagnostic(JSON.stringify({ fixture: managed ? 'managed-profiles' : 'serial', workerCalls: launches.length,
     maxConcurrentWorkers: maxActiveLaunches, dependencyInstalls: installsApproved, verificationCommands: observedCommands.length,
