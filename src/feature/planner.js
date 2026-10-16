@@ -68,6 +68,31 @@ function requiredEvidence(config, role, { humanApproval = false } = {}) {
   return [...new Set([...profile.requiredEvidence, ...(humanApproval ? ['human-approval'] : [])])];
 }
 
+// Stable topological ordering gives conflict edges a deterministic direction without
+// introducing cycles when an explicit prerequisite appears later in the proposal.
+function orderedWorkItems(items) {
+  if (items[0].id === undefined) return items;
+  const ordered = [];
+  const visited = new Set();
+  const byId = new Map(items.map(item => [item.id, item]));
+  function visit(item) {
+    if (visited.has(item.id)) return;
+    for (const id of item.dependencies) visit(byId.get(id));
+    visited.add(item.id);
+    ordered.push(item);
+  }
+  for (const item of items) visit(item);
+  return ordered;
+}
+
+function conflicts(left, right) {
+  const normalize = path => path.replaceAll('\\', '/').toLowerCase();
+  return left.ownedPaths.some(a => right.ownedPaths.some(b => {
+    const x = normalize(a); const y = normalize(b);
+    return x === y || x.startsWith(`${y}/`) || y.startsWith(`${x}/`);
+  })) || (left.sharedResources ?? []).some(id => (right.sharedResources ?? []).includes(id));
+}
+
 function compileFeaturePlan({ decomposition, config, workRequest, baselineCommit, client }) {
   if (client === 'host' && config.orchestration.roles.some(role => role.harness !== undefined)) fail('compiled-plan-invalid');
   const { boss, manager, worker } = roleChain(config);
@@ -82,15 +107,17 @@ function compileFeaturePlan({ decomposition, config, workRequest, baselineCommit
     .filter(provider => configuredProviders.has(provider));
   const commandIds = config.quality.commandGates.filter(gate => gate.required).map(gate => gate.command);
   const used = new Set(['activation', 'management', 'final-delivery']);
-  const workers = decomposition.workItems.map(item => ({
-    id: uniqueNodeId(item.objective, used),
+  const explicit = decomposition.workItems[0].id !== undefined;
+  const workers = orderedWorkItems(decomposition.workItems).map(item => ({
+    id: item.id ?? uniqueNodeId(item.objective, used),
+    ...(item.sharedResources === undefined ? {} : { sharedResources: item.sharedResources }),
     parentId: 'management',
     role: 'worker',
     roleId: worker.id,
     ...(execution === undefined ? {} : { execution }),
     ...selection(item.executionClass ?? 'implementation'),
     objective: item.objective,
-    dependencies: ['management'],
+    dependencies: item.dependencies?.length ? [...item.dependencies] : ['management'],
     ownedPaths: item.ownedPaths,
     authorityScopes: workerScopes,
     commandIds,
@@ -102,12 +129,18 @@ function compileFeaturePlan({ decomposition, config, workRequest, baselineCommit
     status: 'proposed',
   }));
   for (let index = 1; index < workers.length; index += 1) {
-    workers[index].dependencies = [workers[index - 1].id];
+    if (!explicit) workers[index].dependencies = [workers[index - 1].id];
+    else {
+      const node = workers[index];
+      const predecessors = workers.slice(0, index).filter(previous => conflicts(previous, node)).map(previous => previous.id);
+      if (predecessors.length) node.dependencies = [...new Set([...node.dependencies.filter(id => id !== 'management'), ...predecessors])];
+    }
   }
   const finalScopes = boss.authorityScopes.includes('verify') ? ['verify'] : [boss.authorityScopes[0]];
   const clientProfile = clientProfileFor(client, config.project.claude);
   return {
     schemaVersion: 1,
+    ...(explicit ? { maxParallelWorkers: policy?.limits.workersPerTask ?? 1 } : {}),
     ...(policy === undefined ? {} : { executionPolicy: executionPolicyIdentity(policy) }),
     ...(policy && client !== 'host' && Object.values(policy.profiles).some(profile => profile.harness === 'claude') ? { managedClaudeProfile: clientProfileFor('claude', config.project.claude) } : {}),
     id: slug(workRequest.title),

@@ -116,3 +116,13 @@ test('parses exactly one bounded immutable plan result and rejects unsafe output
     assert.throws(() => parsePlanningResult(output));
   }
 });
+
+test('planning result instructions expose bounded optional dependency graphs without granting execution authority', () => {
+  const result = JSON.parse(serializePlanningContract(fixture())).resultContract;
+  const properties = result.schema.$defs.workItem.properties;
+  assert.equal(properties.dependencies.maxItems, 16);
+  assert.equal(properties.sharedResources.maxItems, 32);
+  assert.match(result.instructions.join(' '), /give every work item a stable lowercase id/);
+  assert.match(result.instructions.join(' '), /Omit both fields on every item to preserve sequential execution/);
+  assert.match(result.instructions.join(' '), /Do not emit roles, providers, authority, budgets/);
+});

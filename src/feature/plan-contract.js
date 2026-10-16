@@ -122,6 +122,8 @@ function validatePlanSemantics(plan, { config, workRequest, baselineCommit, clie
     if (canonical(expected) !== canonical(plan.branchNaming)) fail();
   }
   const executionPolicy = config.orchestration.executionPolicy;
+  if (plan.maxParallelWorkers !== undefined
+    && plan.maxParallelWorkers !== (executionPolicy?.limits.workersPerTask ?? 1)) fail();
   const needsManagedClaude = executionPolicy && client !== 'host' && Object.values(executionPolicy.profiles).some(profile => profile.harness === 'claude');
   if (needsManagedClaude ? !matchesClientProfile('claude', plan.managedClaudeProfile, config.project.claude) : plan.managedClaudeProfile !== undefined) fail();
   if (canonical(plan.executionPolicy) !== canonical(executionPolicyIdentity(executionPolicy))) fail();
@@ -173,7 +175,7 @@ function validatePlanSemantics(plan, { config, workRequest, baselineCommit, clie
     if (node.authorityScopes.includes('merge') && !role.permissions.merge) fail();
     if (node.authorityScopes.includes('deploy') && !role.permissions.deploy) fail();
     if (node.role === 'worker' && node.ownedPaths.length === 0) fail();
-    if (node.role !== 'worker' && node.ownedPaths.length > 0) fail();
+    if (node.role !== 'worker' && (node.ownedPaths.length > 0 || node.sharedResources !== undefined)) fail();
     const foldedPaths = node.ownedPaths.map(path => safeOwnedPath(path, config.project.repository.sensitivePaths ?? []));
     if (new Set(foldedPaths).size !== foldedPaths.length) fail('owned-path-duplicate');
     pathSets.set(node.id, foldedPaths);
@@ -205,7 +207,8 @@ function validatePlanSemantics(plan, { config, workRequest, baselineCommit, clie
       const left = workers[leftIndex];
       const right = workers[rightIndex];
       if (dependsOn(left, right.id, nodeMap) || dependsOn(right, left.id, nodeMap)) continue;
-      if (pathSets.get(left.id).some(a => pathSets.get(right.id).some(b => pathOverlap(a, b)))) fail();
+      if (pathSets.get(left.id).some(a => pathSets.get(right.id).some(b => pathOverlap(a, b)))
+        || (left.sharedResources ?? []).some(id => (right.sharedResources ?? []).includes(id))) fail();
     }
   }
   const requiredCommands = config.quality.commandGates.filter(gate => gate.required).map(gate => gate.command);

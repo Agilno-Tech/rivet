@@ -37,7 +37,9 @@ export function featureDecompositionResultContract() {
       'If contract.repair is present, a prior proposal was rejected for its reason code. Reinspect the repository and return a complete corrected decomposition under the same policy; do not omit required implementation work to avoid validation.',
       'List only files the work item is expected to change, including adjacent style modules, configuration, fixtures, and tests when they will be modified; do not include files that are merely read or reused, and never rely on an unlisted support file.',
       'Allocate every request acceptance criterion at least once using one-based acceptance-criterion indexes; criteria may support multiple work items.',
-      'Do not emit roles, providers, authority, budgets, commands, evidence, dependencies, approval gates, or other policy fields.',
+      'For a dependency graph, give every work item a stable lowercase id and an explicit dependencies array of work-item IDs (empty for independent items). Never mix graph items with legacy items. Dependencies must be acyclic. Omit both fields on every item to preserve sequential execution.',
+      'List sharedResources as stable lowercase identifiers when work items contend for a shared resource; this requires graph IDs and dependencies. Rivet serializes shared resources and overlapping owned paths conservatively.',
+      'Do not emit roles, providers, authority, budgets, commands, evidence, approval gates, or other policy fields.',
     ],
     schema,
   });
@@ -48,6 +50,26 @@ export function createFeatureDecomposition(value, acceptanceCriterionCount) {
   try { result = immutableJson(value); } catch { fail(); }
   if (!Number.isSafeInteger(acceptanceCriterionCount) || acceptanceCriterionCount < 1 || acceptanceCriterionCount > 256
     || !validateSchema(result)) fail();
+  const explicit = result.workItems.some(item => item.id !== undefined || item.dependencies !== undefined || item.sharedResources !== undefined);
+  if (explicit) {
+    const items = new Map();
+    for (const item of result.workItems) {
+      if (item.id === undefined || item.dependencies === undefined || items.has(item.id)
+        || ['activation', 'management', 'final-delivery'].includes(item.id)) fail();
+      items.set(item.id, item);
+    }
+    const visited = new Set();
+    const visiting = new Set();
+    function visit(id) {
+      if (visited.has(id)) return;
+      if (visiting.has(id) || !items.has(id)) fail();
+      visiting.add(id);
+      for (const dependency of items.get(id).dependencies) visit(dependency);
+      visiting.delete(id);
+      visited.add(id);
+    }
+    for (const id of items.keys()) visit(id);
+  }
   const allocated = new Set();
   for (const item of result.workItems) {
     for (const index of item.acceptanceCriterionIndexes) {

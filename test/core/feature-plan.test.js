@@ -492,3 +492,94 @@ test('managed Claude routes retain configured spending caps across planner harne
     assert.throws(() => createFeaturePlan({proposal: plan, config: changed, workRequest, baselineCommit: BASELINE, client}), FeaturePlanError);
   }
 });
+
+function graphDecomposition() {
+  const value = decomposition();
+  value.workItems.forEach((item, index) => Object.assign(item, { id: `work-${index}`, dependencies: [] }));
+  return value;
+}
+
+test('explicit dependency graphs retain stable IDs and allow independent siblings', async () => {
+  const config = await configuration();
+  const input = { config, workRequest: request(), baselineCommit: BASELINE, decomposition: graphDecomposition() };
+  const plan = createHostFeaturePlan(input);
+  assert.deepEqual(plan.nodes.filter(n => n.role === 'worker').map(n => [n.id, n.dependencies]), [
+    ['work-0', ['management']], ['work-1', ['management']],
+  ]);
+  input.decomposition.workItems[0].dependencies = ['work-1'];
+  const dependent = createHostFeaturePlan(input);
+  assert.deepEqual(dependent.nodes.filter(n => n.role === 'worker').map(n => [n.id, n.dependencies]), [
+    ['work-1', ['management']], ['work-0', ['work-1']],
+  ]);
+  assert.notEqual(featurePlanDigest(plan), featurePlanDigest(dependent));
+});
+
+test('explicit graphs serialize overlapping paths and named shared resources deterministically', async () => {
+  const config = await configuration();
+  for (const conflict of ['path', 'resource']) {
+    const value = graphDecomposition();
+    if (conflict === 'path') value.workItems[1].ownedPaths = ['APP/agenda/child.js'];
+    else value.workItems.forEach(item => { item.sharedResources = ['test-database']; });
+    const input = { config, workRequest: request(), baselineCommit: BASELINE, decomposition: value };
+    const plan = createHostFeaturePlan(input);
+    assert.deepEqual(plan.nodes[3].dependencies, ['work-0']);
+    if (conflict === 'resource') {
+      assert.deepEqual(plan.nodes[2].sharedResources, ['test-database']);
+      const proposal = structuredClone(plan);
+      proposal.nodes[3].dependencies = ['management'];
+      assert.throws(() => createFeaturePlan({ proposal, config, workRequest: input.workRequest, baselineCommit: BASELINE, client: 'host' }));
+    }
+    value.workItems[0].dependencies = ['work-1'];
+    const reversed = createHostFeaturePlan(input);
+    assert.deepEqual(reversed.nodes[3].dependencies, ['work-1']);
+  }
+});
+
+test('rejects incomplete, duplicate, reserved, unknown, self and cyclic dependency metadata', async () => {
+  const config = await configuration();
+  const edits = [
+    value => { delete value.workItems[0].id; },
+    value => { delete value.workItems[0].dependencies; },
+    value => { delete value.workItems[0].id; delete value.workItems[0].dependencies; },
+    value => { value.workItems[1].id = 'work-0'; },
+    value => { value.workItems[0].id = 'management'; },
+    value => { value.workItems[0].dependencies = ['missing']; },
+    value => { value.workItems[0].dependencies = ['work-0']; },
+    value => { value.workItems[0].dependencies = ['work-1']; value.workItems[1].dependencies = ['work-0']; },
+    value => { value.workItems[0].dependencies = ['work-1', 'work-1']; },
+    value => { value.workItems[0].sharedResources = ['Database']; },
+  ];
+  for (const edit of edits) {
+    const value = graphDecomposition(); edit(value);
+    assert.throws(() => createHostFeaturePlan({ config, workRequest: request(), baselineCommit: BASELINE, decomposition: value }), error => error.details.reason === 'decomposition-invalid');
+  }
+});
+
+test('pins explicit graph parallelism to policy and leaves legacy plans unchanged', async () => {
+  const { managedPolicy } = await import('../fixtures/execution-policy.js');
+  const base = await configuration();
+  for (const managed of [false, true]) {
+    const config = structuredClone(base);
+    if (managed) config.orchestration.executionPolicy = managedPolicy();
+    const input = { config, workRequest: request(), baselineCommit: BASELINE, decomposition: graphDecomposition() };
+    const plan = createHostFeaturePlan(input);
+    assert.equal(plan.maxParallelWorkers, managed ? 2 : 1);
+    const proposal = structuredClone(plan);
+    proposal.maxParallelWorkers += 1;
+    assert.throws(() => createFeaturePlan({ proposal, config, workRequest: input.workRequest, baselineCommit: BASELINE, client: 'host' }));
+    const legacy = createHostFeaturePlan({ ...input, decomposition: decomposition() });
+    assert.equal(Object.hasOwn(legacy, 'maxParallelWorkers'), false);
+  }
+});
+
+test('retains fan-in dependencies and deterministic compilation through the planning client', async () => {
+  const config = await configuration();
+  const value = graphDecomposition();
+  value.workItems.push({ id: 'join', dependencies: ['work-0', 'work-1'], objective: 'Integrate exports', ownedPaths: ['app/integration'], acceptanceCriterionIndexes: [1, 2] });
+  const planner = createFeaturePlanner({ planningClient: { propose: async () => value } });
+  const input = { config, workRequest: request(), baselineCommit: BASELINE, client: 'codex' };
+  const plan = await planner.propose(input);
+  assert.deepEqual(plan.nodes.find(node => node.id === 'join').dependencies, ['work-0', 'work-1']);
+  assert.deepEqual(plan.nodes.at(-1).dependencies, ['work-0', 'work-1', 'join']);
+  assert.equal(featurePlanDigest(plan), featurePlanDigest(await planner.propose(input)));
+});
