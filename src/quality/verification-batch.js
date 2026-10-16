@@ -1,4 +1,4 @@
-import {withBatchAdmission} from './batch-admission.js';
+import {withBatchAdmission,inspectBatchReadinessAdmission} from './batch-admission.js';
 import {createHash} from 'node:crypto';
 import {basename,dirname,join,relative,isAbsolute} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -71,6 +71,14 @@ async function captureParticipant(projectRoot,runId,options,queue) {
   sourceSha:accepted.commitSha,sourcePath:accepted.path,sourceBranch:accepted.branch,baseSha:accepted.baselineCommit,
   rootIdentity:checkout.rootIdentity,configDigest:digest(config),compatibility,criteria:run.workRequest.acceptanceCriteria};
  return {...member,identity:digest(member)};
+}
+// Uses the same participant validator without opening or writing the durable queue.
+export async function inspectTaskBatchReadiness({projectRoot,runId},options) {
+ try {
+  await inspectBatchReadinessAdmission(projectRoot,runId,options);
+  await captureParticipant(projectRoot,runId,options,{fingerprint:digest});
+  return {ready:true};
+ }catch(error){options.signal?.throwIfAborted();return {ready:false};}
 }
 async function dependencyNeeded(projectRoot,manifest,config,gitClient,completed) {
  if(!config.project.dependencies&&!['npm','pnpm','yarn','bun'].includes(config.project.stack.packageManager))return false;

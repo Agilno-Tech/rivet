@@ -18,7 +18,9 @@ Configured model and effort values reach the selected Claude or Codex CLI as sep
 
 Host actions show profile recommendations. A host tool receipt must distinguish requested settings from observed settings; Rivet cannot independently prove what an external desktop agent ran.
 
-To choose models without editing YAML, describe your preferences:
+Interactive `rivet setup --write` includes the model and concurrency wizard. Accept its recommendation, customize it, or skip routing for later. `rivet models configure` revisits the same choices. Fresh setup proposes two concurrent workers and saves the worker role capacity and per-task limit together after exact approval. Existing custom capacities are preserved unless explicitly changed. `run` then reuses the saved coordination harness without another chooser.
+
+To describe models without editing YAML, use your preferences:
 
 ```sh
 rivet models configure "Use high reasoning. Use my lead model for coordination and independent review, my coding model for implementation, and my fast model for bounded fixes."
@@ -88,7 +90,7 @@ Adding a managed policy to project configuration does not upgrade an older appro
 
 ## Parallel work within a task
 
-The planner can describe work items with stable IDs, dependencies and shared resources. Rivet validates the dependency graph and adds ordering for overlapping owned paths or shared resources. Review the resulting dependencies, scope and worker concurrency ceiling before activation. The ceiling defaults to one; `executionPolicy.limits.workersPerTask` may raise it for new plans, subject to configured worker and manager capacities and available machine slots.
+The planner can describe work items with stable IDs, dependencies and shared resources. Rivet validates the dependency graph and adds ordering for overlapping owned paths or shared resources. Review the resulting dependencies, scope and worker concurrency ceiling before activation. Without a managed policy the ceiling is one. Fresh interactive setup recommends two and aligns the worker role capacity with `executionPolicy.limits.workersPerTask`; the customization menu changes both together. Existing custom capacities are retained by default. Configured manager limits, parent limits and available machine slots still apply.
 
 Each worker uses an isolated checkout. Completed work is merged into a separate integration candidate and checked with the project's configured quality gates before acceptance. A dependent starts only after its prerequisites have been accepted; unrelated workers can continue while that happens. If another worker advances the integration branch, Rivet rebuilds and checks the candidate against the accepted commit. Conflicts and failed checks preserve the checkout for inspection.
 
@@ -185,11 +187,11 @@ verificationBatch:
   maxIsolationTasks: 2 # 0–5 diagnostic singleton checks after failure
 ```
 
-Run `rivet task verify --batch` to select tasks, or use `--run=<task>` to enroll one task. Only selected, completed implementations with clean accepted integration heads can join. The foreground command waits for the configured size or oldest queued deadline, including a singleton. It stops waiting when its bounded observation period ends; retry the command to continue queued work. There is no background service.
+Run `rivet task verify --batch` to select from tasks that pass the current readiness checks, or use `--run=<task>` to enroll one task. Only selected, completed implementations with clean accepted integration heads can join. Paused, cancelled or expired task or project admission is excluded from the chooser. Listing reads existing state without refreshing admission or creating claims; dispatch rechecks readiness. The foreground command waits for the configured size or oldest queued deadline, including a singleton. It stops waiting when its bounded observation period ends; retry the command to continue queued work. There is no background service.
 
 Compatible tasks share an exact baseline, configuration, gate definitions and environment identity. Rivet freezes membership, creates an isolated combined candidate, and runs configured checks there. Later arrivals join a later batch. Command execution uses ordinary machine admission without claiming a second outer heavy slot. Unknown running owners are retained for inspection and never reclaimed by timeout or missing PID.
 
-A fresh candidate needs its own dependencies. If prompted by status, run `rivet task deps`, review and approve the install, then retry `rivet task verify --batch`. This resumes the frozen candidate; changed participant heads, cancelled tasks, configuration or baseline changes invalidate it. No dependency directories are copied between checkouts.
+A fresh candidate needs its own dependencies. Interactive `rivet task verify --batch` shows the exact isolated dependency installation for approval, then resumes the same frozen candidate. Diagnostic candidates can need their own approval. Declining or running noninteractively leaves installation pending; retry interactively later, or use `rivet task deps` followed by the batch command. Installation failures retain their diagnostic output and candidate for inspection. The foreground loop is bounded and never repeats an approval for the same candidate in one invocation; changed participant heads, cancelled tasks, configuration or baseline changes invalidate it. No dependency directories are copied between checkouts.
 
 `rivet task status` shows the combined candidate, exact participant commits, criteria, checks and private report path. Failed combined checks can run the bounded number of singleton diagnostics; unchecked tasks remain explicitly untested. These reports are advisory: they do not advance any task, certify its original branch, satisfy independent review or replace ordinary final verification and delivery approval. Candidate checkouts and reports remain available for inspection.
 

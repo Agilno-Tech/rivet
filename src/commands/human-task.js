@@ -1,5 +1,5 @@
 import {configureWorktreeRetention} from '../runtime/worktree-retention.js';
-import {verifyTaskBatch,bootstrapTaskBatchDependencies} from '../quality/verification-batch.js';
+import {verifyTaskBatch,bootstrapTaskBatchDependencies,inspectTaskBatchReadiness} from '../quality/verification-batch.js';
 import {batchForRun} from '../quality/verification-batch-queue.js';
 import { previewTaskWorktreeCleanup, applyTaskWorktreeCleanup, confirmTaskWorktreeCleanup } from '../git/worktree-cleanup.js';
 import { executionForNode } from '../feature/client-profile.js';
@@ -215,18 +215,44 @@ export async function humanTaskCommand(parsed, dependencies) {
   }
   if(parsed.subcommand==='verify') {
     if(Object.keys(parsed.flags).some(key=>!['project','run','batch'].includes(key)))fail('Batch verification accepts only --batch, --project and --run.');
+    const gitClient=await createGitClient({gitExecutable:await dependencies.resolveCommandExecutable('git')});
+    const batchOptions={gitClient,resolveCommandExecutable:dependencies.resolveCommandExecutable,environment:dependencies.env??{},coordinator:dependencies.machine};
     let ids;
     if(parsed.flags.run!==undefined)ids=[(await selectedRun(project.root,parsed.flags.run,'verify',dependencies)).runId];
     else {
-      const eligible=(await runs(project.root)).filter(r=>['running','awaiting-final-approval'].includes(r.status));
       if(dependencies.terminalIsInteractive?.()!==true)fail('Select a task with --run=<id>, or run interactively to select several tasks.');
+      if(project.config.quality.verificationBatch?.enabled!==true)fail('Enable quality.verificationBatch in the committed project policy before combined verification.');
+      const eligible=[];
+      for(const record of await runs(project.root))if((await inspectTaskBatchReadiness({projectRoot:project.root,runId:record.runId},batchOptions)).ready)eligible.push(record);
+      if(!eligible.length){dependencies.output.log('No tasks are ready for combined verification. Check task status, completed work, the accepted head and active task allowances.');return EXIT_CODES.SUCCESS;}
       ids=await dependencies.prompt({message:'Select tasks for combined candidate verification',choices:eligible.map(r=>({name:summary(r),value:r.runId}))});
       if(!Array.isArray(ids)||!ids.length) {dependencies.output.log('Batch verification cancelled.');return EXIT_CODES.SUCCESS;}
       if(ids.some(id=>!eligible.some(r=>r.runId===id)))fail('Select listed tasks only.');
     }
-    const gitClient=await createGitClient({gitExecutable:await dependencies.resolveCommandExecutable('git')});
     return withTerminalInterruption(async signal=>{
-      const execute=(machineSignal=signal)=>verifyTaskBatch({projectRoot:project.root,runIds:ids},{gitClient,resolveCommandExecutable:dependencies.resolveCommandExecutable,environment:dependencies.env??{},coordinator:dependencies.machine,signal:machineSignal});
+      const execute=async(machineSignal=signal)=>{
+        const options={...batchOptions,signal:machineSignal};
+        let reports=await verifyTaskBatch({projectRoot:project.root,runIds:ids},options);
+        const attempted=new Set();
+        // At most five batches and one combined plus five singleton candidates each.
+        // Frozen identity checks remain in both verification and dependency bootstrap.
+        for(let turn=0;turn<30&&dependencies.terminalIsInteractive?.()===true;turn++) {
+          const pending=reports.find(report=>report?.status==='dependencies-needed'&&!attempted.has(`${report.id}:${report.candidate?.digest}`));
+          if(!pending)break;
+          const key=`${pending.id}:${pending.candidate?.digest}`;attempted.add(key);
+          let result;
+          try{result=await bootstrapTaskBatchDependencies({projectRoot:project.root,runId:pending.members[0].runId},{...options,confirm:confirmIsolatedDependencyInstall(dependencies,machineSignal)});}
+          catch(error){machineSignal.throwIfAborted();dependencies.output.error(error?.safeMessage??'Candidate dependencies could not be prepared safely. The frozen batch is retained; inspect task status before retrying.');break;}
+          if(result.status!=='ready') {
+            dependencies.output.log(result.status==='declined'?'Dependency setup declined; the frozen batch is retained for a later retry.':`Dependency setup failed (${visible(result.result?.status??result.status)}); the frozen batch is retained.`);
+            if(result.result?.stdout)dependencies.output.error(`stdout:\n${diagnostic(result.result.stdout)}`);
+            if(result.result?.stderr)dependencies.output.error(`stderr:\n${diagnostic(result.result.stderr)}`);
+            break;
+          }
+          reports=await verifyTaskBatch({projectRoot:project.root,runIds:ids},options);
+        }
+        return reports;
+      };
       const reports=dependencies.machine?await withMachineContext(dependencies.machine,project.root,ids[0],execute,{signal}):await execute();
       for(const report of reports)renderBatch(report,dependencies.output);
       return reports.every(report=>report?.status==='pass')?EXIT_CODES.SUCCESS:EXIT_CODES.FAILED_GATE;
@@ -409,5 +435,5 @@ function renderBatch(report,output) {
  for(const diagnostic of report.diagnostics??[])output.log(`  Isolation ${visible(diagnostic.runId)}: ${visible(diagnostic.status)}`);
  if(report.reason)output.log(`Blocked: ${visible(report.reason)}`);
  if(report.reportPath)output.log(`Report: ${visible(report.reportPath)}`);
- output.log(report.status==='dependencies-needed'?'Next: run rivet task deps, approve installation in this candidate, then retry rivet task verify --batch.':report.status==='running'?'Next: wait for the existing owner; unresolved owners require inspection and are never reclaimed automatically.':report.status==='queued'?'Next: retry rivet task verify --batch to continue the bounded foreground wait.':'Next: inspect this advisory evidence and complete the task’s ordinary verification and final review.');
+ output.log(report.status==='dependencies-needed'?'Next: retry rivet task verify --batch interactively to approve candidate dependencies, or use rivet task deps and retry.':report.status==='running'?'Next: wait for the existing owner; unresolved owners require inspection and are never reclaimed automatically.':report.status==='queued'?'Next: retry rivet task verify --batch to continue the bounded foreground wait.':'Next: inspect this advisory evidence and complete the task’s ordinary verification and final review.');
 }

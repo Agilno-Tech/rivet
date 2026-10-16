@@ -172,13 +172,13 @@ Registering metadata does not install an executor. Custom executors, broader rol
 
 ## Model and reasoning policy
 
-Start with detected defaults from a configured project:
+Interactive `rivet setup --write` offers model routing as part of project setup: accept recommendations, customize, or skip it for later. To revisit the same wizard in a configured project:
 
 ```sh
 rivet models configure
 ```
 
-Rivet detects installed harnesses and proposes a complete setup. Choose a harness when both Claude Code and Codex are installed, then select **Accept recommendations** or **Customize**. Customize lets you change individual routes, models and reasoning levels. A final preview asks for approval before saving. A saved Rivet policy takes precedence and can be kept or customized. This setup flow makes no model call.
+Rivet detects installed harnesses and proposes a complete setup. Choose a harness when both Claude Code and Codex are installed, then select **Accept recommendations** or **Customize**. Customize lets you change individual routes, models, reasoning levels and **Worker concurrency**. Fresh project setup recommends two concurrent workers and updates the selected worker role and policy together after approval. Existing custom capacities are preserved unless you explicitly change concurrency. The preview shows the effective project ceiling and remaining manager/execution limits; machine and parent limits can still reduce available slots. A final preview asks for approval before saving. A saved Rivet policy takes precedence and can be kept or customized. This setup flow makes no model call.
 
 | Work | Codex recommendation | Claude recommendation |
 | --- | --- | --- |
@@ -206,13 +206,13 @@ Rivet uses an installed Claude Code or Codex CLI to propose the mapping. If both
 The flow is:
 
 1. Describe the policy.
-2. Resolve alternatives and any model names that need an exact harness/model ID. Existing configured profiles and the known Claude aliases can be reused. Rivet asks about unknown nicknames instead of substituting another model.
+2. Resolve alternatives and any model names that need an exact harness/model ID. Existing configured profiles and known Claude aliases can be reused. Astra, Sol and Luna resolve to an exact visible Codex catalog model when that family has a single match. Ambiguous versions and unknown nicknames require an exact choice; Rivet never invents a model ID.
 3. Review all four routes, their exact models and reasoning levels, and any interpretation of your description.
 4. Approve the mapping to save it in `.rivet/orchestration.yaml`, or decline to leave configuration unchanged.
 
 For the example, coordination and technical decisions map to `coordination`, independent review to `independent-review`, substantial implementation and complex debugging to `implementation`, and bounded fixes, focused tests and investigations to `bounded-fix`. These remain the four existing task classes. The planner selects a work item's class, and you review it with the task plan.
 
-Rivet preserves your existing machine/session limits and unrelated configuration. When adding the first managed policy, it shows the default limits with the mapping. The translator cannot grant permissions or change task budgets. Configuration changes during review require a fresh proposal rather than overwriting newer edits.
+Rivet preserves your existing machine/session limits and unrelated configuration. The concurrency editor changes only the selected worker role capacity and the per-task worker limit, in one approved write; it does not widen manager or machine capacity. When adding the first managed policy to existing configuration, the proposed worker limit matches its effective current capacity. A later `rivet run` reuses the saved coordination harness without asking you to select one again. If that harness is unavailable, execution stops; a conflicting `--harness` flag asks you to review a routing change through `models configure`. Projects without saved routing retain the harness chooser. The translator cannot grant permissions or change task budgets. Configuration changes during review require a fresh proposal rather than overwriting newer edits.
 
 Saving a policy does not start work, approve a task or switch an account. Review and commit the configuration before starting a new task. Existing approvals retain their pinned policy; they are not silently updated. Model IDs and supported reasoning options must be available to the executing harness. A translated mapping is not a live availability check, and there is no automatic fallback between models.
 

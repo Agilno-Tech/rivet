@@ -70,7 +70,8 @@ Everyday commands:
   rivet --version                 Show the running Rivet version
   rivet update                    Update this machine and current project
   rivet setup                     Preview project setup
-  rivet setup --write             Apply reviewed setup
+  rivet setup --write             Configure project, models and concurrency
+  rivet models configure          Review model routing and worker concurrency
   rivet doctor                    Check project readiness
   rivet run "task"                 Plan, execute and offer final review
   rivet review <PR-URL>            Review someone’s pull request locally
@@ -115,7 +116,7 @@ Usage:
   rivet integrations setup [--project=<path>]  Guide local read-only provider configuration
   rivet integrations list|check [--project=<path>] [--host-inventory-json=<json>] [--json]
   rivet models configure ["policy"] [--harness=claude|codex] [--project=<path>]
-                                  Recommend model/reasoning routes; accept or customize, then approve
+                                  Recommend model/reasoning routes and worker concurrency; accept or customize, then approve
   rivet models role --roles=<file> --role=<name> [--json]
   rivet models delegate "prompt" --roles=<file> --role=<name> [--project=<path>]
   rivet models delegate "prompt" --profile=<file>  Approve one text-only model request
@@ -124,7 +125,7 @@ Usage:
   rivet install                    Interactive — pick which skills to install (project)
   rivet install --all              Install all skills (project)
   rivet setup [--project=<path>|--global] [--remote=<name>] [--target=claude|codex|both] [--checks-json='<json>'] [--dependencies-json='<json>'] [--write] [--json]
-                                  Project checks are exact argv arrays; unknown projects prompt with --write
+                                  Interactive --write guides checks, model routing and worker concurrency; accept, customize or skip
   rivet run "task" [--harness=claude|codex] [--project=<path>] [--for=1h] [--details]
   rivet task checkpoint --input=<session.json> [--project=<path>] [--run=<id>]
   rivet task handoff --input=<session.json> [--project=<path>] [--run=<id>]
@@ -138,6 +139,8 @@ Usage:
   rivet task decide --input=<decision.json> [--project=<path>] [--run=<id>]
   rivet task approve-decision --decision=<id> [--project=<path>] [--run=<id>]
   rivet task review [--phase=plan|final] [--input=<report.json>] [--project=<path>] [--run=<id>]
+  rivet task verify --batch [--project=<path>] [--run=<id>]
+                                  Select ready tasks; approve candidate dependencies inline
   rivet task deps [--project=<path>] [--run=<id>]
   rivet task cleanup [--preview] [--project=<path>] [--run=<id>]
   rivet task cleanup --retention=<1d..365d|off> [--project=<path>]

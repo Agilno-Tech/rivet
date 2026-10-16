@@ -48,3 +48,13 @@ export function recommendCodexRoutes(catalog,configured={}){
  }
  return result;
 }
+
+// Resolve only observed identities. Multiple versions require an explicit choice.
+export function resolveObservedCodexModel(catalog,reference) {
+ const exact=catalog.find(item=>item.model===reference);
+ if(exact)return exact.model;
+ const family=reference.toLowerCase();
+ if(!['astra','sol','luna'].includes(family))return undefined;
+ const matches=catalog.filter(item=>new RegExp(`^gpt-[A-Za-z0-9.-]+-${family}$`).test(item.model));
+ return matches.length===1?matches[0].model:undefined;
+}

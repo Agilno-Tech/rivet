@@ -138,7 +138,11 @@ async function runInteractive(parsed, dependencies, signal) {
   if (!harnesses || typeof harnesses.discover !== 'function' || typeof harnesses.select !== 'function') {
     fail('Harness discovery is unavailable.', 'MISSING_CONFIGURATION');
   }
-  const requested = parsed.flags.harness;
+  const policy = project.config.orchestration.executionPolicy;
+  const savedHarness = policy?.profiles[policy.routing.coordination]?.harness;
+  if (savedHarness && parsed.flags.harness !== undefined && parsed.flags.harness !== savedHarness)
+    fail('The requested harness conflicts with saved coordination routing. Use rivet models configure to review a routing change before starting.');
+  const requested = parsed.flags.harness ?? savedHarness;
   if (requested !== undefined && !KINDS.has(requested)) fail('Use --harness=claude or --harness=codex.');
   const discovered = await harnesses.discover(project.root, { signal });
   const eligible = discovered.filter(item => item.executable);

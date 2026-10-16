@@ -418,3 +418,16 @@ test('scoped admission validation runs after capacity wait before dispatch',asyn
  await c.pause(other.id,true);await c.release({claimId:held.id,generation:1,completed:true});
  await assert.rejects(pending,/other member paused/);assert.equal(checked,true);assert.equal(executed,false);
 });
+
+test('read-only admission inspection neither creates state nor refreshes or rewrites existing claims',async()=>{
+ const {readFile,readdir,access,rm}=await import('node:fs/promises');
+ const {root,coordinator:c}=await fixture();
+ try {
+  assert.deepEqual(await c.inspectReadOnly(),{configured:false,registrations:[],claims:[]});await assert.rejects(access(join(root,'machine')));
+  const registration=await c.register({projectRoot:root,runId:'read-only',deadlineMs:deadline()});await c.pause(registration.id,true);
+  await c.request({registrationId:registration.id,resource:'agentExecutions',idempotencyKey:'read-only-claim',generation:1});
+  const before=await readFile(join(root,'machine/machine.json'),'utf8'),entries=await readdir(join(root,'machine'));
+  assert.equal((await c.inspectReadOnly()).registrations[0].paused,true);
+  assert.equal(await readFile(join(root,'machine/machine.json'),'utf8'),before);assert.deepEqual(await readdir(join(root,'machine')),entries);
+ }finally{await rm(root,{recursive:true,force:true});}
+});

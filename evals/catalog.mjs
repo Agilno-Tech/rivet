@@ -55,6 +55,28 @@ export const catalog = {
       ['preserve-user-policy', 'models configure cached recommendations preserve saved routes and explicit override'],
       ['custom-and-supported-efforts', 'models configure cached customization permits custom IDs and refuses unsupported known efforts'],
     ]),
+    scenario('simplified-model-routing', 'test/cli/model-policy.test.js', [
+      ['observed-aliases', 'plain language model families resolve unambiguous observed catalog identities'],
+      ['fresh-concurrency', 'fresh setup recommendations align worker role and policy only after exact approval'],
+      ['preserve-concurrency', 'standalone model wizard preserves custom effective capacity unless explicitly customized'],
+      ['skip-unknown-model', 'setup routing can be skipped before entering an unknown Codex model and without changing policy'],
+      ['translator-choice', 'prose translator choice works with both installed harnesses'],
+    ]),
+    scenario('unified-project-setup', 'test/commands/setup.test.js', [
+      ['interactive-only', 'interactive project setup offers routing after installation while preview JSON global and noninteractive stay unchanged'],
+      ['honest-partial', 'setup reports model configuration failure separately from successful harness installation'],
+      ['one-approved-wizard', 'fresh interactive setup saves the approved model routes and matching worker concurrency in one wizard'],
+    ]),
+    scenario('saved-run-routing', 'test/cli/human-run.test.js', [
+      ['reuse-and-conflict', 'saved coordination routing selects its harness without a chooser and rejects conflicting flags'],
+    ]),
+    scenario('simplified-batch-flow', 'test/feature/host-execution.test.js', [
+      ['inline-install', 'batch ready listing validates accepted work without creating queue state and inline approval resumes the frozen candidate'],
+      ['ready-and-stale', 'batch chooser excludes unfinished tasks and rechecks a selected head before enrollment'],
+      ['admission-ready-only', 'batch ready chooser excludes paused expired and cancelled task or project admission without state writes'],
+      ['declined-install', 'batch dependency approval decline retains candidate without installation'],
+      ['noninteractive-install', 'batch dependency approval noninteractive retains candidate without installation'],
+    ]),
     scenario('codex-model-catalog', 'test/cli/codex-model-catalog.test.js', [
       ['family-and-effort', 'catalog recommends detected role families by priority with supported reasoning'],
       ['visible-valid-models', 'catalog excludes hidden models and rejects duplicate or malformed catalogs'],

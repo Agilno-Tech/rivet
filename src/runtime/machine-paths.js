@@ -105,7 +105,7 @@ async function verify(paths) {
   }
   if (!directory(await lstat(paths.root))) fail();
 }
-async function read(paths) {
+export async function readMachineSnapshot(paths) {
   await verify(paths);
   const before = await missing(paths.snapshot);
   if (!before) return null;
@@ -215,7 +215,7 @@ export async function machineTransaction(
     }
   }
   try {
-    const current = await read(paths);
+    const current = await readMachineSnapshot(paths);
     const result = await operation(current);
     if (result.state !== undefined) await write(paths, result.state);
     return result.value;

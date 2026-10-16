@@ -40,7 +40,7 @@ rivet setup --write
 rivet doctor
 ```
 
-The first command previews the configuration. Review the checks and dependency commands before applying it with `--write`. Setup installs project policy and Rivet skills for Claude Code and Codex. It preserves existing valid configuration and does not run project checks or install application dependencies.
+The first command previews the configuration. Review the checks and dependency commands before applying it with `--write`. Setup installs project policy and Rivet skills for Claude Code and Codex. It preserves existing valid configuration and does not run project checks or install application dependencies. Interactive `--write` also offers detected model routes and worker concurrency: accept, customize, or skip. A fresh setup recommends two concurrent workers, subject to available machine capacity. Review and approve the exact mapping before it is saved; revisit it with `rivet models configure`.
 
 Rivet proposes checks for supported Node, Django, pytest, Go and Rust layouts. If it cannot find a check, interactive setup asks for your verification command. Use your project's normal tools, including Docker if required. See [custom check and dependency configuration](./runtime-reference.md#checks-for-any-project-language) for other layouts.
 
@@ -116,7 +116,7 @@ You normally do not need a task ID or `--project`. When several tasks are active
 
 ## Optional combined checks and cleanup
 
-Projects that enable [batch verification](./orchestration.md#verify-selected-tasks-together) can run `rivet task verify --batch` and select ready tasks to check together. The report covers the combined candidate; each task still needs its ordinary verification and final approval. `rivet task status` shows the result and any candidate dependency setup needed through `rivet task deps`.
+Projects that enable [batch verification](./orchestration.md#verify-selected-tasks-together) can run `rivet task verify --batch` and select ready tasks to check together. The report covers the combined candidate; each task still needs its ordinary verification and final approval. The chooser lists only ready tasks. If the isolated candidate needs dependencies, the interactive command shows the exact installation for approval and continues the same frozen batch. Declining preserves it for a later retry; `rivet task deps` remains available for separate recovery. `rivet task status` shows the result.
 
 After a task finishes, `rivet task cleanup --preview` shows which owned Worker checkouts can be removed. Run `rivet task cleanup` to review their exact paths and confirm removal. Branches, commits and task evidence remain available. See [cleanup rules](./orchestration.md#completed-work-cleanup) for retained checkouts and recovery.
 

@@ -32,6 +32,7 @@ test('success never creates a failure report',async()=>{
 });
 test('everyday help is short and advanced commands remain accessible',async()=>{
   const f=capture();assert.equal(await main(['--help'],f.options),0);
+  assert.match(f.lines.join('\n'),/models configure/);assert.match(f.lines.join('\n'),/setup --write.*models and concurrency/);
   assert.match(f.lines.join('\n'),/task resume/);assert.doesNotMatch(f.lines.join('\n'),/feature start <run-id>/);
   f.lines.length=0;assert.equal(await main(['--help','--advanced'],f.options),0);assert.match(f.lines.join('\n'),/feature start <run-id>/);
 });

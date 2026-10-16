@@ -192,6 +192,86 @@
       ]
     },
     {
+      "id": "simplified-model-routing",
+      "file": "test/cli/model-policy.test.js",
+      "criteria": [
+        {
+          "id": "observed-aliases",
+          "test": "plain language model families resolve unambiguous observed catalog identities"
+        },
+        {
+          "id": "fresh-concurrency",
+          "test": "fresh setup recommendations align worker role and policy only after exact approval"
+        },
+        {
+          "id": "preserve-concurrency",
+          "test": "standalone model wizard preserves custom effective capacity unless explicitly customized"
+        },
+        {
+          "id": "skip-unknown-model",
+          "test": "setup routing can be skipped before entering an unknown Codex model and without changing policy"
+        },
+        {
+          "id": "translator-choice",
+          "test": "prose translator choice works with both installed harnesses"
+        }
+      ]
+    },
+    {
+      "id": "unified-project-setup",
+      "file": "test/commands/setup.test.js",
+      "criteria": [
+        {
+          "id": "interactive-only",
+          "test": "interactive project setup offers routing after installation while preview JSON global and noninteractive stay unchanged"
+        },
+        {
+          "id": "honest-partial",
+          "test": "setup reports model configuration failure separately from successful harness installation"
+        },
+        {
+          "id": "one-approved-wizard",
+          "test": "fresh interactive setup saves the approved model routes and matching worker concurrency in one wizard"
+        }
+      ]
+    },
+    {
+      "id": "saved-run-routing",
+      "file": "test/cli/human-run.test.js",
+      "criteria": [
+        {
+          "id": "reuse-and-conflict",
+          "test": "saved coordination routing selects its harness without a chooser and rejects conflicting flags"
+        }
+      ]
+    },
+    {
+      "id": "simplified-batch-flow",
+      "file": "test/feature/host-execution.test.js",
+      "criteria": [
+        {
+          "id": "inline-install",
+          "test": "batch ready listing validates accepted work without creating queue state and inline approval resumes the frozen candidate"
+        },
+        {
+          "id": "ready-and-stale",
+          "test": "batch chooser excludes unfinished tasks and rechecks a selected head before enrollment"
+        },
+        {
+          "id": "admission-ready-only",
+          "test": "batch ready chooser excludes paused expired and cancelled task or project admission without state writes"
+        },
+        {
+          "id": "declined-install",
+          "test": "batch dependency approval decline retains candidate without installation"
+        },
+        {
+          "id": "noninteractive-install",
+          "test": "batch dependency approval noninteractive retains candidate without installation"
+        }
+      ]
+    },
+    {
       "id": "codex-model-catalog",
       "file": "test/cli/codex-model-catalog.test.js",
       "criteria": [

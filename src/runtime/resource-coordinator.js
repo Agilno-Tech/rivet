@@ -1,7 +1,7 @@
 import { validExecutionProof } from '../clients/execution-proof.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { realpath, lstat } from 'node:fs/promises';
-import { resolveMachinePaths, machineTransaction } from './machine-paths.js';
+import { resolveMachinePaths, machineTransaction, readMachineSnapshot } from './machine-paths.js';
 const RESOURCES = [
   'activeTasks',
   'agentExecutions',
@@ -494,6 +494,11 @@ export function createResourceCoordinator({ root, now = Date.now }) {
       c.status = c.status === 'queued' ? 'cancelled' : 'released';
     });
   }
+  async function inspectReadOnly() {
+    const paths=pinnedPaths??await resolveMachinePaths(root);
+    const raw=paths?await readMachineSnapshot(paths):null;
+    return raw?structuredClone({configured:true,...validate(raw)}):{configured:false,registrations:[],claims:[]};
+  }
   async function inspect() {
     return transaction((s) => {
       if (!s)
@@ -560,6 +565,7 @@ export function createResourceCoordinator({ root, now = Date.now }) {
     hostStop,
     release,
     inspect,
+    inspectReadOnly,
     pause,
     resume: (id) => pause(id, false),
     configure,

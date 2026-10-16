@@ -1,14 +1,28 @@
 import { currentMachineContext, withMachineContext } from '../runtime/machine-admission.js';
 
+function applicableRegistrations(state,projectRoot,runIds) {
+  return state.registrations.filter(registration=>registration.projectRoot===projectRoot
+    &&(registration.runId===null||runIds.has(registration.runId)));
+}
+function assertOpen(registrations) {
+  if(registrations.some(registration=>registration.paused||registration.cancelled||Date.now()>=registration.deadlineMs))
+    throw new Error('Batch member admission is paused, cancelled or expired');
+}
+export async function inspectBatchReadinessAdmission(projectRoot,runId,options) {
+  const coordinator=options.coordinator??currentMachineContext()?.coordinator;
+  if(!coordinator)return;
+  // Listing is observational: ordinary inspect refreshes queue admission.
+  const state=await coordinator.inspectReadOnly();
+  assertOpen(applicableRegistrations(state,projectRoot,new Set([runId])));
+}
+
 // A combined check consumes one command slot, but every contributing task must
 // retain authority. This guard also runs after a command's capacity wait.
 export async function withBatchAdmission(projectRoot, members, options, operation) {
   const coordinator = options.coordinator ?? currentMachineContext()?.coordinator;
   if (!coordinator) return operation(options);
   const runIds = new Set(members.map(member => member.runId));
-  const applicable = state => state.registrations.filter(registration =>
-    registration.projectRoot === projectRoot
-      && (registration.runId === null || runIds.has(registration.runId)));
+  const applicable = state => applicableRegistrations(state,projectRoot,runIds);
   const initial = applicable(await coordinator.inspect());
   const pinned = new Set(initial.map(registration => registration.id));
   const validateAdmission = async () => {
@@ -17,10 +31,7 @@ export async function withBatchAdmission(projectRoot, members, options, operatio
     if ([...pinned].some(id => !current.some(registration => registration.id === id))) {
       throw new Error('Batch member admission identity changed');
     }
-    if (current.some(registration => registration.paused || registration.cancelled
-      || Date.now() >= registration.deadlineMs)) {
-      throw new Error('Batch member admission is paused, cancelled or expired');
-    }
+    assertOpen(current);
     await options.validateAdmission?.();
   };
   await validateAdmission();

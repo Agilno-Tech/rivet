@@ -489,3 +489,33 @@ test('setup preserves written policy and exposes a safe skill permission diagnos
     } else assert.match(capture.writes.map(item => item.value).join('\n'), /protected skill directory/);
   }
 });
+
+test('interactive project setup offers routing after installation while preview JSON global and noninteractive stay unchanged',async t=>{
+ for(const mode of ['interactive','preview','json','global','noninteractive']) {
+  const root=await createProject(t),capture=captureOutput(),{dependencies,calls}=makeDependencies(root,capture);let models=0;
+  dependencies.terminalIsInteractive=()=>mode!=='noninteractive';
+  dependencies.setup.configureModels=async(parsed,options)=>{models++;assert.equal(calls.install.length,1);assert.equal(parsed.flags.project,root);assert.equal(options.modelPolicyFreshSetup,true);assert.equal(options.modelPolicyAllowSkip,true);return 0;};
+  const parsed=parsedSetup(root,{write:mode!=='preview',json:mode==='json'});if(mode==='global'){delete parsed.flags.project;parsed.flags.global=true;}
+  assert.equal(await setupCommand(parsed,dependencies),0);
+  assert.equal(models,mode==='interactive'?1:0);
+ }
+});
+test('setup reports model configuration failure separately from successful harness installation',async t=>{
+ const root=await createProject(t),capture=captureOutput(),{dependencies,calls}=makeDependencies(root,capture);
+ dependencies.terminalIsInteractive=()=>true;dependencies.setup.configureModels=async()=>{throw new CliError('Model selection cancelled.','INVALID_INPUT');};
+ assert.equal(await setupCommand(parsedSetup(root,{write:true,json:false}),dependencies),EXIT_CODES.INVALID_INPUT);
+ assert.equal(calls.install.length,1);await loadProjectConfig(root);
+ assert.match(capture.writes.map(x=>x.value).join('\n'),/harness instructions are ready, but model routing/);
+});
+
+test('fresh interactive setup saves the approved model routes and matching worker concurrency in one wizard',async t=>{
+ const root=await createProject(t),capture=captureOutput(),{dependencies}=makeDependencies(root,capture);
+ const {execFileSync}=await import('node:child_process');execFileSync('/usr/bin/git',['init','-q',root]);
+ dependencies.terminalIsInteractive=()=>true;dependencies.env={RIVET_CODEX_MODEL:'setup-model'};
+ dependencies.harnesses={discover:async()=>[{kind:'codex',executable:'/opt/codex'}]};
+ const questions=[];dependencies.modelPolicyPrompt=async question=>{questions.push(question.id);return question.id==='default-action'?'keep':question.id==='approve-policy'?true:null;};
+ assert.equal(await setupCommand(parsedSetup(root,{write:true,json:false}),dependencies),0,capture.writes.map(x=>x.value).join('\n'));
+ assert.deepEqual(questions,['default-action','approve-policy']);
+ const config=await loadProjectConfig(root),policy=config.orchestration.executionPolicy;
+ assert.equal(policy.profiles[policy.routing.coordination].model,'setup-model');assert.equal(policy.limits.workersPerTask,2);assert.equal(config.orchestration.roles.find(r=>r.kind==='worker').capacity,2);
+});

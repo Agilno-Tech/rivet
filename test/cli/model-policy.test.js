@@ -173,3 +173,46 @@ test('models configure recommends cached Codex role mapping and requires exact f
 test('models configure customizes detected models with advertised reasoning and rejects stale approval',async t=>{for(const stale of [false,true]){const root=await fixture(t),s=services(root),path=join(root,'.rivet/orchestration.yaml'),before=await readFile(path,'utf8');await setupCatalog(root);let edited=false;s.overrides.modelPolicyPrompt=async q=>{if(q.id==='default-action')return 'edit';if(q.id==='edit-route'){if(edited)return 'done';edited=true;return 'coordination';}if(q.id==='edit-harness')return 'codex';if(q.id==='edit-codex-model'){assert.ok(q.choices.some(x=>x.value==='__custom__'));return 'gpt-6-luna';}if(q.id==='edit-effort'){assert.deepEqual(q.choices.map(x=>x.value),['medium']);return 'medium';}if(q.id==='approve-policy'){if(stale)await writeFile(path,before+'\n# concurrent edit\n');return true;}throw Error(q.id);};assert.equal(await main(['models','configure'],s.overrides),stale?1:0);if(stale)assert.equal(await readFile(path,'utf8'),before+'\n# concurrent edit\n');else{const p=YAML.parse(await readFile(path,'utf8')).executionPolicy;assert.equal(p.profiles[p.routing.coordination].model,'gpt-6-luna');}}});
 test('models configure cached recommendations preserve saved routes and explicit override',async t=>{for(const saved of [false,true]){const root=await fixture(t),s=services(root),path=join(root,'.rivet/orchestration.yaml');await setupCatalog(root);s.overrides.env.RIVET_CODEX_MODEL='gpt-6-luna';if(saved){const doc=YAML.parseDocument(await readFile(path,'utf8'));doc.set('executionPolicy',compileModelPolicy(Object.fromEntries(routes.map(route=>[route,{harness:'codex',model:'saved-exact',effort:'low'}]))));await writeFile(path,String(doc));}s.overrides.modelPolicyPrompt=async q=>q.id==='default-action'?'keep':q.id==='approve-policy'?true:null;assert.equal(await main(['models','configure'],s.overrides),0);const p=YAML.parse(await readFile(path,'utf8')).executionPolicy;assert.ok(routes.every(r=>p.profiles[p.routing[r]].model===(saved?'saved-exact':'gpt-6-luna')));assert.ok(routes.every(r=>p.profiles[p.routing[r]].effort===(saved?'low':'medium')));}});
 test('models configure cached customization permits custom IDs and refuses unsupported known efforts',async t=>{for(const custom of [false,true]){const root=await fixture(t),s=services(root),path=join(root,'.rivet/orchestration.yaml'),before=await readFile(path,'utf8');await setupCatalog(root);let edited=false;s.overrides.modelPolicyPrompt=async q=>{if(q.id==='default-action')return 'edit';if(q.id==='edit-route'){if(edited)return 'done';edited=true;return 'bounded-fix';}if(q.id==='edit-harness')return 'codex';if(q.id==='edit-codex-model')return custom?'__custom__':'gpt-6-luna';if(q.id==='edit-model')return 'my-custom';if(q.id==='edit-effort')return 'high';if(q.id==='approve-policy')return true;throw Error(q.id);};assert.equal(await main(['models','configure'],s.overrides),custom?0:1);if(!custom)assert.equal(await readFile(path,'utf8'),before);else assert.match(s.messages.join('\n'),/model-specific reasoning support unverified/);}});
+
+test('plain language model families resolve unambiguous observed catalog identities',async t=>{
+ const root=await fixture(t),s=services(root);await mkdir(join(root,'.codex'));
+ await writeFile(join(root,'.codex/models_cache.json'),JSON.stringify({models:['astra','sol','luna'].map((family,i)=>({slug:`gpt-6-${family}`,priority:i,visibility:'list',default_reasoning_level:'high',supported_reasoning_levels:[{effort:'high'}]}))}));
+ assert.equal(await main(['models','configure',prose],s.overrides),0);
+ assert.equal(s.questions.filter(q=>q.id.startsWith('model-')).length,0);
+ const policy=YAML.parse(await readFile(join(root,'.rivet/orchestration.yaml'),'utf8')).executionPolicy;
+ assert.deepEqual(routes.map(r=>policy.profiles[policy.routing[r]].model),['gpt-6-astra','gpt-6-astra','gpt-6-sol','gpt-6-luna']);
+});
+
+test('fresh setup recommendations align worker role and policy only after exact approval',async t=>{
+ for(const approve of [false,true]){
+ const root=await fixture(t),s=services(root),path=join(root,'.rivet/orchestration.yaml'),before=await readFile(path,'utf8');
+ const {configureModelPolicy}=await import('../../src/commands/model-policy.js');
+ s.overrides.env={RIVET_CODEX_MODEL:'configured-model'};s.overrides.modelPolicyFreshSetup=true;
+ s.overrides.modelPolicyPrompt=async q=>q.id==='default-action'?'keep':q.id==='approve-policy'?approve:null;
+ assert.equal(await configureModelPolicy({operands:[],flags:{}},s.overrides),0);
+ if(!approve)assert.equal(await readFile(path,'utf8'),before);
+ else{const saved=YAML.parse(await readFile(path,'utf8'));assert.equal(saved.executionPolicy.limits.workersPerTask,2);assert.equal(saved.roles.find(r=>r.kind==='worker').capacity,2);assert.equal(saved.roles.find(r=>r.kind==='manager').capacity,4);}
+ }
+});
+test('standalone model wizard preserves custom effective capacity unless explicitly customized',async t=>{
+ for(const customize of [false,true]){
+ const root=await fixture(t),s=services(root),path=join(root,'.rivet/orchestration.yaml');s.overrides.env={RIVET_CODEX_MODEL:'configured-model'};let edited=false;
+ s.overrides.modelPolicyPrompt=async q=>{if(q.id==='default-action')return customize?'edit':'keep';if(q.id==='edit-route'){if(edited)return 'done';edited=true;return '__concurrency__';}if(q.id==='worker-concurrency')return 3;if(q.id==='approve-policy')return true;throw Error(q.id);};
+ assert.equal(await main(['models','configure'],s.overrides),0);
+ const saved=YAML.parse(await readFile(path,'utf8'));assert.equal(saved.executionPolicy.limits.workersPerTask,customize?3:1);assert.equal(saved.roles.find(r=>r.kind==='worker').capacity,customize?3:1);assert.equal(saved.roles.find(r=>r.kind==='manager').capacity,4);
+ }
+});
+
+test('prose translator choice works with both installed harnesses',async t=>{
+ const root=await fixture(t),s=services(root),original=s.overrides.modelPolicyPrompt;
+ s.overrides.harnesses.discover=async()=>[{kind:'codex',executable:'/opt/codex'},{kind:'claude',executable:'/opt/claude'}];
+ s.overrides.modelPolicyPrompt=q=>q.id==='translator'?'codex':original(q);
+ assert.equal(await main(['models','configure',prose],s.overrides),0,s.messages.join('\n'));assert.equal(s.calls,1);
+});
+test('setup routing can be skipped before entering an unknown Codex model and without changing policy',async t=>{
+ const root=await fixture(t),s=services(root),path=join(root,'.rivet/orchestration.yaml'),before=await readFile(path,'utf8');
+ const {configureModelPolicy}=await import('../../src/commands/model-policy.js');
+ s.overrides.modelPolicyAllowSkip=true;s.overrides.modelPolicyFreshSetup=true;s.overrides.env={};
+ s.overrides.modelPolicyPrompt=async q=>{assert.equal(q.id,'missing-codex-model');return 'skip';};
+ assert.equal(await configureModelPolicy({operands:[],flags:{}},s.overrides),0);assert.equal(await readFile(path,'utf8'),before);
+});

@@ -863,7 +863,16 @@ export async function prepareExecutionPolicyUpdate(root, options = {}) {
   const fs = options.fs ?? filesystem;
   const target = fs.lstatSync(join(root, '.rivet', 'orchestration.yaml'));
   if (!target.isFile() || target.isSymbolicLink() || target.nlink !== 1 || (target.mode & 0o222) === 0) throw new Error('Execution policy file is not a writable private regular file');
-  return prepareConfigFileUpdate(root, 'orchestration.yaml', (config, document, policy) => {
+  return prepareConfigFileUpdate(root, 'orchestration.yaml', (config, document, value) => {
+    const policy=value.policy??value;
+    if(value.workerConcurrency!==undefined){
+      const capacity=value.workerConcurrency;
+      if(!Number.isSafeInteger(capacity)||capacity<1||capacity>64||policy.limits.workersPerTask!==capacity)throw new Error('Invalid worker concurrency');
+      const index=config.orchestration.roles.findIndex(role=>role.kind==='worker');
+      if(index<0)throw new Error('Worker role missing');
+      config.orchestration.roles[index].capacity=capacity;
+      document.setIn(['roles',index,'capacity'],capacity);
+    }
     config.orchestration.executionPolicy = snapshot(policy, MAX_TEMPLATE_BYTES);
     document.setIn(['executionPolicy'], config.orchestration.executionPolicy);
   }, options);

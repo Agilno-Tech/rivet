@@ -319,3 +319,12 @@ test('managed Claude worker preview shows its captured spending cap', async t =>
   assert.equal(await main(['run','Add greeting'],s.overrides),EXIT_CODES.SUCCESS);
   assert.match(s.messages.join('\n'),/executor spending cap: \$0.5/);
 });
+
+test('saved coordination routing selects its harness without a chooser and rejects conflicting flags',async t=>{
+ const {readFile}=await import('node:fs/promises');const {default:YAML}=await import('yaml');const {compileModelPolicy,POLICY_ROUTES}=await import('../../src/models/policy-contract.js');
+ const {root}=await fixture(t),path=join(root,'.rivet/orchestration.yaml');const doc=YAML.parseDocument(await readFile(path,'utf8'));
+ doc.set('executionPolicy',compileModelPolicy(Object.fromEntries(POLICY_ROUTES.map(r=>[r,{harness:'codex',model:'saved-model',effort:'high'}]))));await writeFile(path,String(doc));
+ const s=services(root,{selected:['claude','codex'],approve:false});s.overrides.harnessChoicePrompt=()=>{throw Error('redundant chooser');};
+ assert.equal(await main(['run','Add a greeting'],s.overrides),0,s.messages.join('\n'));
+ const other=services(root,{selected:['claude','codex'],approve:false});assert.notEqual(await main(['run','Add a greeting','--harness=claude'],other.overrides),0);assert.match(other.messages.join('\n'),/saved.*routing|routing.*saved/i);
+});
