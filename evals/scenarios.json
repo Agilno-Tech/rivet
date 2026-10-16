@@ -342,6 +342,102 @@
       ]
     },
     {
+      "id": "orchestration-batch-queue",
+      "file": "test/runtime/verification-batch-queue.test.js",
+      "criteria": [
+        {
+          "id": "frozen-membership",
+          "test": "batch queue freezes FIFO compatible membership and never adopts running ownership"
+        },
+        {
+          "id": "elapsed-singleton",
+          "test": "elapsed singleton is actually claimed only after its deadline"
+        },
+        {
+          "id": "one-owner-current-result",
+          "test": "simultaneous claims execute only one owner and pending runs never display an old pass"
+        },
+        {
+          "id": "frozen-policy",
+          "test": "an incompatible caller cannot change the frozen queue flush policy"
+        },
+        {
+          "id": "reject-modified-ownership",
+          "test": "queue rejects modified durable ownership instead of treating an unknown owner as stopped"
+        },
+        {
+          "id": "bounded-verbose-evidence",
+          "test": "verbose reports stay separate from bounded queue ownership and do not wedge later batches"
+        },
+        {
+          "id": "recover-failed-publication",
+          "test": "failed durable queue write leaves the owner capability usable for a blocked fallback"
+        },
+        {
+          "id": "explicit-stale-reenrollment",
+          "test": "explicit re-enrollment replaces stale pending heads and invalidates waiting dependencies without changing frozen members"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-batch-execution",
+      "file": "test/feature/host-execution.test.js",
+      "criteria": [
+        {
+          "id": "candidate-only-and-drift",
+          "test": "batch verification flushes an elapsed ready singleton without advancing task delivery state"
+        },
+        {
+          "id": "combined-checks-bounded-isolation",
+          "test": "batch verifies three ready task heads once and preserves each accepted integration"
+        },
+        {
+          "id": "cancel-running-checks",
+          "test": "batch cancellation stops an executing gate and cannot publish passing evidence"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-batch-admission",
+      "file": "test/feature/host-execution.test.js",
+      "criteria": [
+        {
+          "id": "every-queued-participant",
+          "test": "batch admission includes paused and expired members even when they joined the queue earlier"
+        },
+        {
+          "id": "earliest-deadline",
+          "test": "batch uses the earliest member deadline even when the first selected task has no registration"
+        },
+        {
+          "id": "dependency-admission",
+          "test": "batch dependency approval cannot install while another frozen member is paused"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-batch-workflow",
+      "file": "test/feature/host-execution.test.js",
+      "criteria": [
+        {
+          "id": "approved-dependency-retry",
+          "test": "batch dependencies remain pending until an explicitly approved install and retry the frozen candidate"
+        },
+        {
+          "id": "reject-task-delivery-proof",
+          "test": "ordinary verification rejects combined-candidate evidence even for an identical singleton head"
+        },
+        {
+          "id": "public-cli-shared-capacity",
+          "test": "public batch task selection and status execute with heavy capacity one and require no delivery transition"
+        },
+        {
+          "id": "project-executable-compatibility",
+          "test": "identical tracked project executables batch across distinct task checkout paths"
+        }
+      ]
+    },
+    {
       "id": "orchestration-cleanup-preview",
       "file": "test/runtime/worktree-cleanup.test.js",
       "criteria": [
@@ -440,6 +536,10 @@
         {
           "id": "attempt-bound-no-execution",
           "test": "no-execution proof is bound to one dispatched attempt and rejects fabricated evidence"
+        },
+        {
+          "id": "guard-after-capacity-wait",
+          "test": "scoped admission validation runs after capacity wait before dispatch"
         }
       ]
     },

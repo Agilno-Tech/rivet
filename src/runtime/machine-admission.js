@@ -22,8 +22,11 @@ export async function withMachineContext(
   project,
   runId,
   operation,
-  { signal, deadlineMs, nonblocking = false, cleanup = false } = {},
+  { signal, deadlineMs, nonblocking = false, cleanup = false, beforeDispatch } = {},
 ) {
+  if(beforeDispatch!==undefined&&typeof beforeDispatch!=='function')throw new TypeError('Invalid admission guard');
+  const parentGuard=context.getStore()?.beforeDispatch;
+  const guard=beforeDispatch?async()=>{await parentGuard?.();await beforeDispatch();}:parentGuard;
   let registration = await findRegistration(coordinator, project, runId);
   if (!registration && runId && !cleanup) {
     const enrolled = await findRegistration(coordinator, project, null);
@@ -56,6 +59,7 @@ export async function withMachineContext(
         signal: controller.signal,
         deadlineMs: effectiveDeadline,
         nonblocking,
+        beforeDispatch:guard,
         admissionClosed: remaining <= 0 || registration.cancelled === true,
       },
       () => operation(controller.signal),
@@ -114,6 +118,7 @@ export async function admitted(resource, key, options, operation) {
       throw error('operation already consumed; inspect its saved outcome');
     if (signal?.aborted) throw error('cancelled');
     await options?.beforeDispatch?.();
+    await selected.beforeDispatch?.();
     const dispatchId = randomUUID();
     if (resource !== 'activeTasks')
       await coordinator.dispatch({

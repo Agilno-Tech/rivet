@@ -67,7 +67,7 @@ function checkResult(value) {
 
 function valid(report) {
   if (!report || typeof report !== 'object' || Array.isArray(report)
-    || report.schemaVersion !== 1 || !['pass', 'fail'].includes(report.status)
+    || report.scope !== undefined || report.schemaVersion !== 1 || !['pass', 'fail'].includes(report.status)
     || !SHA.test(report.baselineCommit) || !SHA.test(report.commitSha)
     || typeof report.runId !== 'string' || report.runId.length > 64 || !ID.test(report.runId)
     || !Number.isSafeInteger(report.runVersion) || report.runVersion < 1

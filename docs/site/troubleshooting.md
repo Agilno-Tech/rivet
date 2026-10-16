@@ -133,6 +133,12 @@ Before sharing, open the file and review it. Attach it to a [GitHub issue](https
 
 Closing or declining the activation prompt leaves the plan saved. Run `rivet task start` inside the project to see the exact proposal again and approve it. `rivet task resume` also offers this review for a proposed terminal task. If several tasks are active, choose from the numbered interactive list or add `--run=<id>`. The activation prompt has no reading timeout.
 
+## Combined verification is waiting or blocked
+
+Inspect `rivet task status` for the candidate and next action. `dependencies-needed` requires explicit installation approval through `rivet task deps`, followed by `rivet task verify --batch`. Paused or expired participants cannot borrow another task's allowance. Resume an eligible paused task before retrying; an expired approved allowance needs a new approved task.
+
+Re-enrolling a changed, ready task replaces its old queued enrollment. If the task belonged to a dependency-waiting batch, re-enrollment blocks that old batch and preserves its evidence. A running owner is never replaced based on a missing process or elapsed time. Inspect an unresolved owner rather than editing private queue state or deleting its candidate. Batch evidence does not replace ordinary final verification.
+
 ## The task is awaiting final approval
 
 After successful execution, `rivet run` opens the final-review menu automatically. Use **Review changes** to inspect the tested diff. To return later, run `rivet task resume` or the direct shortcut `rivet task approve`. Choose local application or pull-request delivery. Local application needs the original clean default branch at the task's starting commit and unchanged committed Rivet configuration. Changing policy or either checkout invalidates the old approval; do not force-reset your changes to bypass this check.

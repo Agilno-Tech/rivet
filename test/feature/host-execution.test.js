@@ -40,7 +40,7 @@ async function npmExecutable() {
   return realpath(stdout.trim());
 }
 
-async function fixture(t, { now = NOW, schemaV2 = false, ownedPaths = ['app/agenda.js'], lockedDependencies = false, hostContext = false, repositoryRemote, workType, managed = false, verificationReuse = false, workItems, portableDependencies = false } = {}) {
+async function fixture(t, { now = NOW, schemaV2 = false, ownedPaths = ['app/agenda.js'], lockedDependencies = false, hostContext = false, repositoryRemote, workType, managed = false, verificationReuse = false, workItems, portableDependencies = false, verificationBatch = false, argvScripts = false } = {}) {
   const parent = await realpath(await mkdtemp(join(tmpdir(), 'rivet-host-execution-')));
   const root = join(parent, 'project');
   await mkdir(root);
@@ -133,6 +133,17 @@ async function fixture(t, { now = NOW, schemaV2 = false, ownedPaths = ['app/agen
     await writeFile(path,YAML.stringify(config));
     await writeFile(join(root,'install.js'),"require('node:fs').writeFileSync('.rivet-deps/ready','ready');\n");
     await writeFile(join(root,'gate.js'),"process.exit(require('node:fs').existsSync('.rivet-deps/ready') ? 0 : 1);\n");
+  }
+  if(argvScripts) {
+    const path=join(root,'.rivet','project.yaml');const project=YAML.parse(await readFile(path,'utf8'));
+    project.schemaVersion=3;project.commands=Object.fromEntries(Object.keys(project.commands).filter(k=>k!=='dev').map(k=>[k,{steps:[{cwd:'.',argv:['./scripts/check']}]}]));
+    await writeFile(path,YAML.stringify(project));await mkdir(join(root,'scripts'));
+    await writeFile(join(root,'scripts','check'),'#!/bin/sh\nexit 0\n');await chmod(join(root,'scripts','check'),0o700);
+  }
+  if(verificationBatch) {
+    const path=join(root,'.rivet','quality.yaml');const quality=YAML.parse(await readFile(path,'utf8'));
+    quality.verificationBatch={enabled:true,maxTasks:3,waitMs:1,maxIsolationTasks:2};
+    await writeFile(path,YAML.stringify(quality));
   }
   if (repositoryRemote) {
     const path = join(root, '.rivet', 'project.yaml');
@@ -1759,4 +1770,201 @@ test('expired parallel host admission still exposes the stopped second sibling w
   assert.deepEqual((await app.work.status(base)).runtime,before.runtime);
   assert.deepEqual((await app.machine.inspect()).claims,claimsBefore.claims);
   assert.deepEqual(await gitClient.listWorktrees(root),treesBefore);
+});
+
+
+test('batch verification flushes an elapsed ready singleton without advancing task delivery state',async t=>{
+ const f=await completedWorker(t,{verificationBatch:true});
+ const {verifyTaskBatch}=await import('../../src/quality/verification-batch.js');
+ const before=await f.execution.status({project:f.root,runId:f.approved.runId});
+ const result=await verifyTaskBatch({projectRoot:f.root,runIds:[f.approved.runId]},
+  {gitClient:f.gitClient,resolveCommandExecutable:async()=>f.gate,environment:{PATH:process.env.PATH}});
+ assert.equal(result[0].status,'pass');assert.equal(result[0].scope,'combined-candidate');
+ const after=await f.execution.status({project:f.root,runId:f.approved.runId});
+ assert.equal(after.run.version,before.run.version);assert.equal(after.run.status,'running');assert.equal(after.verification,null);
+ await writeFile(f.gate,`#!/bin/sh\necho drift > '${join(f.root,'foreign')}'\nexit 0\n`);
+ const [drift]=await verifyTaskBatch({projectRoot:f.root,runIds:[f.approved.runId]},
+  {gitClient:f.gitClient,resolveCommandExecutable:async()=>f.gate,environment:{PATH:process.env.PATH}});
+ assert.equal(drift.status,'blocked');
+ await rm(join(f.root,'foreign'));
+ const qualityPath=join(f.root,'.rivet','quality.yaml');
+ await writeFile(f.gate,`#!/bin/sh\necho '# changed during checks' >> '${qualityPath}'\nexit 0\n`);
+ const [configDrift]=await verifyTaskBatch({projectRoot:f.root,runIds:[f.approved.runId]},
+  {gitClient:f.gitClient,resolveCommandExecutable:async()=>f.gate,environment:{PATH:process.env.PATH}});
+ assert.equal(configDrift.status,'blocked');
+
+
+});
+
+test('batch verifies three ready task heads once and preserves each accepted integration',async t=>{
+ const f=await completedWorker(t,{verificationBatch:true});
+ const ids=[f.approved.runId];
+ for(const name of ['second','third']) {
+  const proposal=await f.workflow.propose({project:f.root,client:'host',source:{kind:'inline',value:`# Add ${name}\n\n## Acceptance criteria\n\n- Add ${name}.\n`},decomposition:{schemaVersion:1,kind:'agilno.feature-decomposition',workItems:[{objective:`Add ${name}.`,ownedPaths:[`app/${name}.js`],acceptanceCriterionIndexes:[1]}]}});
+  const approved=await f.workflow.start({project:f.root,runId:proposal.runId,expectedVersion:proposal.version,proposalDigest:proposal.proposalDigest});
+  const prepared=await f.execution.prepare({project:f.root,runId:approved.runId,expectedRunVersion:approved.version});
+  const next=await f.execution.nextAction({project:f.root,runId:approved.runId,expectedRuntimeVersion:prepared.runtimeVersion});
+  const path=JSON.parse(next.action.payload).contract.worktree.path;
+  await mkdir(join(path,'app'),{recursive:true});await writeFile(join(path,'app',`${name}.js`),`export const ${name}=true;\n`);
+  await f.execution.submitResult({project:f.root,runId:approved.runId,expectedRuntimeVersion:next.runtimeVersion,action:next.action,result:resultFor(next.action)});ids.push(approved.runId);
+ }
+ const counter=join(dirname(f.root),'batch-counter');await writeFile(f.gate,`#!/bin/sh\necho checked >> '${counter}'\nexit 0\n`);
+ const {verifyTaskBatch}=await import('../../src/quality/verification-batch.js');
+ const results=await verifyTaskBatch({projectRoot:f.root,runIds:ids},{gitClient:f.gitClient,resolveCommandExecutable:async()=>f.gate,environment:{PATH:process.env.PATH}});
+ assert.ok(results.every(r=>r.status==='pass'));assert.equal(new Set(results.map(r=>r.id)).size,1);
+ assert.equal((await readFile(counter,'utf8')).trim().split('\n').length,results[0].checks.length);
+ assert.equal(results[0].members.length,3);
+ for(const id of ids)assert.equal((await f.execution.status({project:f.root,runId:id})).verification,null);
+ await writeFile(f.gate,"#!/bin/sh\nif test -f app/agenda.js && test -f app/second.js; then exit 1; fi\nexit 0\n");
+ const [failed]=await verifyTaskBatch({projectRoot:f.root,runIds:ids},{gitClient:f.gitClient,resolveCommandExecutable:async()=>f.gate,environment:{PATH:process.env.PATH}});
+ assert.equal(failed.status,'fail');assert.deepEqual(failed.diagnostics.map(d=>d.status),['pass','pass','untested']);assert.equal(failed.interactionFailure,false);
+
+});
+
+test('batch dependencies remain pending until an explicitly approved install and retry the frozen candidate',async t=>{
+ const f=await completedWorker(t,{verificationBatch:true,lockedDependencies:true});
+ const {verifyTaskBatch,bootstrapTaskBatchDependencies}=await import('../../src/quality/verification-batch.js');
+ const options={gitClient:f.gitClient,resolveCommandExecutable:async()=>f.gate,environment:{PATH:process.env.PATH}};
+ const [pending]=await verifyTaskBatch({projectRoot:f.root,runIds:[f.approved.runId]},options);
+ assert.equal(pending.status,'dependencies-needed');
+ const declined=await bootstrapTaskBatchDependencies({projectRoot:f.root,runId:f.approved.runId},{...options,confirm:async()=>false});assert.equal(declined.status,'declined');
+ await writeFile(f.gate,'#!/bin/sh\nmkdir -p node_modules\nexit 0\n');
+ const messages=[];
+ assert.equal(await main(['task','deps',`--run=${f.approved.runId}`],{cwd:()=>f.root,env:options.environment,work:f.execution,
+  terminalIsInteractive:()=>true,confirmDependencyInstall:async()=>true,
+  resolveCommandExecutable:async runner=>runner==='git'?realpath('/usr/bin/git'):f.gate,
+  output:{log:m=>messages.push(m),error:m=>messages.push(m),json(){}},reportFailure:false}),0,messages.join('\n'));
+ assert.match(messages.join('\n'),/frozen batch candidate/);
+ await writeFile(f.gate,'#!/bin/sh\nexit 0\n');
+ const [result]=await verifyTaskBatch({projectRoot:f.root,runIds:[f.approved.runId]},options);
+ assert.equal(result.status,'pass');assert.equal(result.id,pending.id);assert.equal(result.candidate.commitSha,pending.candidate.commitSha);
+});
+
+test('ordinary verification rejects combined-candidate evidence even for an identical singleton head',async t=>{
+ const f=await completedWorker(t);await f.execution.verify(f.verifyInput);
+ const paths=await verificationReportPaths(await resolveFeatureRunPaths(f.root,f.approved.runId));
+ const {createSnapshotStore}=await import('../../src/state/snapshot-store.js');
+ const snapshots=createSnapshotStore(paths);const saved=await snapshots.read();
+ await snapshots.write({...saved.data,scope:'combined-candidate'},{expectedVersion:saved.version});
+ await assert.rejects(createVerificationReportStore(paths).readOnly(),/invalid/);
+});
+
+test('public batch task selection and status execute with heavy capacity one and require no delivery transition',async t=>{
+ const f=await completedWorker(t,{verificationBatch:true});
+ const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+ const machine=createResourceCoordinator({root:join(dirname(f.root),'batch-machine')});
+ await machine.register({projectRoot:f.root,runId:f.approved.runId,deadlineMs:Date.now()+120000,limits:{heavyVerification:1}});
+ const messages=[];
+ const dependencies={cwd:()=>f.root,env:{PATH:process.env.PATH},work:f.execution,machine,
+  terminalIsInteractive:()=>true,prompt:async question=>{assert.ok(question.choices.some(c=>c.value===f.approved.runId));return [f.approved.runId];},
+  resolveCommandExecutable:async runner=>runner==='git'?realpath('/usr/bin/git'):f.gate,
+  output:{log:m=>messages.push(m),error:m=>messages.push(m),json(){}},reportFailure:false};
+ assert.equal(await main(['task','verify','--batch'],dependencies),0,messages.join('\n'));
+ assert.match(messages.join('\n'),/advisory/);
+ assert.equal(await main(['task','status',`--run=${f.approved.runId}`],dependencies),0,messages.join('\n'));
+ assert.match(messages.join('\n'),/Report:/);
+ assert.equal((await f.execution.status({project:f.root,runId:f.approved.runId})).verification,null);
+ assert.equal((await machine.inspect()).claims.filter(c=>c.resource==='heavyVerification'&&c.status==='held').length,0);
+});
+
+
+test('batch cancellation stops an executing gate and cannot publish passing evidence',async t=>{
+ const f=await completedWorker(t,{verificationBatch:true});
+ const marker=join(dirname(f.root),'batch-gate-started');
+ await writeFile(f.gate,`#!/bin/sh\necho started > '${marker}'\nsleep 20\nexit 0\n`);
+ const controller=new AbortController();
+ const {verifyTaskBatch}=await import('../../src/quality/verification-batch.js');
+ const pending=verifyTaskBatch({projectRoot:f.root,runIds:[f.approved.runId]},
+  {gitClient:f.gitClient,resolveCommandExecutable:async()=>f.gate,environment:{PATH:process.env.PATH},signal:controller.signal});
+ // Candidate assembly is real Git work; observe the command boundary before cancelling.
+ for(let attempt=0;attempt<400;attempt++) {try {await access(marker);break;}catch {await delay(25);}}
+ await access(marker);controller.abort();
+ const [result]=await pending;assert.equal(result.status,'blocked');
+ assert.equal((await f.execution.status({project:f.root,runId:f.approved.runId})).verification,null);
+});
+
+
+test('identical tracked project executables batch across distinct task checkout paths',async t=>{
+ const f=await completedWorker(t,{verificationBatch:true,argvScripts:true});const ids=[f.approved.runId];
+ for(const name of ['second']) {
+  const proposal=await f.workflow.propose({project:f.root,client:'host',source:{kind:'inline',value:`# Add ${name}\n\n## Acceptance criteria\n\n- Add ${name}.\n`},decomposition:{schemaVersion:1,kind:'agilno.feature-decomposition',workItems:[{objective:`Add ${name}.`,ownedPaths:[`app/${name}.js`],acceptanceCriterionIndexes:[1]}]}});
+  const approved=await f.workflow.start({project:f.root,runId:proposal.runId,expectedVersion:proposal.version,proposalDigest:proposal.proposalDigest});
+  const prepared=await f.execution.prepare({project:f.root,runId:approved.runId,expectedRunVersion:approved.version});
+  const next=await f.execution.nextAction({project:f.root,runId:approved.runId,expectedRuntimeVersion:prepared.runtimeVersion});
+  const path=JSON.parse(next.action.payload).contract.worktree.path;
+  await mkdir(join(path,'app'),{recursive:true});await writeFile(join(path,'app',`${name}.js`),`export const ${name}=true;\n`);
+  await f.execution.submitResult({project:f.root,runId:approved.runId,expectedRuntimeVersion:next.runtimeVersion,action:next.action,result:resultFor(next.action)});ids.push(approved.runId);
+ }
+ const {verifyTaskBatch}=await import('../../src/quality/verification-batch.js');
+ const results=await verifyTaskBatch({projectRoot:f.root,runIds:ids},{gitClient:f.gitClient,
+  resolveCommandExecutable:async(runner,options)=>runner.startsWith('./')?realpath(join(options.worktree,options.cwd,runner)):f.gate,
+  environment:{PATH:process.env.PATH}});
+ assert.ok(results.every(r=>r.status==='pass'));assert.equal(new Set(results.map(r=>r.id)).size,1);assert.equal(results[0].members.length,2);
+});
+
+
+async function readyBatchGroup(t,options={}) {
+ const f=await completedWorker(t,{verificationBatch:true,...options});const ids=[f.approved.runId];
+ for(const name of ['second','third']) {
+  const proposal=await f.workflow.propose({project:f.root,client:'host',source:{kind:'inline',value:`# Add ${name}\n\n## Acceptance criteria\n\n- Add ${name}.\n`},decomposition:{schemaVersion:1,kind:'agilno.feature-decomposition',workItems:[{objective:`Add ${name}.`,ownedPaths:[`app/${name}.js`],acceptanceCriterionIndexes:[1]}]}});
+  const approved=await f.workflow.start({project:f.root,runId:proposal.runId,expectedVersion:proposal.version,proposalDigest:proposal.proposalDigest});
+  const prepared=await f.execution.prepare({project:f.root,runId:approved.runId,expectedRunVersion:approved.version});
+  const next=await f.execution.nextAction({project:f.root,runId:approved.runId,expectedRuntimeVersion:prepared.runtimeVersion});
+  const path=JSON.parse(next.action.payload).contract.worktree.path;
+  await mkdir(join(path,'app'),{recursive:true});await writeFile(join(path,'app',`${name}.js`),`export const ${name}=true;\n`);
+  await f.execution.submitResult({project:f.root,runId:approved.runId,expectedRuntimeVersion:next.runtimeVersion,action:next.action,result:resultFor(next.action)});ids.push(approved.runId);
+ }
+ return {...f,ids};
+}
+test('batch admission includes paused and expired members even when they joined the queue earlier',async t=>{
+ const f=await readyBatchGroup(t);
+ const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+ const c=createResourceCoordinator({root:join(dirname(f.root),'batch-members')});
+ const registrations=[];
+ for(const runId of f.ids)registrations.push(await c.register({projectRoot:f.root,runId,deadlineMs:Date.now()+120000}));
+ const {verifyTaskBatch}=await import('../../src/quality/verification-batch.js');
+ const options={gitClient:f.gitClient,coordinator:c,resolveCommandExecutable:async()=>f.gate,environment:{PATH:process.env.PATH}};
+ await c.pause(registrations[1].id,true);
+ const paused=await verifyTaskBatch({projectRoot:f.root,runIds:f.ids},options);
+ assert.ok(paused.every(r=>r.status==='blocked'));
+ await c.pause(registrations[1].id,false);
+ // Capture a legitimate frozen participant, then explicitly enqueue it before
+ // the other two callers. It must still participate in admission validation.
+ const {openBatchQueue}=await import('../../src/quality/verification-batch-queue.js');
+ const q=await openBatchQueue(f.root);await q.enqueue([paused[0].members[2]]);
+ await c.register({projectRoot:f.root,runId:f.ids[2],deadlineMs:Date.now()+200});await delay(250);
+ const expired=await verifyTaskBatch({projectRoot:f.root,runIds:f.ids.slice(0,2)},options);
+ assert.ok(expired.every(r=>r.status==='blocked'));assert.equal(expired[0].members.length,3);
+ assert.equal((await c.inspect()).claims.some(claim=>claim.resource==='heavyVerification'),false);
+});
+
+test('batch uses the earliest member deadline even when the first selected task has no registration',async t=>{
+ const f=await readyBatchGroup(t);
+ const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+ const c=createResourceCoordinator({root:join(dirname(f.root),'batch-deadline')});
+ const deadline=Date.now()+12000;
+ await c.register({projectRoot:f.root,runId:f.ids[1],deadlineMs:deadline});
+ const marker=join(dirname(f.root),'batch-deadline-started');await writeFile(f.gate,`#!/bin/sh\necho started > '${marker}'\nsleep 30\nexit 0\n`);
+ const {verifyTaskBatch}=await import('../../src/quality/verification-batch.js');
+ const result=await verifyTaskBatch({projectRoot:f.root,runIds:f.ids},{gitClient:f.gitClient,coordinator:c,signal:AbortSignal.timeout(20000),
+  resolveCommandExecutable:async()=>f.gate,environment:{PATH:process.env.PATH}});
+ assert.ok(result.every(r=>r.status==='blocked'));assert.ok(Date.now()<deadline+5000);
+ const state=await c.inspect();assert.ok(state.claims.some(claim=>claim.resource==='heavyVerification'));
+ assert.equal(state.claims.filter(claim=>claim.resource==='heavyVerification').length,1);
+ for(const claim of state.claims.filter(claim=>claim.status==='held'))assert.equal(claim.execution?.status,'unknown');
+});
+
+
+test('batch dependency approval cannot install while another frozen member is paused',async t=>{
+ const f=await readyBatchGroup(t,{lockedDependencies:true});
+ const {verifyTaskBatch,bootstrapTaskBatchDependencies}=await import('../../src/quality/verification-batch.js');
+ const options={gitClient:f.gitClient,resolveCommandExecutable:async()=>f.gate,environment:{PATH:process.env.PATH}};
+ const pending=await verifyTaskBatch({projectRoot:f.root,runIds:f.ids},options);assert.equal(pending[0].status,'dependencies-needed');
+ const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+ const c=createResourceCoordinator({root:join(dirname(f.root),'batch-deps-admission')});
+ const second=await c.register({projectRoot:f.root,runId:f.ids[1],deadlineMs:Date.now()+60000});await c.pause(second.id,true);
+ let confirmed=false;
+ await assert.rejects(bootstrapTaskBatchDependencies({projectRoot:f.root,runId:f.ids[0]},
+  {...options,coordinator:c,confirm:async()=>{confirmed=true;return true;}}),/admission/);
+ assert.equal(confirmed,false);assert.equal((await c.inspect()).claims.length,0);
 });

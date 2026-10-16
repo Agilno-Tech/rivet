@@ -96,6 +96,32 @@ export const catalog = {
       ['uncertain-owner', 'crashed owner remains blocked; PID absence does not authorize stealing'],
       ['no-forged-proof', 'generic queue completion cannot manufacture branded passing proof'],
     ]),
+    scenario('orchestration-batch-queue', 'test/runtime/verification-batch-queue.test.js', [
+      ['frozen-membership', 'batch queue freezes FIFO compatible membership and never adopts running ownership'],
+      ['elapsed-singleton', 'elapsed singleton is actually claimed only after its deadline'],
+      ['one-owner-current-result', 'simultaneous claims execute only one owner and pending runs never display an old pass'],
+      ['frozen-policy', 'an incompatible caller cannot change the frozen queue flush policy'],
+      ['reject-modified-ownership', 'queue rejects modified durable ownership instead of treating an unknown owner as stopped'],
+      ['bounded-verbose-evidence', 'verbose reports stay separate from bounded queue ownership and do not wedge later batches'],
+      ['recover-failed-publication', 'failed durable queue write leaves the owner capability usable for a blocked fallback'],
+      ['explicit-stale-reenrollment', 'explicit re-enrollment replaces stale pending heads and invalidates waiting dependencies without changing frozen members'],
+    ]),
+    scenario('orchestration-batch-execution', 'test/feature/host-execution.test.js', [
+      ['candidate-only-and-drift', 'batch verification flushes an elapsed ready singleton without advancing task delivery state'],
+      ['combined-checks-bounded-isolation', 'batch verifies three ready task heads once and preserves each accepted integration'],
+      ['cancel-running-checks', 'batch cancellation stops an executing gate and cannot publish passing evidence'],
+    ]),
+    scenario('orchestration-batch-admission', 'test/feature/host-execution.test.js', [
+      ['every-queued-participant', 'batch admission includes paused and expired members even when they joined the queue earlier'],
+      ['earliest-deadline', 'batch uses the earliest member deadline even when the first selected task has no registration'],
+      ['dependency-admission', 'batch dependency approval cannot install while another frozen member is paused'],
+    ]),
+    scenario('orchestration-batch-workflow', 'test/feature/host-execution.test.js', [
+      ['approved-dependency-retry', 'batch dependencies remain pending until an explicitly approved install and retry the frozen candidate'],
+      ['reject-task-delivery-proof', 'ordinary verification rejects combined-candidate evidence even for an identical singleton head'],
+      ['public-cli-shared-capacity', 'public batch task selection and status execute with heavy capacity one and require no delivery transition'],
+      ['project-executable-compatibility', 'identical tracked project executables batch across distinct task checkout paths'],
+    ]),
     scenario('orchestration-cleanup-preview', 'test/runtime/worktree-cleanup.test.js', [
       ['read-only-observation', 'cleanup preview observes exact stopped completed Worker without changing state, refs or files'],
       ['retain-unsafe-checkouts', 'cleanup retains active/failed/blocked tasks, unknown owners, dirt, ignored contents and symlinks'],
@@ -123,6 +149,7 @@ export const catalog = {
       ['cross-project-cap', 'independent processes contend for one agent without overadmission'],
       ['uncertain-owner-retained', 'restart with reused parent PID cannot release dispatched unknown descendants'],
       ['attempt-bound-no-execution', 'no-execution proof is bound to one dispatched attempt and rejects fabricated evidence'],
+      ['guard-after-capacity-wait', 'scoped admission validation runs after capacity wait before dispatch'],
     ]),
     scenario('orchestration-supervision', 'test/cli/managed-orchestration.test.js', [
       ['machine-diagnostics', 'normal CLI exposes only machine diagnostics and limits without registration IDs'],

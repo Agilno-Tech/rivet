@@ -1,3 +1,5 @@
+import {verifyTaskBatch,bootstrapTaskBatchDependencies} from '../quality/verification-batch.js';
+import {batchForRun} from '../quality/verification-batch-queue.js';
 import { previewTaskWorktreeCleanup, applyTaskWorktreeCleanup, confirmTaskWorktreeCleanup } from '../git/worktree-cleanup.js';
 import { executionForNode } from '../feature/client-profile.js';
 import {taskAllowance,requireManagedAllowance,activateTaskAdmission,taskCapacity} from '../runtime/task-orchestration.js';
@@ -100,7 +102,8 @@ async function dependencyCommand(project, record, dependencies) {
   const status = await invokeFeature(dependencies.work, 'status', { project: project.root, runId: record.runId });
   if(status.candidateCheckouts?.some(candidate=>candidate.status!=='ready'))fail(status.nextAction,'REPOSITORY_CONFLICT');
   let target = null;
-  const targets=[...(status.dependencyTargets ?? [])];
+  const batch=await batchForRun(project.root,record.runId);
+  const targets=batch?.status==='dependencies-needed'&&batch.dependencyTarget?[batch.dependencyTarget]:[...(status.dependencyTargets ?? [])];
   if (record.featurePlan.client === 'host' && record.status === 'running') {
     const statePaths = await resolveExistingStatePaths(project.root, record.runId);
     const workerIds = new Set(record.featurePlan.nodes.filter(node => node.role === 'worker').map(node => node.id));
@@ -123,7 +126,7 @@ async function dependencyCommand(project, record, dependencies) {
     kind: 'integration',
   };
   if(target && targets.length===0)targets.push(target);
-  if (!['running', 'blocked'].includes(record.status) || targets.length===0) {
+  if (!['running', 'blocked','awaiting-final-approval'].includes(record.status) || targets.length===0) {
     fail('This task has no eligible isolated checkout yet. Continue the task, then retry dependency setup.', 'REPOSITORY_CONFLICT');
   }
   const config = await loadProjectConfig(project.root);
@@ -137,7 +140,7 @@ async function dependencyCommand(project, record, dependencies) {
     for(const target of targets) {
       let result;
       try {
-        const install=()=>bootstrapWorktreeDependencies({
+        const install=(machineSignal=signal)=>target.kind==='batch-candidate'?bootstrapTaskBatchDependencies({projectRoot:project.root,runId:record.runId},{gitClient,resolveCommandExecutable:dependencies.resolveCommandExecutable,environment:dependencies.env??{},coordinator:dependencies.machine,confirm:confirmIsolatedDependencyInstall(dependencies,machineSignal),signal:machineSignal}):bootstrapWorktreeDependencies({
           projectRoot: project.root,
           worktreePath: target.path,
           expectedCommit: target.commit,
@@ -146,8 +149,8 @@ async function dependencyCommand(project, record, dependencies) {
         }, {
           gitClient,
           resolveCommandExecutable: dependencies.resolveCommandExecutable,
-          confirm: confirmIsolatedDependencyInstall(dependencies, signal),
-          signal,
+          confirm: confirmIsolatedDependencyInstall(dependencies, machineSignal),
+          signal:machineSignal,
         });
         result=dependencies.machine?await withMachineContext(dependencies.machine,project.root,record.runId,install,{signal}):await install();
       } catch (error) {
@@ -163,7 +166,7 @@ async function dependencyCommand(project, record, dependencies) {
         if (result.result?.stderr) dependencies.output.error(`stderr:\n${diagnostic(result.result.stderr)}`);
         return EXIT_CODES.FAILED_GATE;
       }
-      dependencies.output.log(record.featurePlan.client === 'host'
+      dependencies.output.log(target.kind==='batch-candidate'?'Dependencies are ready in the frozen batch candidate. Retry rivet task verify --batch for this task.':record.featurePlan.client === 'host'
         ? target.kind === 'candidate'
           ? 'Dependencies are ready in the candidate checkout. Retry the exact submitted action and result in the owning harness.'
         : target.kind === 'worker'
@@ -188,19 +191,40 @@ function renderWorkerCheckouts(status, output) {
 
 
 export async function humanTaskCommand(parsed, dependencies) {
-  if (parsed.command !== 'task' || !['status', 'start', 'approve', 'pause', 'resume', 'deps', 'cleanup', 'recover', 'decisions', 'decide', 'approve-decision', 'review', 'checkpoint', 'handoff'].includes(parsed.subcommand)
-    || parsed.operands.length !== 0 || Object.keys(parsed.flags).some(key => !['project', 'run', 'for', 'details', 'preview', 'input', 'input-json', 'phase', 'decision'].includes(key))) {
+  if (parsed.command !== 'task' || !['status', 'start', 'approve', 'pause', 'resume', 'deps', 'verify', 'cleanup', 'recover', 'decisions', 'decide', 'approve-decision', 'review', 'checkpoint', 'handoff'].includes(parsed.subcommand)
+    || parsed.operands.length !== 0 || Object.keys(parsed.flags).some(key => !['project', 'run', 'for', 'details', 'preview', 'batch', 'input', 'input-json', 'phase', 'decision'].includes(key))) {
     fail('Use rivet task status|start|approve|resume|deps|recover [--project=<path>] [--run=<id>].');
   }
+  if ((parsed.subcommand === 'verify') !== (parsed.flags.batch === true)) fail('Use rivet task verify --batch for combined candidate checks.');
   if (parsed.subcommand !== 'cleanup' && parsed.flags.preview !== undefined) fail('--preview requires task cleanup.');
   const allowanceMs=taskAllowance(parsed.flags.for);
   if(allowanceMs!==undefined&&!['start','resume'].includes(parsed.subcommand))fail('--for is available on task start or resume.');
   const project = await resolveConfiguredProject(dependencies.cwd(), parsed.flags.project, { env: dependencies.env });
+  if(parsed.subcommand==='verify') {
+    if(Object.keys(parsed.flags).some(key=>!['project','run','batch'].includes(key)))fail('Batch verification accepts only --batch, --project and --run.');
+    let ids;
+    if(parsed.flags.run!==undefined)ids=[(await selectedRun(project.root,parsed.flags.run,'verify',dependencies)).runId];
+    else {
+      const eligible=(await runs(project.root)).filter(r=>['running','awaiting-final-approval'].includes(r.status));
+      if(dependencies.terminalIsInteractive?.()!==true)fail('Select a task with --run=<id>, or run interactively to select several tasks.');
+      ids=await dependencies.prompt({message:'Select tasks for combined candidate verification',choices:eligible.map(r=>({name:summary(r),value:r.runId}))});
+      if(!Array.isArray(ids)||!ids.length) {dependencies.output.log('Batch verification cancelled.');return EXIT_CODES.SUCCESS;}
+      if(ids.some(id=>!eligible.some(r=>r.runId===id)))fail('Select listed tasks only.');
+    }
+    const gitClient=await createGitClient({gitExecutable:await dependencies.resolveCommandExecutable('git')});
+    return withTerminalInterruption(async signal=>{
+      const execute=(machineSignal=signal)=>verifyTaskBatch({projectRoot:project.root,runIds:ids},{gitClient,resolveCommandExecutable:dependencies.resolveCommandExecutable,environment:dependencies.env??{},coordinator:dependencies.machine,signal:machineSignal});
+      const reports=dependencies.machine?await withMachineContext(dependencies.machine,project.root,ids[0],execute,{signal}):await execute();
+      for(const report of reports)renderBatch(report,dependencies.output);
+      return reports.every(report=>report?.status==='pass')?EXIT_CODES.SUCCESS:EXIT_CODES.FAILED_GATE;
+    });
+  }
   const record = await selectedRun(project.root, parsed.flags.run, parsed.subcommand, dependencies);
   if (!record) {dependencies.output.log('Task selection cancelled. No task action was taken.');return EXIT_CODES.SUCCESS;}
   if (!['checkpoint','handoff','decisions','decide','approve-decision','review'].includes(parsed.subcommand)
       && ['input','input-json','phase','decision'].some(key=>parsed.flags[key]!==undefined))
     fail('Evidence options require a decision or review command.');
+  if(parsed.subcommand==='status')renderBatch(await batchForRun(project.root,record.runId),dependencies.output);
   if (parsed.subcommand === 'cleanup') {
     const gitClient = await createGitClient({gitExecutable:await dependencies.resolveCommandExecutable('git')});
     const preview = await previewTaskWorktreeCleanup({projectRoot:project.root, runId:record.runId}, {gitClient});
@@ -360,4 +384,16 @@ export async function humanTaskCommand(parsed, dependencies) {
     return result.status === 'awaiting-final-approval' ? EXIT_CODES.SUCCESS
       : result.status === 'blocked' ? EXIT_CODES.FAILED_GATE : EXIT_CODES.REPOSITORY_CONFLICT;
   });
+}
+
+function renderBatch(report,output) {
+ if(!report)return;
+ output.log(`Combined candidate verification: ${visible(report.status)} (advisory; task verification and delivery are separate).`);
+ if(report.candidate)output.log(`Candidate: ${visible(report.candidate.commitSha)} at ${visible(report.candidate.path)}`);
+ for(const member of report.members??[])output.log(`  ${visible(member.runId)}: ${visible(member.sourceSha)}; criteria: ${visible(JSON.stringify(member.criteria))}`);
+ for(const check of report.checks??[])output.log(`  Check ${visible(check.id)}: ${visible(check.status)}`);
+ for(const diagnostic of report.diagnostics??[])output.log(`  Isolation ${visible(diagnostic.runId)}: ${visible(diagnostic.status)}`);
+ if(report.reason)output.log(`Blocked: ${visible(report.reason)}`);
+ if(report.reportPath)output.log(`Report: ${visible(report.reportPath)}`);
+ output.log(report.status==='dependencies-needed'?'Next: run rivet task deps, approve installation in this candidate, then retry rivet task verify --batch.':report.status==='running'?'Next: wait for the existing owner; unresolved owners require inspection and are never reclaimed automatically.':report.status==='queued'?'Next: retry rivet task verify --batch to continue the bounded foreground wait.':'Next: inspect this advisory evidence and complete the task’s ordinary verification and final review.');
 }

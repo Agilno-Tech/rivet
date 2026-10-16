@@ -261,6 +261,34 @@ export async function acquireCandidateIntegrationLock(statePaths, {signal, timeo
   }
 }
 
+async function verifyCandidate(value,ctx,saved,options,expectedTip) {
+  const manifest=freeze(saved.data.manifest);
+  // Verification may be long; keep the integration lock free while it runs.
+  const proof=await options.verify(manifest); assertQualityRun(proof);
+  if(proof.commitSha!==manifest.commitSha || proof.projectRoot!==manifest.path)fail('verification failed');
+  const artifacts = await outputArtifacts(ctx,value.verificationOutputs);
+  const verified = {...saved.data,verificationArtifacts:artifacts};
+  await check(value,ctx,verified,await expectedTip(verified));
+  // Genuine failed gates can still generate authorized ignored files. Pin
+  // them before reporting failure so a later retry never adopts foreign data.
+  saved=await ctx.store.write(verified,{expectedVersion:saved.version});
+  return {saved,proof,manifest};
+}
+
+// Candidate-only proof never advances a branch or publishes task delivery evidence.
+export async function verifyIntegrationCandidate(input,options) {
+  const value=capture(input,options);
+  if(typeof options.verify!=='function')fail('verification required');
+  const ctx=await context(value,options);ctx.validateOwner=options.validateOwner;
+  const operation=await acquireLock(join(value.statePaths.instanceDir,`candidate-${value.candidateId}.operation.lock`));
+  try {
+    const saved=await ctx.store.read();if(saved?.data.status!=='ready')fail('not ready');
+    await check(value,ctx,saved.data,value.baseSha);
+    const result=await verifyCandidate(value,ctx,saved,options,()=>value.baseSha);
+    return Object.freeze({candidate:freeze(result.saved.data),proof:result.proof});
+  }finally{await operation.release();}
+}
+
 export async function acceptIntegrationCandidate(input,options) {
   const value=capture(input,options);if(typeof options.verify!=='function')fail('verification required');
   if(options.onAccepted !== undefined && typeof options.onAccepted !== 'function')fail('invalid publication callback');
@@ -270,16 +298,9 @@ export async function acceptIntegrationCandidate(input,options) {
     let saved=await ctx.store.read(); if(!['ready','accepted'].includes(saved?.data.status))fail('not ready');
     const expectedTip = record => record.status === 'accepted' ? record.manifest.commitSha : acceptanceTip(value,ctx,record);
     await check(value,ctx,saved.data,await expectedTip(saved.data));
-    const manifest=freeze(saved.data.manifest);
-    // Verification may be long; keep the integration lock free while it runs.
-    const proof=await options.verify(manifest); assertQualityRun(proof);
-    if(proof.commitSha!==manifest.commitSha || proof.projectRoot!==manifest.path)fail('verification failed');
-    const artifacts = await outputArtifacts(ctx,value.verificationOutputs);
-    const verified = {...saved.data,verificationArtifacts:artifacts};
-    await check(value,ctx,verified,await expectedTip(verified));
-    // Genuine failed gates can still generate authorized ignored files. Pin
-    // them before reporting failure so a later retry never adopts foreign data.
-    saved=await ctx.store.write(verified,{expectedVersion:saved.version});
+    const result=await verifyCandidate(value,ctx,saved,options,expectedTip);
+    saved=result.saved;
+    const {proof,manifest}=result;
     if(proof.status!=='pass')fail('verification failed');
     await verifyResolvedStatePaths(value.statePaths);
     const lock=await acquireCandidateIntegrationLock(value.statePaths, {signal: options.signal});

@@ -343,6 +343,34 @@
         "maxLength": 256,
         "pattern": "^(?!/)(?!.*(?:^|/)(?:\\.{1,2}|\\.[gG][iI][tT]|\\.[rR][iI][vV][eE][tT]-[dD][eE][pP][sS]|[nN][oO][dD][eE]_[mM][oO][dD][uU][lL][eE][sS])(?:/|$))(?!.*(?:^|/)(?:[cC][oO][nN]|[pP][rR][nN]|[aA][uU][xX]|[nN][uU][lL]|[cC][oO][mM][1-9]|[lL][pP][tT][1-9])(?:\\.|/|$))(?!.*\\.(?:/|$))(?!.*//)(?!.*[/]$)[^\\\\:\\u0000-\\u0020\\u007f*?\\[\\]{}]+$"
       }
+    },
+    "verificationBatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "maxTasks": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 5,
+          "default": 3
+        },
+        "waitMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30000,
+          "default": 2000
+        },
+        "maxIsolationTasks": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5,
+          "default": 2
+        }
+      }
     }
   },
   "$defs": {

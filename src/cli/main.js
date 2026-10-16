@@ -80,6 +80,7 @@ Everyday commands:
   rivet task start                Reopen an unapproved plan
   rivet task approve              Review and finish verified work
   rivet task deps                 Approve configured dependency setup
+  rivet task verify --batch       Check selected task heads together (advisory)
   rivet task cleanup [--preview]  Review and approve completed-task checkout cleanup
   rivet task recover              Inspect abandoned operation locks
   rivet task checkpoint           Preserve a managed host checkpoint

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, chmod, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, chmod, symlink, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -402,4 +402,19 @@ test('project admission preserves parent ceilings and per-task worker scope with
  }
  assert.deepEqual(claims.map(c=>c.status),['held','held','queued']);
  assert.equal(claims[2].reason,'project-agentExecutions');
+});
+
+test('scoped admission validation runs after capacity wait before dispatch',async()=>{
+ const {root:fixtureRoot,coordinator:c}=await fixture();const root=await realpath(fixtureRoot);
+ const r=await c.register({projectRoot:root,runId:'batch-owner',deadlineMs:deadline()});
+ const held=await c.request({registrationId:r.id,resource:'heavyVerification',idempotencyKey:'occupied',generation:1});
+ const {withMachineContext,admitted}=await import('../../src/runtime/machine-admission.js');
+ const other=await c.register({projectRoot:root,runId:'other-member',deadlineMs:deadline()});
+ let executed=false,checked=false;
+ const pending=withMachineContext(c,root,r.runId,()=>admitted('heavyVerification','batch-check',{},async()=>{executed=true;}),
+  {beforeDispatch:async()=>{checked=true;if((await c.inspect()).registrations.find(r=>r.id===other.id).paused)throw new Error('other member paused');}});
+ for(let i=0;i<100;i++){if((await c.inspect()).claims.some(x=>x.status==='queued'))break;await new Promise(r=>setTimeout(r,10));}
+ assert.ok((await c.inspect()).claims.some(x=>x.status==='queued'));
+ await c.pause(other.id,true);await c.release({claimId:held.id,generation:1,completed:true});
+ await assert.rejects(pending,/other member paused/);assert.equal(checked,true);assert.equal(executed,false);
 });

@@ -21,19 +21,18 @@ export class VerificationPendingError extends Error {
     this.claim=Object.freeze({reason:'verification-running'});
   }
 }
-export async function openVerificationQueue(projectRoot) {
-  const paths=await resolveStatePaths(projectRoot,'verification-reuse');
+export async function verificationPrivateKey(paths,{existing=false}={}) {
   await verifyResolvedStatePaths(paths);
   const path=join(paths.instanceDir,'identity-key');
   let initialization;
-  for(let attempt=0;attempt<100;attempt++) {
+  for(let attempt=0;!existing&&attempt<100;attempt++) {
     try { initialization=await acquireLock(join(paths.instanceDir,'identity.lock'));break; }
     catch(error) { if(!(error instanceof LockBusyError))throw error;await delay(20); }
   }
-  if(!initialization)throw new VerificationBlockedError('identity-key-busy');
+  if(!existing&&!initialization)throw new VerificationBlockedError('identity-key-busy');
   let key;
   try {
-  try {
+  if(!existing)try {
     const handle=await open(path,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
     try{await handle.writeFile(randomBytes(32));await handle.sync();}finally{await handle.close();}
   } catch(error){if(error.code!=='EEXIST')throw error;}
@@ -45,7 +44,13 @@ export async function openVerificationQueue(projectRoot) {
     const after=await lstat(path);
     if(after.dev!==before.dev || after.ino!==before.ino || after.size!==32)throw new VerificationBlockedError('changed-identity-key');
   }finally{await handle.close();}
-  } finally { await initialization.release(); }
+  } finally { await initialization?.release(); }
+  return key;
+}
+
+export async function openVerificationQueue(projectRoot) {
+  const paths=await resolveStatePaths(projectRoot,'verification-reuse');
+  const key=await verificationPrivateKey(paths);
   const store=createSnapshotStore(paths,{environment:{}});
   function validate(snapshot) {
     if(!snapshot)return [];

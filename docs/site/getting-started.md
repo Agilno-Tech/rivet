@@ -114,6 +114,12 @@ A saved terminal proposal is reviewed before activation; you do not need to call
 
 You normally do not need a task ID or `--project`. When several tasks are active, an interactive terminal shows a numbered list of task descriptions and states. Choose one, or use `--run=<id>` explicitly. Noninteractive commands require an explicit selector when the choice is ambiguous. Use `--project=<path>` when running outside the project.
 
+## Optional combined checks and cleanup
+
+Projects that enable [batch verification](./orchestration.md#verify-selected-tasks-together) can run `rivet task verify --batch` and select ready tasks to check together. The report covers the combined candidate; each task still needs its ordinary verification and final approval. `rivet task status` shows the result and any candidate dependency setup needed through `rivet task deps`.
+
+After a task finishes, `rivet task cleanup --preview` shows which owned Worker checkouts can be removed. Run `rivet task cleanup` to review their exact paths and confirm removal. Branches, commits and task evidence remain available. See [cleanup rules](./orchestration.md#completed-work-cleanup) for retained checkouts and recovery.
+
 ## Report a problem
 
 Human-readable command failures show a next step and the path to a private JSON diagnostic report when it can be saved. Review that file before attaching it to a [GitHub issue](https://github.com/Agilno-Tech/rivet/issues/new), along with reproduction steps and expected behavior. To collect broader sanitized diagnostics:

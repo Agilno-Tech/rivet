@@ -255,3 +255,15 @@ test('candidate accepts explicitly bootstrapped node_modules but rejects foreign
     }
   }
 });
+
+test('proof-only verification returns genuine candidate results without accepting or advancing target', async t => {
+  const f=await fixture(t); await prepareIntegrationCandidate(f.request,f.options);
+  const module=await import('../../src/git/integration-candidate.js');
+  assert.equal(typeof module.verifyIntegrationCandidate,'function');
+  const result=await module.verifyIntegrationCandidate(f.request,{...f.options,verify:f.verify});
+  assert.equal(result.proof.status,'pass');
+  assert.equal(result.candidate.status,'ready');
+  assert.equal(await git(f.target,'rev-parse','HEAD'),f.request.baseSha);
+  assert.equal((await inspectIntegrationCandidate(f.request,f.options)).status,'ready');
+  await assert.rejects(module.verifyIntegrationCandidate(f.request,{...f.options,verify:async manifest=>({status:'pass',projectRoot:manifest.path,commitSha:manifest.commitSha})}));
+});

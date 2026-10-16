@@ -4,7 +4,7 @@ Managed orchestration coordinates approved tasks on one machine through the norm
 
 ## Scope
 
-Managed orchestration adds approved model/effort routing, bounded session replacement, shared resource admission and dependency-aware work within a task. Independent work can run concurrently when the approved plan and role capacities allow it. Plans without explicit work dependencies retain serial execution. Multi-task verification batches are not yet available. Completed-work cleanup offers a read-only preview and explicit confirmation before removing eligible Worker checkouts. Automatic retention is not yet available.
+Managed orchestration adds approved model/effort routing, bounded session replacement, shared resource admission and dependency-aware work within a task. Independent work can run concurrently when the approved plan and role capacities allow it. Plans without explicit work dependencies retain serial execution. Opt-in multi-task verification batches check selected task heads in an isolated combined candidate through `rivet task verify --batch`; their reports are advisory and preserve each task’s separate verification and delivery approval. Completed-work cleanup offers a read-only preview and explicit confirmation before removing eligible Worker checkouts. Automatic retention is not yet available.
 
 Default ceilings are four active tasks, four agent executions, one heavy verification and one dependency installation. These are cooperative limits for participating Rivet processes. They do not measure or control unrelated applications. Approved project limits apply across active runs in the same project, while run limits may lower them further. Stricter limits from an active run remain in force until its held work settles; other projects retain their own limits. Task deadlines remain independent.
 
@@ -168,3 +168,29 @@ The preview removes nothing and is not approval for later deletion. Run `rivet t
 Rivet rechecks the task, stopped owner generation, reservation, checkout identity, branch tip and clean working tree while holding the task and runtime locks. Removal preserves branches, commits and task evidence. A private journal records each approved checkout before removal, so an interrupted operation can be inspected and explicitly retried without adopting a replacement directory. Removed checkouts remain visible as removed with their branches preserved.
 
 Integration and verification candidate checkouts are retained. Checkouts containing ignored build or dependency artifacts are retained, including Rivet-owned dependencies; this first manual removal path does not force-delete artifacts. Automatic retention is not yet available.
+
+### Verify selected tasks together
+
+Batch verification is optional. Enable it in committed `.rivet/quality.yaml` before creating tasks:
+
+```yaml
+verificationBatch:
+  enabled: true
+  maxTasks: 3          # 2–5 task heads
+  waitMs: 2000        # 1–30000 milliseconds
+  maxIsolationTasks: 2 # 0–5 diagnostic singleton checks after failure
+```
+
+Run `rivet task verify --batch` to select tasks, or use `--run=<task>` to enroll one task. Only selected, completed implementations with clean accepted integration heads can join. The foreground command waits for the configured size or oldest queued deadline, including a singleton. It stops waiting when its bounded observation period ends; retry the command to continue queued work. There is no background service.
+
+Compatible tasks share an exact baseline, configuration, gate definitions and environment identity. Rivet freezes membership, creates an isolated combined candidate, and runs configured checks there. Later arrivals join a later batch. Command execution uses ordinary machine admission without claiming a second outer heavy slot. Unknown running owners are retained for inspection and never reclaimed by timeout or missing PID.
+
+A fresh candidate needs its own dependencies. If prompted by status, run `rivet task deps`, review and approve the install, then retry `rivet task verify --batch`. This resumes the frozen candidate; changed participant heads, cancelled tasks, configuration or baseline changes invalidate it. No dependency directories are copied between checkouts.
+
+`rivet task status` shows the combined candidate, exact participant commits, criteria, checks and private report path. Failed combined checks can run the bounded number of singleton diagnostics; unchecked tasks remain explicitly untested. These reports are advisory: they do not advance any task, certify its original branch, satisfy independent review or replace ordinary final verification and delivery approval. Candidate checkouts and reports remain available for inspection.
+
+Each retry runs fresh checks. If an isolation diagnostic needs dependencies, approving that install and retrying may repeat the combined check and earlier diagnostics; an older result is never reused merely because its candidate commit stayed the same.
+
+Re-enrolling a ready task refreshes an older queued head. If its head or approval changed while a frozen batch was waiting for dependencies, Rivet blocks that old batch, preserves its evidence and enrolls the new head separately. Running owners are never replaced. Reports retain bounded diagnostic output separately from the compact queue index, so verbose commands cannot fill the ownership record.
+
+Machine admission applies to every task in the frozen batch, including tasks enrolled by an earlier caller. A paused, cancelled or expired member prevents new checks and dependency installation. The earliest applicable task or project deadline bounds execution. Rivet rechecks the whole batch after waiting for command capacity and before publishing evidence, while each verification command still uses only one heavy-verification slot.
