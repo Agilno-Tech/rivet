@@ -1185,6 +1185,56 @@ export function createOrchestrator(input) {
     });
   }
 
+  async function prepareActions(instance, inputOptions) {
+    const options = clone(captureOptions(inputOptions, ['expectedVersion','maxActiveNodes','capacityByOwner','childCapacityByParent'], ['expectedVersion']));
+    const inspect = async () => {
+      const lock = await instance.acquire();
+      try { return canonicalRuntimeState(await instance.read(), instance.id); }
+      finally { await lock.release(); }
+    };
+    let state = await inspect();
+    if (state.version !== exactVersion(options.expectedVersion)) fail('version-conflict');
+    if (TERMINAL.has(state.terminal)) return Object.freeze({version:state.version,actions:Object.freeze([])});
+    await tickInternal(instance, options, false);
+    state = await inspect();
+    const available = (snapshot,node) => {
+      if(TERMINAL.has(snapshot.terminal))return false;
+      const running=snapshot.graph.nodes.filter(item=>item.status==='running');
+      return running.length < (options.maxActiveNodes??4)
+        && running.filter(item=>item.owner.id===node.owner.id).length < (options.capacityByOwner?.[node.owner.id]??64)
+        && (!node.parentId || running.filter(item=>item.parentId===node.parentId).length < (options.childCapacityByParent?.[node.parentId]??64));
+    };
+    if(TERMINAL.has(state.terminal))return Object.freeze({version:state.version,actions:Object.freeze([])});
+    for (const node of state.graph.nodes.filter(node => node.status === 'reserved'
+      && ['committed','prepared'].includes(state.launchIntents[node.id]?.status))) {
+      state=await inspect();
+      if(!available(state,node))continue;
+      let intent = state.launchIntents[node.id];
+      if (config.prepareWorktree && intent.status !== 'prepared') {
+        const claimId = `prepare-${randomUUID()}`;
+        const claimed = await serializeResult(instance.id, () => claimPreparation(instance, intent, claimId));
+        if (claimed === null) fail('version-conflict');
+        const worktree = clone(await config.prepareWorktree(clone(node), clone(claimed)));
+        intent = await serializeResult(instance.id, () => persistPreparedIntent(instance, claimed, claimId, worktree));
+        if (intent === null) fail('version-conflict');
+      }
+      state=await inspect();
+      if(!available(state,node))continue;
+      const started = await serializeResult(instance.id, () => markIntentStarted(instance, intent));
+      if (started === null) fail('version-conflict');
+    }
+    state = await inspect();
+    if(TERMINAL.has(state.terminal))return Object.freeze({version:state.version,actions:Object.freeze([])});
+    const actions = state.graph.nodes.filter(node => node.status === 'running'
+      && state.launchIntents[node.id]?.status === 'started'
+      && (!state.launchIntents[node.id].session || state.sessions[node.id].phase === 'active'))
+      .map(node => {
+        const intent = state.launchIntents[node.id];
+        return Object.freeze({node:clone(node),intent:clone(intent),launch:clone(config.launchFor(clone(node),clone(intent)))});
+      });
+    return Object.freeze({version:state.version,actions:Object.freeze(actions)});
+  }
+
   async function submitAction(instance, inputOptions) {
     const options = captureOptions(inputOptions, [
       'expectedVersion', 'nodeId', 'intentId', 'idempotencyKey', 'reservationId', 'result', 'sessionId', 'generation',
@@ -1309,6 +1359,12 @@ export function createOrchestrator(input) {
 
   async function retryNode(instance, inputOptions) { return recoverRetryNode(instance, inputOptions, { retryPolicy }); }
 
-  const runtime = Object.freeze({ sessionOperation, activate, approveNode, recordHeartbeat, tick, advance, prepareAction, submitAction, retryNode, recoverStalledNode, cancelNode, cancelGoal });
+  async function drain(instance) {
+    assertInstance(instance);
+    for (const [key, controller] of controllers) if (key.startsWith(`${instance.id}:`)) controller.abort();
+    await Promise.allSettled([...inflight.entries()].filter(([key]) => key.startsWith(`${instance.id}:`)).map(([,promise]) => promise));
+  }
+
+  const runtime = Object.freeze({ sessionOperation, activate, approveNode, recordHeartbeat, tick, advance, drain, prepareAction, prepareActions, submitAction, retryNode, recoverStalledNode, cancelNode, cancelGoal });
   return runtime;
 }

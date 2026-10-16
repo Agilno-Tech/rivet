@@ -2328,3 +2328,78 @@ test('advance preserves late durable worker failures for subsequent advancement'
   await assert.rejects(runtime.advance(instance,{expectedVersion:instance.inspect().version,maxActiveNodes:2}),/durable-write-failed/);
   await assert.rejects(runtime.advance(instance,{expectedVersion:instance.inspect().version,maxActiveNodes:2}),/durable-write-failed/);
 });
+
+test('plural host preparation fills approved capacity without duplicating active work',async()=>{
+  const instance=memoryInstance({activated:true});
+  const preparations=[];
+  const runtime=createOrchestrator({now:()=>NOW,launchFor,reservationId:id=>`${id}-lease`,client:{launch:async()=>{throw Error('Host preparation cannot launch');}},
+    prepareWorktree:async(node,intent)=>{preparations.push(node.id);return {path:`/tmp/${node.id}`,dev:'1',ino:node.id==='api'?'2':'3',reservationId:intent.reservationId};}});
+  const first=await runtime.prepareActions(instance,{expectedVersion:0,maxActiveNodes:1});
+  assert.equal(first.actions.length,1);
+  const second=await runtime.prepareActions(instance,{expectedVersion:first.version,maxActiveNodes:2});
+  assert.deepEqual(second.actions.map(a=>a.node.id).sort(),['api','design']);
+  assert.equal(new Set(second.actions.map(a=>a.intent.reservationId)).size,2);
+  const again=await runtime.prepareActions(instance,{expectedVersion:second.version,maxActiveNodes:2});
+  assert.equal(again.actions.length,2);
+  assert.deepEqual(preparations.sort(),['api','design']);
+});
+
+test('plural host preparation respects parent capacity and terminal state',async()=>{
+  const instance=memoryInstance({activated:true});
+  const runtime=createOrchestrator({now:()=>NOW,launchFor,reservationId:id=>`${id}-lease`,client:{launch:async()=>{throw Error('Host preparation cannot launch');}},
+    prepareWorktree:async(node,intent)=>({path:`/tmp/${node.id}`,dev:'1',ino:node.id==='api'?'2':'3',reservationId:intent.reservationId})});
+  const prepared=await runtime.prepareActions(instance,{expectedVersion:0,maxActiveNodes:2,childCapacityByParent:{'manager-plan':1}});
+  assert.equal(prepared.actions.length,1);
+  const stopped=await runtime.cancelGoal(instance,{expectedVersion:prepared.version,authority:createAuthorityEnvelope({actorId:'human-owner',principal:'human',actions:['orchestration.cancel'],ownedPaths:[],providers:[],commands:[]}),nowMs:NOW});
+  assert.deepEqual((await runtime.prepareActions(instance,{expectedVersion:stopped.version,maxActiveNodes:2})).actions,[]);
+});
+
+test('plural host preparation returns no actions when scheduling exhausts budget',async()=>{
+  const instance=memoryInstance({activated:true,limits:{tokens:1000,costUsd:10,retries:2}});
+  const runtime=createOrchestrator({now:()=>NOW,launchFor,client:{launch:async()=>{throw Error('Host only');}}});
+  const first=await runtime.prepareActions(instance,{expectedVersion:0,maxActiveNodes:1});
+  const next=await runtime.prepareActions(instance,{expectedVersion:first.version,maxActiveNodes:2});
+  assert.equal(instance.inspect().terminal,'budget-exhausted');
+  assert.deepEqual(next.actions,[]);
+});
+
+for(const capacity of [{maxActiveNodes:1},{maxActiveNodes:2,childCapacityByParent:{'manager-plan':1}}])test(`plural preparation recovery obeys reduced capacity ${JSON.stringify(capacity)}`,async()=>{
+  const instance=memoryInstance({activated:true});let now=NOW,shouldFail=true;
+  const runtime=createOrchestrator({now:()=>now,launchFor,client:{launch:async()=>{throw Error('Host only');}},prepareWorktree:async(node,intent)=>{
+    if(shouldFail)throw Error('prepare-failed');
+    return {path:`/tmp/${node.id}`,dev:'1',ino:node.id==='api'?'2':'3',reservationId:intent.reservationId};
+  }});
+  await assert.rejects(runtime.prepareActions(instance,{expectedVersion:0,maxActiveNodes:2}),/prepare-failed/);
+  now+=6000;shouldFail=false;
+  const recovered=await runtime.prepareActions(instance,{expectedVersion:instance.inspect().version,...capacity});
+  assert.equal(recovered.actions.length,1);
+});
+
+test('plural host preparation pins capacity maps before awaiting checkout preparation',async()=>{
+  const instance=memoryInstance({activated:true});let now=NOW,shouldFail=true;
+  const capacities={'manager-plan':1};
+  const runtime=createOrchestrator({now:()=>now,launchFor,client:{launch:async()=>{throw Error('Host only');}},prepareWorktree:async(node,intent)=>{
+    if(shouldFail)throw Error('prepare-failed');
+    capacities['manager-plan']=2;
+    return {path:`/tmp/${node.id}`,dev:'1',ino:node.id==='api'?'2':'3',reservationId:intent.reservationId};
+  }});
+  await assert.rejects(runtime.prepareActions(instance,{expectedVersion:0,maxActiveNodes:2}),/prepare-failed/);
+  now+=6000;shouldFail=false;
+  const result=await runtime.prepareActions(instance,{expectedVersion:instance.inspect().version,maxActiveNodes:2,childCapacityByParent:capacities});
+  assert.equal(result.actions.length,1);
+});
+
+test('runtime drain stops existing peers without scheduling more work',async()=>{
+  const instance=memoryInstance({activated:true});let aborted=false;
+  const launches=[];
+  const runtime=createOrchestrator({now:()=>NOW,launchFor,client:{launch:async(contract,{signal})=>{
+    launches.push(contract.nodeId);
+    if(contract.nodeId==='design')await new Promise(resolve=>signal.addEventListener('abort',()=>{aborted=true;resolve();},{once:true}));
+    return {version:1,status:'success',output:{summary:'Done',evidence:[`${contract.nodeId}-commit`,`${contract.nodeId}-test`]},usage:{tokens:1,costUsd:0}};
+  }}});
+  const first=await runtime.advance(instance,{expectedVersion:0,maxActiveNodes:2});
+  assert.equal(first.pending,1);
+  await runtime.drain(instance);
+  assert.equal(aborted,true);
+  assert.deepEqual(launches.sort(),['api','design']);
+});
