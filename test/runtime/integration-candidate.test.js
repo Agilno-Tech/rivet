@@ -182,3 +182,16 @@ test('an ignored parent directory cannot hide undeclared sibling outputs', async
   }}));
   assert.equal(await git(f.target,'rev-parse','HEAD'),f.request.baseSha);
 });
+test('acceptance publication follows durable acceptance and exact replay recovers publication failure', async t => {
+  const f=await fixture(t);await prepareIntegrationCandidate(f.request,f.options);
+  let calls=0;
+  const onAccepted=async record=>{
+    calls++;
+    assert.equal((await inspectIntegrationCandidate(f.request,f.options)).status,'accepted');
+    assert.equal(await git(f.target,'rev-parse','HEAD'),record.manifest.commitSha);
+    if(calls===1)throw new Error('publication interrupted');
+  };
+  await assert.rejects(acceptIntegrationCandidate(f.request,{...f.options,verify:f.verify,onAccepted}),/publication interrupted/);
+  assert.equal((await acceptIntegrationCandidate(f.request,{...f.options,verify:f.verify,onAccepted})).status,'accepted');
+  assert.equal(calls,2);
+});

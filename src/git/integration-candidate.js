@@ -4,7 +4,8 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { assertGitClient } from './client.js';
 import { assertResolvedStatePaths, integrationCandidatePaths, verifyResolvedStatePaths } from '../state/paths.js';
 import { createSnapshotStore } from '../state/snapshot-store.js';
-import { acquireLock } from '../state/lock.js';
+import { acquireLock, LockBusyError } from '../state/lock.js';
+import { setTimeout as delay } from 'node:timers/promises';
 import { assertQualityRun } from '../quality/runner.js';
 import { readDependencyFile } from '../runtime/dependency-directory.js';
 
@@ -233,36 +234,53 @@ export async function inspectIntegrationCandidate(input,options) {
   validateRecord(saved.data,ctx.intent); return freeze(saved.data);
 }
 
+export async function acquireCandidateIntegrationLock(statePaths) {
+  assertResolvedStatePaths(statePaths);
+  const path = join(statePaths.instanceDir,'integration.lock');
+  const deadline = Date.now() + 2_000;
+  while (true) {
+    try { return await acquireLock(path); } catch (error) {
+      if (!(error instanceof LockBusyError) || Date.now() >= deadline) throw error;
+      await delay(5);
+    }
+  }
+}
+
 export async function acceptIntegrationCandidate(input,options) {
   const value=capture(input,options);if(typeof options.verify!=='function')fail('verification required');
+  if(options.onAccepted !== undefined && typeof options.onAccepted !== 'function')fail('invalid publication callback');
   const ctx=await context(value,options);ctx.validateOwner=options.validateOwner;
   const operation = await acquireLock(join(value.statePaths.instanceDir,`candidate-${value.candidateId}.operation.lock`));
   try {
-    let saved=await ctx.store.read(); if(saved?.data.status!=='ready')fail('not ready');
-    await check(value,ctx,saved.data,await acceptanceTip(value,ctx,saved.data));
+    let saved=await ctx.store.read(); if(!['ready','accepted'].includes(saved?.data.status))fail('not ready');
+    const expectedTip = record => record.status === 'accepted' ? record.manifest.commitSha : acceptanceTip(value,ctx,record);
+    await check(value,ctx,saved.data,await expectedTip(saved.data));
     const manifest=freeze(saved.data.manifest);
     // Verification may be long; keep the integration lock free while it runs.
     const proof=await options.verify(manifest); assertQualityRun(proof);
     if(proof.commitSha!==manifest.commitSha || proof.projectRoot!==manifest.path)fail('verification failed');
     const artifacts = await outputArtifacts(ctx,value.verificationOutputs);
     const verified = {...saved.data,verificationArtifacts:artifacts};
-    await check(value,ctx,verified,await acceptanceTip(value,ctx,verified));
+    await check(value,ctx,verified,await expectedTip(verified));
     // Genuine failed gates can still generate authorized ignored files. Pin
     // them before reporting failure so a later retry never adopts foreign data.
     saved=await ctx.store.write(verified,{expectedVersion:saved.version});
     if(proof.status!=='pass')fail('verification failed');
     await verifyResolvedStatePaths(value.statePaths);
-    const lock=await acquireLock(join(value.statePaths.instanceDir,'integration.lock'));
+    const lock=await acquireCandidateIntegrationLock(value.statePaths);
     try {
       const current=await ctx.store.read();
       if(current.version!==saved.version)fail('state changed');
-      const tip = await acceptanceTip(value,ctx,current.data);
+      const tip = await expectedTip(current.data);
       await check(value,ctx,current.data,tip);
       if (tip !== manifest.commitSha) {
         await ctx.client.fastForward(value.projectRoot,{branch:ctx.intent.targetBranch,expectedTip:value.baseSha,newTip:manifest.commitSha});
       }
       const accepted={...current.data,status:'accepted'};
       await ctx.store.write(accepted,{expectedVersion:current.version});
+      // Publication is part of the same cooperating integration transaction. A
+      // crash leaves durable acceptance available for exact, freshly verified replay.
+      await options.onAccepted?.(freeze(accepted));
       return freeze(accepted);
     }finally{await lock.release();}
   }finally{await operation.release();}
