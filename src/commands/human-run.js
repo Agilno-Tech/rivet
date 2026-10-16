@@ -1,3 +1,4 @@
+import { executionForNode } from '../feature/client-profile.js';
 import {taskAllowance,requireManagedAllowance} from '../runtime/task-orchestration.js';
 import { taskState } from '../cli/task-presentation.js';
 import { finishTask } from './task-completion.js';
@@ -51,16 +52,19 @@ function reviewLines(project, task, harness, proposal, details = false) {
     || typeof proposal.proposalDigest !== 'string' || !Number.isSafeInteger(proposal.version)) {
     fail('Rivet returned an invalid proposal.', 'INTERNAL_ERROR');
   }
+  const coordination = plan.nodes.find(node => node.role === 'manager')?.executionSelection;
+  const planning = coordination && !coordination.recommendationOnly ? coordination : null;
+  const planningHarness = planning?.harness ?? plan.client ?? harness.kind;
   const lines = [
     'Review this exact Rivet plan before activation:',
     ...(details ? [`Summary: ${proposal.summary ?? 'Ready for review.'}`] : []),
     `Project: ${project.root}`,
-    `Harness: ${harness.kind} (${harness.version})`,
-    ...(details ? [`Executable: ${harness.executable}`] : []),
+    `Planning harness: ${planningHarness}${planning ? `; model: ${planning.model}; reasoning: ${planning.effort}` : ''}${planningHarness === harness.kind ? ` (${harness.version})` : ' (saved proposal)'}`,
+    ...(details && planningHarness === harness.kind ? [`Planning executable: ${harness.executable}`] : []),
     `Base commit: ${plan.baselineCommit}`,
     ...(plan.branchNaming ? [`Branch: ${plan.branchNaming.pattern.replace('{slug}',`${plan.id}-<run-id>`)} (${plan.branchNaming.workType})`] : []),
     `Providers: ${(plan.providerRefs ?? []).join(', ') || 'none'}`,
-    ...(plan.clientProfile ? [`Client limits: ${JSON.stringify(plan.clientProfile)}`] : []),
+    ...(!planning && plan.clientProfile ? [`Planning client limits: ${JSON.stringify(plan.clientProfile)}`] : []),
     'Request:', task,
     'Acceptance criteria:', ...request.acceptanceCriteria.map((item,index) => `  ${index+1}. ${item}`),
     'Work and scope:',
@@ -76,10 +80,16 @@ function reviewLines(project, task, harness, proposal, details = false) {
     if (node.authorityScopes?.length) lines.push(`    authority: ${node.authorityScopes.join(', ')}`);
     if (node.commandIds?.length) lines.push(`    commands: ${node.commandIds.join(', ')}`);
     if (node.requiredEvidenceTypes?.length) lines.push(`    evidence: ${node.requiredEvidenceTypes.join(', ')}`);
+    const execution = executionForNode(plan, node);
+    const selection = node.executionSelection;
     if (node.role === 'worker') {
-      lines.push(`    executor: ${node.execution?.client ?? plan.client ?? harness.kind}`);
-      const profile = node.execution ? node.execution.clientProfile : plan.clientProfile;
-      if (profile) lines.push(`    executor limits: ${JSON.stringify(profile)}`);
+      lines.push(`    executor: ${execution.client ?? harness.kind}`);
+      if (!execution.executionSelection && execution.clientProfile) lines.push(`    executor limits: ${JSON.stringify(execution.clientProfile)}`);
+    }
+    if (selection) {
+      const label = selection.recommendationOnly ? 'recommended routing (host-owned; not dispatched)' : node.role === 'worker' ? 'execution routing' : 'coordination routing';
+      lines.push(`    ${label}: ${selection.harness}; model: ${selection.model}; reasoning: ${selection.effort}`);
+      lines.push(`    selection reason: ${selection.reason}`);
     }
     if (node.budget) lines.push(details ? `    budget: ${JSON.stringify(node.budget)}` : `    limits: ${Object.entries(node.budget).map(([key,value])=>key==='timeMinutes'?`${value} min`:key==='tokenLimit'?`${value} tokens`:key==='costUsd'?`$${value}`:key==='taskLimit'?`${value} tasks`:`${key}: ${JSON.stringify(value)}`).join('; ')}`);
     if (node.approvalGate) lines.push(`    human gate: ${node.approvalGate}`);
@@ -166,7 +176,7 @@ async function runInteractive(parsed, dependencies, signal) {
     return existing.status === 'awaiting-final-approval' ? EXIT_CODES.SUCCESS : EXIT_CODES.REPOSITORY_CONFLICT;
   }
   for (const kind of new Set(proposal.featurePlan.nodes.filter(node => node.role === 'worker')
-    .map(node => node.execution?.client).filter(Boolean))) {
+    .map(node => executionForNode(proposal.featurePlan, node).client).filter(Boolean))) {
     if (!KINDS.has(kind)) fail('The worker harness is unsupported.', 'PROVIDER_UNAVAILABLE');
     try { await harnesses.select(kind, project.root, { signal }); }
     catch { fail(`The selected worker harness ${kind} is unavailable or incompatible. Install and authenticate it before activation.`, 'PROVIDER_UNAVAILABLE'); }

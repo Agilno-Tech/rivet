@@ -1,3 +1,4 @@
+import { executionForNode } from '../feature/client-profile.js';
 import {taskAllowance,requireManagedAllowance,activateTaskAdmission,taskCapacity} from '../runtime/task-orchestration.js';
 import {findRegistration} from '../runtime/machine-admission.js';
 import {withMachineContext} from '../runtime/machine-admission.js';
@@ -236,9 +237,11 @@ export async function humanTaskCommand(parsed, dependencies) {
     dependencies.output.log(`Project: ${visible(project.root)} (run the next command from this project)`);
     dependencies.output.log(`Task: ${visible(record.workRequest.acceptanceCriteria[0] ?? record.workRequest.title)}`);
     dependencies.output.log(`State: ${taskState(record.status)}${parsed.flags.details ? ` (${visible(record.status)})` : ''}`);
-    if (record.featurePlan.nodes.some(node => node.execution)) {
-      dependencies.output.log(`Planning harness: ${record.featurePlan.client}`);
-      dependencies.output.log(`Worker harnesses: ${[...new Set(record.featurePlan.nodes.filter(node => node.role === 'worker').map(node => node.execution?.client ?? record.featurePlan.client))].join(', ')}`);
+    if (record.featurePlan.nodes.some(node => node.execution || node.executionSelection)) {
+      const coordination = record.featurePlan.nodes.find(node => node.role === 'manager')?.executionSelection;
+      const planning = coordination && !coordination.recommendationOnly ? coordination : null;
+      dependencies.output.log(`Planning harness: ${planning ? `${planning.harness}; model: ${planning.model}; reasoning: ${planning.effort}` : record.featurePlan.client}`);
+      dependencies.output.log(`Worker harnesses: ${[...new Set(record.featurePlan.nodes.filter(node => node.role === 'worker').map(node => executionForNode(record.featurePlan, node).client))].join(', ')}`);
     } else dependencies.output.log(`Harness: ${record.featurePlan.client}`);
     dependencies.output.log(`Next: ${record.status === 'completed' ? 'Task completed. Inspect its recorded evidence and any separate delivery status.' : record.status === 'proposed' && record.featurePlan.client !== 'host' ? `rivet task start --run=${record.runId}` : record.status === 'awaiting-final-approval' && status.deliveryReady ? `rivet task approve --run=${record.runId}` : visible(status.nextAction)}`);
     if (status.governance?.decisions.length) {
@@ -276,10 +279,10 @@ export async function humanTaskCommand(parsed, dependencies) {
     if (typeof dependencies.harnesses?.select !== 'function') fail('Harness discovery is unavailable.', 'MISSING_CONFIGURATION');
     return withTerminalInterruption(async signal => {
       let selected;
-      for (const client of new Set([record.featurePlan.client, ...record.featurePlan.nodes.filter(node => node.role === 'worker').map(node => node.execution?.client ?? record.featurePlan.client)])) {
+      for (const client of new Set(record.featurePlan.nodes.filter(node => node.role === 'worker').map(node => executionForNode(record.featurePlan, node).client))) {
         try {
           const available = await dependencies.harnesses.select(client, project.root, {signal});
-          if (client === record.featurePlan.client) selected = available;
+          if (!selected || client === record.featurePlan.client) selected = available;
         } catch { fail(`The saved harness ${client} is unavailable or incompatible. Restore it before starting.`, 'PROVIDER_UNAVAILABLE'); }
       }
       return activateProposal(project, record.workRequest.description, selected, record, dependencies, signal, {details:parsed.flags.details,allowanceMs});
@@ -310,7 +313,7 @@ export async function humanTaskCommand(parsed, dependencies) {
   if (typeof dependencies.harnesses?.select !== 'function') fail('Harness discovery is unavailable.', 'MISSING_CONFIGURATION');
   return withTerminalInterruption(async signal => {
     const clients = new Set(record.featurePlan.nodes.filter(node => node.role === 'worker')
-      .map(node => node.execution?.client ?? record.featurePlan.client));
+      .map(node => executionForNode(record.featurePlan, node).client));
     for (const client of clients) {
       try { await dependencies.harnesses.select(client, project.root, { signal }); }
       catch { fail(`The saved worker harness ${client} is unavailable or incompatible. Restore it before resuming; Rivet will not switch models.`, 'PROVIDER_UNAVAILABLE'); }

@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import test from 'node:test';
 
+import YAML from 'yaml';
+import { managedPolicy } from '../fixtures/execution-policy.js';
 import { main } from '../../src/cli/main.js';
 import { EXIT_CODES } from '../../src/cli/output.js';
 import { loadProjectConfig } from '../../src/config/load.js';
@@ -349,3 +351,28 @@ test('invalid task allowance is rejected before task selection or state mutation
  assert.equal(await main(['task','resume','--for=0h'],overrides(root,messages)),EXIT_CODES.INVALID_INPUT);
  assert.match(messages.join('\n'),/positive duration/);
 });
+
+for(const command of ['start','resume']) {
+  for(const unavailable of [false,true]) {
+    test(`managed task ${command} checks only effective worker harness (unavailable=${unavailable})`,async t=>{
+      const root=await fixture(t),path=join(root,'.rivet','orchestration.yaml');
+      const config=YAML.parse(await readFile(path,'utf8'));config.executionPolicy=managedPolicy();config.executionPolicy.profiles.review.harness='codex';
+      config.roles.find(role=>role.kind==='worker').harness='claude';
+      await writeFile(path,YAML.stringify(config));
+      const {store,record}=await createRun(root,'managed-selection','claude');
+      if(command==='resume')await store.update({status:'approved',updatedAt:NOW,activation:{approverId:'human',approvedAt:NOW,requestDigest:record.workRequest.digest,proposalDigest:record.proposalDigest},runtimeRefs:[],evidenceRefs:[]},{expectedVersion:record.version});
+      const messages=[],calls=[];
+      const code=await main(['task',command],overrides(root,messages,{
+        terminalIsInteractive:()=>true,
+        harnesses:{async select(kind){calls.push(kind);if(kind!=='codex'||unavailable)throw new Error('missing');return {kind,version:'test'};}},
+        confirmFeatureActivation:async()=>{calls.push('approve');return false;},
+        feature:{async start(){assert.fail('declined');},async watch(){assert.fail('declined');},async resume(){calls.push('resume');return {status:'blocked'};}}
+      }));
+      assert.equal(code,unavailable?EXIT_CODES.PROVIDER_UNAVAILABLE:command==='start'?EXIT_CODES.SUCCESS:EXIT_CODES.FAILED_GATE,messages.join('\n'));
+      assert.deepEqual(calls,unavailable?['codex']:['codex',command==='start'?'approve':'resume']);
+      const status=[];
+      assert.equal(await main(['task','status'],overrides(root,status)),EXIT_CODES.SUCCESS);
+      assert.match(status.join('\n'),/Planning harness: codex; model: sonnet; reasoning: low/);assert.match(status.join('\n'),/Worker harnesses: codex/);
+    });
+  }
+}

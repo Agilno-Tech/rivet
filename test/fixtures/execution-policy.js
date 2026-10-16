@@ -10,4 +10,3 @@ export function managedPolicy() {
     sessions: { maxReplacements: 3, maxActions: 100, maxMinutes: 30, contextThresholdPercent: 80 },
   };
 }
-

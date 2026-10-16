@@ -6,7 +6,7 @@ Managed orchestration coordinates approved tasks on one machine through the norm
 
 Managed orchestration adds approved model/effort routing, bounded session replacement and shared resource admission. Feature nodes within one task remain sequential. Dependency-aware parallel integration, verification batching and automatic worktree cleanup belong to later releases.
 
-Default ceilings are four active tasks, four agent executions, one heavy verification and one dependency installation. These are cooperative limits for participating Rivet processes. They do not measure or control unrelated applications. Project and run limits may lower machine ceilings.
+Default ceilings are four active tasks, four agent executions, one heavy verification and one dependency installation. These are cooperative limits for participating Rivet processes. They do not measure or control unrelated applications. Approved project limits apply across active runs in the same project, while run limits may lower them further. Stricter limits from an active run remain in force until its held work settles; other projects retain their own limits. Task deadlines remain independent.
 
 An agent slot represents an admitted Rivet executor invocation or host action. Provider-internal tool calls are not independent machine measurements. Hosts must use the admission workflow for each action they dispatch.
 

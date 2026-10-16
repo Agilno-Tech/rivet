@@ -82,3 +82,28 @@ test('hidden request and option keys cannot enroll a managed execution',async t=
   await assert.rejects(app.feature.resume(input,options));assert.equal((await app.machine.inspect()).configured,false);
  }
 });
+
+test('automatic enrollment enforces aggregate project resources without a parent registration', async t => {
+ const f=await fixture(t); const other=await fixture(t);
+ for(const resource of ['activeTasks','agentExecutions','heavyVerification','dependencyInstalls']) f.config.executionPolicy.limits[resource]=1;
+ await writeFile(f.path,YAML.stringify(f.config));
+ const record={...f.record,featurePlan:{...f.record.featurePlan,executionPolicy:executionPolicyIdentity(f.config.executionPolicy)}};
+ await f.coordinator.configure({activeTasks:4,agentExecutions:4,heavyVerification:4,dependencyInstalls:4});
+ const first=await activateTaskAdmission(f.coordinator,record,f.root);
+ const second=await activateTaskAdmission(f.coordinator,{...record,runId:'second'},f.root);
+ const separate=await activateTaskAdmission(f.coordinator,other.record,other.root);
+ const firstClaims=[]; const waiting=[];
+ for(const resource of ['activeTasks','agentExecutions','heavyVerification','dependencyInstalls']) {
+  const request={resource,idempotencyKey:resource,generation:1};
+  firstClaims.push(await f.coordinator.request({...request,registrationId:first.id}));
+  waiting.push(await f.coordinator.request({...request,registrationId:second.id}));
+  assert.equal(firstClaims.at(-1).status,'held');
+  assert.equal(waiting.at(-1).status,'queued');
+  assert.equal(waiting.at(-1).reason,`project-${resource}`);
+  assert.equal((await f.coordinator.request({...request,registrationId:separate.id})).status,'held');
+ }
+ assert.equal((await f.coordinator.inspect()).registrations.some(r=>r.runId===null),false);
+ for(const claim of firstClaims.slice(1)) await f.coordinator.release({claimId:claim.id,generation:1,completed:true});
+ await f.coordinator.release({claimId:firstClaims[0].id,generation:1,completed:true});
+ assert.ok((await f.coordinator.inspect()).claims.filter(c=>waiting.some(w=>w.id===c.id)).every(c=>c.status==='held'));
+});

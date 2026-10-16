@@ -67,6 +67,7 @@ function validate(s) {
       fail('registration');
     ids.add(r.id);
     limits(r.limits, true);
+    if (r.projectLimits !== undefined) limits(r.projectLimits, true);
   }
   const claims = new Set();
   for (const c of s.claims) {
@@ -118,6 +119,15 @@ function refresh(s, now) {
     const sameProject = (x) =>
       s.registrations.find((r) => r.id === x.registrationId).projectRoot ===
       r.projectRoot;
+    // Keep every active approval's aggregate ceiling, including expired owners
+    // whose execution has not settled. Historical registrations have no effect.
+    const activeRegistrationIds = new Set(s.claims.filter(x => x.status === 'held').map(x => x.registrationId));
+    const projectCap = Math.min(
+      project?.limits[c.resource] ?? 64,
+      r.projectLimits?.[c.resource] ?? 64,
+      ...s.registrations.filter(x => x.projectRoot === r.projectRoot && activeRegistrationIds.has(x.id))
+        .map(x => x.projectLimits?.[c.resource] ?? 64),
+    );
     const cap = Math.min(
       r.limits[c.resource] ?? 64,
       c.resource === 'agentExecutions' && r.runId !== null
@@ -126,7 +136,7 @@ function refresh(s, now) {
     );
     if (held.length >= s.limits[c.resource]) c.reason = `machine-${c.resource}`;
     else if (
-      held.filter(sameProject).length >= (project?.limits[c.resource] ?? 64)
+      held.filter(sameProject).length >= projectCap
     )
       c.reason = `project-${c.resource}`;
     else if (held.filter((x) => x.registrationId === r.id).length >= cap)
@@ -178,6 +188,7 @@ export function createResourceCoordinator({ root, now = Date.now }) {
     )
       fail('registration');
     const scoped = limits(input.limits ?? {}, true);
+    const projectLimits = input.projectLimits === undefined ? undefined : limits(input.projectLimits, true);
     return transaction(
       (s) => {
         if (s.registrations.length >= 512) fail('registration-limit');
@@ -198,6 +209,11 @@ export function createResourceCoordinator({ root, now = Date.now }) {
           existing.deadlineMs = Math.min(existing.deadlineMs, input.deadlineMs);
           for (const [k, v] of Object.entries(scoped))
             existing.limits[k] = Math.min(existing.limits[k] ?? 64, v);
+          if (projectLimits !== undefined) {
+            existing.projectLimits ??= {};
+            for (const [k, v] of Object.entries(projectLimits))
+              existing.projectLimits[k] = Math.min(existing.projectLimits[k] ?? 64, v);
+          }
           return existing;
         }
         const r = {
@@ -209,6 +225,7 @@ export function createResourceCoordinator({ root, now = Date.now }) {
           },
           runId,
           limits: scoped,
+          ...(projectLimits === undefined ? {} : { projectLimits }),
           deadlineMs: input.deadlineMs,
           paused: false,
           createdAtMs: now(),

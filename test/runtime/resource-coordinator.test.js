@@ -353,3 +353,53 @@ test('no-execution proof is bound to one dispatched attempt and rejects fabricat
   await assert.rejects(withExecutionProof('possible-child',()=>{observeExecutionAttempt()();throw new Error('spawn-failed');},()=>{reconciled=true;}));
   assert.equal(reconciled,false);
 });
+
+test('project limits stay pinned to active approvals across restart and expired ownership', async () => {
+ const {root}=await fixture(); let clock=Date.now(); const machine=join(root,'machine');
+ let c=createResourceCoordinator({root:machine,now:()=>clock});
+ const first=await c.register({projectRoot:root,runId:'strict',deadlineMs:clock+1000,projectLimits:{activeTasks:1,agentExecutions:1}});
+ const task=await c.request({registrationId:first.id,resource:'activeTasks',idempotencyKey:'task',generation:1});
+ const updated=await c.register({projectRoot:root,runId:'strict',deadlineMs:clock+5000,projectLimits:{activeTasks:4,agentExecutions:4}});
+ assert.equal(updated.projectLimits.activeTasks,1);
+ clock+=2000;
+ c=createResourceCoordinator({root:machine,now:()=>clock});
+ const next=await c.register({projectRoot:root,runId:'wide',deadlineMs:clock+10000,projectLimits:{activeTasks:4,agentExecutions:4}});
+ const pending=await c.request({registrationId:next.id,resource:'activeTasks',idempotencyKey:'task',generation:1});
+ assert.equal(pending.status,'queued'); assert.equal(pending.reason,'project-activeTasks');
+ const agent=await c.request({registrationId:next.id,resource:'agentExecutions',idempotencyKey:'one',generation:1});
+ assert.equal(agent.status,'held');
+ const secondAgent=await c.request({registrationId:next.id,resource:'agentExecutions',idempotencyKey:'two',generation:1});
+ assert.equal(secondAgent.status,'queued'); assert.equal(secondAgent.reason,'project-agentExecutions');
+ await c.release({claimId:task.id,generation:1,completed:true});
+ const state=await c.inspect();
+ assert.equal(state.claims.find(x=>x.id===pending.id).status,'held');
+ assert.equal(state.claims.find(x=>x.id===secondAgent.id).status,'held');
+ assert.equal(state.registrations.find(r=>r.id===next.id).deadlineMs,clock+10000);
+});
+
+test('project limits reject invalid values and retain legacy registration semantics', async () => {
+ const {root,coordinator:c}=await fixture();
+ for(const projectLimits of [{activeTasks:0},{agentExecutions:65},{unknown:1}])
+  await assert.rejects(c.register({projectRoot:root,runId:'bad',deadlineMs:deadline(),projectLimits}),/limits/);
+ const legacy=await c.register({projectRoot:root,runId:'legacy',deadlineMs:deadline(),limits:{activeTasks:1}});
+ assert.equal(legacy.projectLimits,undefined);
+ const pinned=await c.register({projectRoot:root,runId:'pinned',deadlineMs:deadline(),projectLimits:{activeTasks:2}});
+ await c.register({projectRoot:root,runId:'pinned',deadlineMs:deadline(),projectLimits:{activeTasks:1}});
+ const retained=await c.register({projectRoot:root,runId:'pinned',deadlineMs:deadline()});
+ assert.equal(retained.id,pinned.id); assert.equal(retained.projectLimits.activeTasks,1);
+});
+
+test('project admission preserves parent ceilings and per-task worker scope without queued-policy pollution', async () => {
+ const {root,coordinator:c}=await fixture();
+ await c.register({projectRoot:root,deadlineMs:deadline(),limits:{agentExecutions:2}});
+ const unused=await c.register({projectRoot:root,runId:'queued-only',deadlineMs:deadline(),projectLimits:{agentExecutions:1}});
+ await c.pause(unused.id);
+ assert.equal((await c.request({registrationId:unused.id,resource:'agentExecutions',idempotencyKey:'waiting',generation:1})).status,'queued');
+ const claims=[];
+ for(let i=0;i<3;i++) {
+  const r=await c.register({projectRoot:root,runId:`worker-${i}`,deadlineMs:deadline(),limits:{workersPerTask:1},projectLimits:{agentExecutions:4,workersPerTask:1}});
+  claims.push(await c.request({registrationId:r.id,resource:'agentExecutions',idempotencyKey:'first',generation:1}));
+ }
+ assert.deepEqual(claims.map(c=>c.status),['held','held','queued']);
+ assert.equal(claims[2].reason,'project-agentExecutions');
+});

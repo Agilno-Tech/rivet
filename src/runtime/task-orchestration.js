@@ -31,7 +31,7 @@ export async function activateTaskAdmission(coordinator, record, project, { allo
   if (deadlineMs <= Date.now()) throw new CliError('Task execution allowance expired. Review a new task; resume cannot extend its deadline.', 'REPOSITORY_CONFLICT');
   const limits = { ...policy.limits };
   for (const [key, value] of Object.entries(parent?.limits ?? {})) limits[key] = Math.min(limits[key] ?? 64, value);
-  const registration = await coordinator.register({ projectRoot: project, runId: record.runId, deadlineMs, limits });
+  const registration = await coordinator.register({ projectRoot: project, runId: record.runId, deadlineMs, limits, projectLimits: policy.limits });
   if (resume && registration.paused) return coordinator.resume(registration.id);
   return registration;
 }

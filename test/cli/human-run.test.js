@@ -264,3 +264,36 @@ test('compact plan preserves scope, checks and limits while details exposes grap
   assert.equal(await main(['run','Add a greeting module','--details'],s.overrides),0);
   assert.match(s.messages.join('\n'),/internal-worker-node/);
 });
+
+for (const details of [false, true]) {
+  test(`managed proposal shows effective worker and coordination routing (details=${details})`, async t => {
+    const {root}=await fixture(t); const s=services(root,{approve:false});
+    s.proposal.featurePlan.client='codex';
+    const worker=s.proposal.featurePlan.nodes[0];
+    worker.execution={client:'claude',clientProfile:{model:'legacy-sonnet'}};
+    worker.executionSelection={harness:'codex',model:'implementation-model',effort:'high',reason:'Approved implementation route.',recommendationOnly:false};
+    s.proposal.featurePlan.nodes.push({id:'management',role:'manager',objective:'Coordinate',executionSelection:{harness:'claude',model:'coordination-model',effort:'high',reason:'Approved coordination route.',recommendationOnly:false}});
+    assert.equal(await main(['run','Add greeting',...(details?['--details']:[])],s.overrides),EXIT_CODES.SUCCESS);
+    const shown=s.messages.join('\n');
+    assert.match(shown,/Planning harness: claude; model: coordination-model; reasoning: high/);
+    assert.match(shown,/executor: codex/); assert.match(shown,/model: implementation-model; reasoning: high/);
+    assert.match(shown,/coordination routing: claude; model: coordination-model; reasoning: high/);
+    assert.match(shown,/Approved implementation route/);assert.match(shown,/Approved coordination route/);
+    assert.doesNotMatch(shown,/legacy-sonnet|executor: claude/);
+    assert.deepEqual(s.calls.filter(call=>call[0]==='select').map(call=>call[1]),['codex','codex']);
+  });
+}
+
+test('managed run checks selected worker before approval and ignores unused legacy override',async t=>{
+  const {root}=await fixture(t);
+  for(const unavailable of [false,true]){
+    const s=services(root);s.proposal.featurePlan.client='codex';
+    s.proposal.featurePlan.nodes[0].execution={client:'claude'};
+    s.proposal.featurePlan.nodes[0].executionSelection={harness:'codex',model:'worker-model',effort:'high',reason:'Approved route.',recommendationOnly:false};
+    let selects=0,approved=false;
+    s.overrides.harnesses.select=async kind=>{assert.equal(kind,'codex');if(++selects>1&&unavailable)throw new Error('missing');return {kind,version:'test'};};
+    s.overrides.confirmFeatureActivation=async()=>{approved=true;return false;};
+    assert.equal(await main(['run','Add greeting'],s.overrides),unavailable?EXIT_CODES.PROVIDER_UNAVAILABLE:EXIT_CODES.SUCCESS,s.messages.join('\n'));
+    assert.equal(approved,!unavailable);assert.equal(s.calls.some(call=>call[0]==='start'),false);
+  }
+});
