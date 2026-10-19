@@ -1,8 +1,8 @@
 import { currentMachineContext, withMachineContext } from '../runtime/machine-admission.js';
 
-function applicableRegistrations(state,projectRoot,runIds) {
-  return state.registrations.filter(registration=>registration.projectRoot===projectRoot
-    &&(registration.runId===null||runIds.has(registration.runId)));
+async function applicableRegistrations(coordinator,projectRoot,runIds) {
+  const registrations=await Promise.all([null,...runIds].map(runId=>coordinator.getRegistration({projectRoot,runId})));
+  return registrations.filter(Boolean);
 }
 function assertOpen(registrations) {
   if(registrations.some(registration=>registration.paused||registration.cancelled||Date.now()>=registration.deadlineMs))
@@ -12,8 +12,7 @@ export async function inspectBatchReadinessAdmission(projectRoot,runId,options) 
   const coordinator=options.coordinator??currentMachineContext()?.coordinator;
   if(!coordinator)return;
   // Listing is observational: ordinary inspect refreshes queue admission.
-  const state=await coordinator.inspectReadOnly();
-  assertOpen(applicableRegistrations(state,projectRoot,new Set([runId])));
+  assertOpen(await applicableRegistrations(coordinator,projectRoot,new Set([runId])));
 }
 
 // A combined check consumes one command slot, but every contributing task must
@@ -22,12 +21,12 @@ export async function withBatchAdmission(projectRoot, members, options, operatio
   const coordinator = options.coordinator ?? currentMachineContext()?.coordinator;
   if (!coordinator) return operation(options);
   const runIds = new Set(members.map(member => member.runId));
-  const applicable = state => applicableRegistrations(state,projectRoot,runIds);
-  const initial = applicable(await coordinator.inspect());
+  const applicable = () => applicableRegistrations(coordinator,projectRoot,runIds);
+  const initial = await applicable();
   const pinned = new Set(initial.map(registration => registration.id));
   const validateAdmission = async () => {
     options.signal?.throwIfAborted();
-    const current = applicable(await coordinator.inspect());
+    const current = await applicable();
     if ([...pinned].some(id => !current.some(registration => registration.id === id))) {
       throw new Error('Batch member admission identity changed');
     }

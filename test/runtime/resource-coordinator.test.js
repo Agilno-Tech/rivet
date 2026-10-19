@@ -444,3 +444,30 @@ test('operation retirement rejects foreign owners and never deletes queued or un
  assert.equal(await c.retireOperation({registrationId:operation.id,operationOwner:'owner'}),false);
  assert.deepEqual(await c.inspect(),before);
 });
+
+test('settled ordinary registrations do not exhaust machine admission', async () => {
+  const { root, coordinator: c } = await fixture();
+  for (let i = 0; i < 514; i++) {
+    const r = await c.register({ projectRoot: root, runId: `history-${i}`, deadlineMs: Date.now() + 3600000 });
+    await c.cancelRegistration(r.id);
+  }
+  const r = await c.register({ projectRoot: root, runId: 'after-history', deadlineMs: Date.now() + 3600000 });
+  assert.equal((await c.request({registrationId:r.id, resource:'activeTasks', idempotencyKey:'task', generation:1})).status,'held');
+});
+
+test('settled claim history stays bounded and exact retries survive restart', async () => {
+  const { root, coordinator: c } = await fixture();
+  const r = await c.register({projectRoot:root,runId:'many-claims',deadlineMs:Date.now()+3600000});
+  let first;
+  for (let i=0;i<4098;i++) {
+    const claim = await c.request({registrationId:r.id,resource:'agentExecutions',idempotencyKey:`work-${i}`,generation:1});
+    first ??= claim;
+    await c.release({claimId:claim.id,generation:1,completed:true});
+  }
+  const restarted=createResourceCoordinator({root:join(root,'machine')});
+  const retry=await restarted.request({registrationId:r.id,resource:'agentExecutions',idempotencyKey:'work-0',generation:1});
+  assert.equal(retry.id,first.id);
+  assert.equal(retry.status,'released');
+  assert.ok((await restarted.inspectReadOnly()).claims.length<4096);
+  assert.equal((await restarted.release({claimId:first.id,generation:1,completed:true})).id,first.id);
+});

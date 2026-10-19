@@ -38,7 +38,7 @@ export async function activateTaskAdmission(coordinator, record, project, { allo
 }
 export async function taskCapacity(coordinator, project, runId) {
   const state = await coordinator.inspect();
-  const registration = state.registrations.find(r => r.projectRoot === project && r.runId === runId);
+  const registration = await findRegistration(coordinator, project, runId);
   if (!registration) return null;
   const claims = state.claims.filter(c => c.registrationId === registration.id);
   return { paused: registration.paused, deadlineMs: registration.deadlineMs,

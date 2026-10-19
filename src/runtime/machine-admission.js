@@ -12,10 +12,7 @@ function error(reason) {
   return e;
 }
 export async function findRegistration(coordinator, project, runId) {
-  const state = await coordinator.inspect();
-  return state.registrations.find(
-    (r) => r.projectRoot === project && r.runId === (runId ?? null),
-  );
+  return coordinator.getRegistration({ projectRoot: project, runId: runId ?? null });
 }
 export async function withMachineContext(
   coordinator,
@@ -89,7 +86,7 @@ export async function admitted(resource, key, options, operation) {
       c.generation === generation,
   );
   const pending = prior.find((c) => ['queued', 'held'].includes(c.status));
-  const operationKey = pending?.idempotencyKey ?? `${key}:${prior.length + 1}`;
+  const operationKey = pending?.idempotencyKey ?? `${key}:${randomUUID()}`;
   const claim = await coordinator.request({
     registrationId: registration.id,
     resource,
@@ -112,9 +109,9 @@ export async function admitted(resource, key, options, operation) {
       });
       current = (await coordinator.inspect()).claims.find(
         (c) => c.id === claim.id,
-      );
+      ) ?? await coordinator.getClaim({ claimId: claim.id });
     }
-    if (current.status !== 'held')
+    if (current?.status !== 'held')
       throw error('operation already consumed; inspect its saved outcome');
     if (signal?.aborted) throw error('cancelled');
     await options?.beforeDispatch?.();
@@ -145,9 +142,7 @@ export async function admitted(resource, key, options, operation) {
       dispatchId,
     }));
   } finally {
-    const saved = (await coordinator.inspect()).claims.find(
-      (c) => c.id === claim.id,
-    );
+    const saved = await coordinator.getClaim({ claimId: claim.id });
     if (
       (saved?.status === 'queued' && !selected.nonblocking) ||
       (saved?.status === 'held' && !saved.dispatched)
@@ -186,9 +181,9 @@ export async function taskAdmission(operation) {
       await delay(25, undefined, { signal });
       current = (await coordinator.inspect()).claims.find(
         (c) => c.id === claim.id,
-      );
+      ) ?? await coordinator.getClaim({ claimId: claim.id });
     }
-    if (current.status !== 'held') throw error('task admission cancelled');
+    if (current?.status !== 'held') throw error('task admission cancelled');
     signal?.throwIfAborted();
     return await operation();
   } finally {

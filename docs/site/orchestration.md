@@ -111,7 +111,7 @@ rivet orchestrate limits --limits-json='{"activeTasks":4,"agentExecutions":4,"he
 
 These commands complement task status. Approved policy limits may lower machine ceilings. Inspect outstanding work before changing ceilings. Expiry and parent-process death do not prove child processes stopped, so an uncertain owner keeps its capacity until reconciled.
 
-The private coordinator lives at `~/.rivet-machine`. `RIVET_MACHINE_STATE_ROOT` selects a different private root, primarily for isolated environments. Participating processes must share the same root. Read-only inspection before the first managed task does not create coordinator state. Registrations and claim identities are implementation details; users operate on projects and tasks.
+The private coordinator lives at `~/.rivet-machine`. `RIVET_MACHINE_STATE_ROOT` selects a different private root, primarily for isolated environments. Participating processes must share the same root. Read-only inspection before the first managed task does not create coordinator state. Registrations and claim identities are implementation details; users operate on projects and tasks. Settled task history moves out of the active machine snapshot automatically. Task lookups retain their original deadlines, cancellation state and execution identities; compaction does not restart a task or release an uncertain owner. Machine diagnostics show active and recent records rather than an unlimited task history.
 
 ## Continue a task in a fresh session
 

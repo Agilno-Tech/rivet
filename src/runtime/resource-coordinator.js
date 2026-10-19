@@ -1,7 +1,7 @@
 import { validExecutionProof } from '../clients/execution-proof.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { realpath, lstat } from 'node:fs/promises';
-import { resolveMachinePaths, machineTransaction, readMachineSnapshot } from './machine-paths.js';
+import { resolveMachinePaths, machineTransaction, readMachineSnapshot, readMachineArchive, writeMachineArchive } from './machine-paths.js';
 const RESOURCES = [
   'activeTasks',
   'agentExecutions',
@@ -51,7 +51,8 @@ function validate(s) {
     s.registrations.length > 512 ||
     !Array.isArray(s.claims) ||
     s.claims.length > 4096 ||
-    !Number.isSafeInteger(s.sequence)
+    !Number.isSafeInteger(s.sequence) ||
+    (s.revision !== undefined && (!Number.isSafeInteger(s.revision) || s.revision < 0))
   )
     fail('state');
   limits(s.limits);
@@ -149,17 +150,104 @@ function refresh(s, now) {
     }
   }
 }
+const registrationId = (projectRoot, runId) => `registration-${hash(`${projectRoot}:${runId}`)}`;
+const archiveKey = (...parts) => createHash('sha256').update(JSON.stringify(parts)).digest('hex');
+const registrationKey = (id) => archiveKey('registration', id);
+const claimKey = (id) => archiveKey('claim', id);
+const requestKey = (c) => archiveKey('request', c.registrationId, c.resource, c.idempotencyKey, c.generation);
+const settled = (c) => ['released', 'cancelled'].includes(c.status);
 export function createResourceCoordinator({ root, now = Date.now }) {
   let pinnedPaths;
+  async function readArchive(s, paths, key) {
+    return readMachineArchive(paths, key);
+  }
+  async function archive(s, paths, key, record) {
+    // Only called before the operation, with records from the committed snapshot.
+    // A failed operation can therefore never publish an uncommitted mutation.
+    await writeMachineArchive(paths, key, record);
+  }
+  async function loadRegistration(s, paths, idValue, hydrate = false) {
+    let r = s?.registrations.find(r => r.id === idValue);
+    if (!r && paths) {
+      r = await readArchive(s, paths, registrationKey(idValue));
+      if (r) {
+        validate({version:1,limits:DEFAULT_MACHINE_LIMITS,sequence:0,registrations:[r],claims:[]});
+        if (r.id !== idValue || r.runId === null || r.operationOwner !== undefined) fail('archive-registration');
+        if (hydrate) {
+          if (s.registrations.length >= 512) fail('registration-limit');
+          s.registrations.push(r);
+        }
+      }
+    }
+    return r ?? undefined;
+  }
+  async function loadClaim(s, paths, input, hydrate = false) {
+    const matches = c => input.claimId ? c.id === input.claimId :
+      c.registrationId === input.registrationId && c.resource === input.resource &&
+      c.idempotencyKey === input.idempotencyKey && c.generation === input.generation;
+    let c = s?.claims.find(matches);
+    if (!c && paths) {
+      c = await readArchive(s, paths, input.claimId ? claimKey(input.claimId) : requestKey(input));
+      if (c) {
+        const r = await loadRegistration(s, paths, c.registrationId, hydrate);
+        if (!r || !matches(c) || !settled(c)) fail('archive-claim');
+        validate({version:1,limits:DEFAULT_MACHINE_LIMITS,sequence:0,registrations:[r],claims:[c]});
+        if (hydrate) {
+          if (s.claims.length >= 4096) fail('claim-limit');
+          s.claims.push(c);
+        }
+      }
+    }
+    return c ?? undefined;
+  }
+  async function compact(s, paths) {
+    const large = Buffer.byteLength(JSON.stringify(s)) >= 1024 * 1024;
+    if (!large && s.registrations.length < 256 && s.claims.length < 1024) return;
+    const hadClaims = new Set(s.claims.map(c => c.registrationId));
+    const live = new Set(s.claims.filter(c => !settled(c)).map(c => c.registrationId));
+    const removable = new Set(s.registrations.filter(r => r.runId !== null &&
+      r.operationOwner === undefined && !live.has(r.id) &&
+      (r.cancelled || now() >= r.deadlineMs || hadClaims.has(r.id))).slice(0, 4).map(r => r.id));
+    const archivedClaims = new Set();
+    const remainingClaims = new Map();
+    for (const c of s.claims) remainingClaims.set(c.registrationId, (remainingClaims.get(c.registrationId) ?? 0) + 1);
+    for (const c of s.claims) {
+      if (archivedClaims.size >= 8) break;
+      const r = s.registrations.find(r => r.id === c.registrationId);
+      if (!settled(c) || r.operationOwner !== undefined ||
+          (!large && s.claims.length < 1024 && !removable.has(r.id))) continue;
+      // Preserve settlement evidence until this ordinary registration is itself
+      // selected for archival. Otherwise its last claim could disappear outside
+      // the bounded registration batch and strand it until its deadline.
+      if (r.runId !== null && !live.has(r.id) && !removable.has(r.id) && remainingClaims.get(r.id) === 1) continue;
+      await archive(s, paths, claimKey(c.id), c);
+      await archive(s, paths, requestKey(c), c);
+      archivedClaims.add(c.id);
+      remainingClaims.set(r.id, remainingClaims.get(r.id) - 1);
+    }
+    for (const c of s.claims) {
+      if (!archivedClaims.has(c.id)) removable.delete(c.registrationId);
+    }
+    for (const r of s.registrations) {
+      if (removable.has(r.id)) await archive(s, paths, registrationKey(r.id), r);
+    }
+    // All archive files and directory entries are durable before snapshot removal.
+    // Until that atomic snapshot write succeeds, its records remain authoritative.
+    s.claims = s.claims.filter(c => !archivedClaims.has(c.id));
+    s.registrations = s.registrations.filter(r => !removable.has(r.id));
+  }
   async function transaction(fn, { create = false } = {}) {
     const paths = pinnedPaths ?? (await resolveMachinePaths(root, { create }));
     if (paths) pinnedPaths = paths;
     if (!paths) return fn(null, false);
-    return machineTransaction(paths, async (raw) => {
+    const retryMaintenance = Symbol('retry-maintenance');
+    while (true) {
+      const result = await machineTransaction(paths, async (raw) => {
       if (!raw && !create)
         return {
           value: await fn(null, false),
         };
+      const priorSerialized = JSON.stringify(raw);
       const state = raw
         ? validate(raw)
         : {
@@ -171,12 +259,30 @@ export function createResourceCoordinator({ root, now = Date.now }) {
             claims: [],
             sequence: 0,
           };
-      const value = await fn(state, true);
-      return {
-        state,
-        value: structuredClone(value),
-      };
-    });
+      if (state.registrations.length) state.hasRegistrations = true;
+      // Archive only committed input, never state mutated by this operation.
+      const beforeCount = state.registrations.length + state.claims.length;
+      await compact(state, paths);
+      const progressed = state.registrations.length + state.claims.length < beforeCount;
+      const maintenance = progressed ? structuredClone(state) : null;
+      let value;
+      try { value = await fn(state, true, paths); }
+      catch (error) {
+        if (!maintenance || error.code !== 'ERR_MACHINE_ADMISSION' ||
+            !/\((registration|claim)-limit\)/.test(error.message)) throw error;
+        // A registration can have more settled claims than one bounded pass.
+        // Commit only safe housekeeping, release the lock, and continue; none of
+        // the rejected operation's mutations are included in this checkpoint.
+        maintenance.revision = (maintenance.revision ?? 0) + 1;
+        validate(maintenance);
+        return {state:maintenance,value:retryMaintenance};
+      }
+      if (JSON.stringify(state) !== priorSerialized) state.revision = (state.revision ?? 0) + 1;
+      validate(state);
+      return {state,value:structuredClone(value)};
+      });
+      if (result !== retryMaintenance) return result;
+    }
   }
   async function register(input) {
     const projectRoot = await realpath(input.projectRoot);
@@ -192,21 +298,19 @@ export function createResourceCoordinator({ root, now = Date.now }) {
     const scoped = limits(input.limits ?? {}, true);
     const projectLimits = input.projectLimits === undefined ? undefined : limits(input.projectLimits, true);
     return transaction(
-      (s) => {
-        if (s.registrations.length >= 512) fail('registration-limit');
+      async (s, configured, paths) => {
         if (input.machineLimits) {
           const ceiling = limits(input.machineLimits);
           if (
-            s.registrations.length &&
+            (s.hasRegistrations || s.registrations.length) &&
             RESOURCES.some((k) => ceiling[k] !== s.limits[k])
           )
             fail('explicit-limits-required');
           s.limits = ceiling;
         }
         const runId = input.runId ?? null;
-        const existing = s.registrations.find(
-          (r) => r.projectRoot === projectRoot && r.runId === runId,
-        );
+        s.hasRegistrations = true;
+        const existing = await loadRegistration(s, paths, registrationId(projectRoot, runId), true);
         if (existing) {
           if (existing.operationOwner !== input.operationOwner) fail('operation-owner');
           existing.deadlineMs = Math.min(existing.deadlineMs, input.deadlineMs);
@@ -219,8 +323,9 @@ export function createResourceCoordinator({ root, now = Date.now }) {
           }
           return existing;
         }
+        if (s.registrations.length >= 512) fail('registration-limit');
         const r = {
-          id: `registration-${hash(`${projectRoot}:${runId}`)}`,
+          id: registrationId(projectRoot, runId),
           projectRoot,
           rootIdentity: {
             dev: stat.dev,
@@ -251,11 +356,9 @@ export function createResourceCoordinator({ root, now = Date.now }) {
       input.generation < 1
     )
       fail('request');
-    return transaction(async (s) => {
+    return transaction(async (s, configured, paths) => {
       if (!s) fail('unconfigured');
-      const registered = s.registrations.find(
-        (x) => x.id === input.registrationId,
-      );
+      const registered = await loadRegistration(s, paths, input.registrationId, true);
       if (!registered) fail('unregistered');
       if (registered.cancelled) fail('cancelled');
       const metadata = await lstat(registered.projectRoot);
@@ -275,13 +378,7 @@ export function createResourceCoordinator({ root, now = Date.now }) {
                 x.resource === 'activeTasks' &&
                 ['queued', 'held'].includes(x.status),
             )
-          : s.claims.find(
-              (x) =>
-                x.registrationId === input.registrationId &&
-                x.resource === input.resource &&
-                x.idempotencyKey === input.idempotencyKey &&
-                x.generation === input.generation,
-            );
+          : await loadClaim(s, paths, input, true);
       if (c && input.retryUndispatched === true &&
           ['released', 'cancelled'].includes(c.status) &&
           !c.dispatched && c.execution === null) {
@@ -314,9 +411,9 @@ export function createResourceCoordinator({ root, now = Date.now }) {
     });
   }
   async function mutateClaim(input, fn) {
-    return transaction((s) => {
+    return transaction(async (s, configured, paths) => {
       if (!s) fail('unconfigured');
-      const c = s.claims.find((x) => x.id === input.claimId);
+      const c = await loadClaim(s, paths, input, true);
       if (!c || c.generation !== input.generation) fail('generation');
       fn(c, s);
       refresh(s, now());
@@ -358,10 +455,8 @@ export function createResourceCoordinator({ root, now = Date.now }) {
     });
   }
   async function cancelRegistration(registrationId) {
-    return transaction((s) => {
-      const registration = s?.registrations.find(
-        (r) => r.id === registrationId,
-      );
+    return transaction(async (s, configured, paths) => {
+      const registration = await loadRegistration(s, paths, registrationId, true);
       if (!registration) fail('unregistered');
       registration.cancelled = true;
       registration.paused = true;
@@ -512,6 +607,40 @@ export function createResourceCoordinator({ root, now = Date.now }) {
       return true;
     });
   }
+  async function lookup(input, claim = false) {
+    const paths = pinnedPaths ?? await resolveMachinePaths(root);
+    if (!paths) return undefined;
+    // Snapshot records take precedence. Archives contain only committed input;
+    // retry if a newer snapshot was committed while reading the archive.
+    let readError;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let raw;
+      let after;
+      let value;
+      let lookupError;
+      try {
+        raw = await readMachineSnapshot(paths);
+        const s = raw ? validate(raw) : null;
+        if (!s) return undefined;
+        try {
+          value = claim ? await loadClaim(s, paths, input) :
+            await loadRegistration(s, paths, input.registrationId ?? registrationId(input.projectRoot, input.runId ?? null));
+        } catch (error) { lookupError = error; }
+        after = await readMachineSnapshot(paths);
+      } catch (error) {
+        // Atomic rename during a read can invalidate its inode check. A stable
+        // unsafe path still fails closed after these bounded read-only retries.
+        readError = error;
+        continue;
+      }
+      if (JSON.stringify(raw) !== JSON.stringify(after)) continue;
+      if (lookupError) throw lookupError;
+      return value ? structuredClone(value) : undefined;
+    }
+    if (readError) throw readError;
+    fail('read-conflict');
+  }
+
   async function inspectReadOnly() {
     const paths=pinnedPaths??await resolveMachinePaths(root);
     const raw=paths?await readMachineSnapshot(paths):null;
@@ -533,8 +662,8 @@ export function createResourceCoordinator({ root, now = Date.now }) {
     });
   }
   async function pause(idValue, paused = true) {
-    return transaction((s) => {
-      const r = s?.registrations.find((x) => x.id === idValue);
+    return transaction(async (s, configured, paths) => {
+      const r = await loadRegistration(s, paths, idValue, true);
       if (!r) fail('unregistered');
       if (r.cancelled && !paused) fail('cancelled');
       r.paused = paused;
@@ -553,8 +682,8 @@ export function createResourceCoordinator({ root, now = Date.now }) {
   async function renew(idValue, deadlineMs) {
     if (!Number.isSafeInteger(deadlineMs) || deadlineMs <= now())
       fail('deadline');
-    return transaction((s) => {
-      const r = s?.registrations.find((x) => x.id === idValue);
+    return transaction(async (s, configured, paths) => {
+      const r = await loadRegistration(s, paths, idValue, true);
       if (
         !r ||
         r.runId !== null ||
@@ -575,6 +704,8 @@ export function createResourceCoordinator({ root, now = Date.now }) {
   }
   return Object.freeze({
     register,
+    getRegistration: input => lookup(input),
+    getClaim: input => lookup(input, true),
     request,
     dispatch,
     claimTask,

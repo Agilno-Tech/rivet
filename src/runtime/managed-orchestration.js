@@ -32,7 +32,7 @@ export function createManagedOrchestration({
   async function status(id) {
     const state = await coordinator.inspect();
     if (!id) return state;
-    const registration = state.registrations.find((r) => r.id === id);
+    const registration = await coordinator.getRegistration({ registrationId: id });
     if (!registration) throw new Error('Unknown orchestration registration.');
     let task = null;
     if (registration.runId)

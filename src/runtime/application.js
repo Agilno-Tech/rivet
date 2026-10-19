@@ -356,7 +356,7 @@ export function createRivetApplication(input = {}) {
           : async (request, options = {}) => {
               if(method==='cancel'){
                 const result=await rawWorkflow.cancel(request,options);
-                const registration=(await managed.coordinator.inspect()).registrations.find(r=>r.projectRoot===request.project&&r.runId===request.runId);
+                const registration=await findRegistration(managed.coordinator,request.project,request.runId);
                 if(registration&&result.status==='cancelled')await managed.coordinator.cancelRegistration(registration.id);
                 return result;
               }
@@ -458,7 +458,7 @@ export function createRivetApplication(input = {}) {
                   throw error;
                 } finally {
                   if (
-                    failed || Date.now()>=(await managed.coordinator.inspect()).registrations.find(r=>r.projectRoot===args[0].project&&r.runId===args[0].runId)?.deadlineMs ||
+                    failed || Date.now()>=(await findRegistration(managed.coordinator,args[0].project,args[0].runId))?.deadlineMs ||
                     [
                       'blocked',
                       'awaiting-final-approval',
@@ -466,11 +466,7 @@ export function createRivetApplication(input = {}) {
                     ].includes(result?.status)
                   ) {
                     const state = await managed.coordinator.inspect();
-                    const registration = state.registrations.find(
-                      (r) =>
-                        r.projectRoot === args[0].project &&
-                        r.runId === args[0].runId,
-                    );
+                    const registration = await findRegistration(managed.coordinator,args[0].project,args[0].runId);
                     for (const claim of state.claims.filter(
                       (c) =>
                         c.registrationId === registration?.id &&

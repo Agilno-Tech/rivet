@@ -1389,7 +1389,7 @@ test('enrolled host verification queues without recording failed checks then res
  await machine.release({claimId:held.id,generation:1,completed:true});assert.equal((await verify()).status,'awaiting-final-approval');
 });
 
-test('application permits stopped host reconciliation after deadline without new admission',async t=>{
+for (const archive of [false,true]) test(`application permits stopped host reconciliation after deadline without new admission${archive?' with archived receipt':''}`,async t=>{
  const {createRivetApplication}=await import('../../src/runtime/application.js');
  const {sessionTelemetry}=await import('../../src/clients/session-capabilities.js');
  const {root,approved}=await fixture(t,{managed:true,now:new Date().toISOString()});
@@ -1401,6 +1401,16 @@ test('application permits stopped host reconciliation after deadline without new
  const observed=await app.work.handoff({...base,expectedRuntimeVersion:next.runtimeVersion,input:{operation:'observe',receipt:{...identity,actions:1,telemetry:sessionTelemetry('host')}}});
  await app.machine.register({projectRoot:root,runId:approved.runId,deadlineMs:Date.now()+30});await new Promise(resolve=>setTimeout(resolve,60));
  const released=await app.work.handoff({...base,expectedRuntimeVersion:observed.runtimeVersion,input:{operation:'release',receipt:{...identity,observedAtMs:Date.now(),status:'stopped'}}});assert.equal(released.status,'resource-released');
+ if(archive) {
+  for(let i=0;i<256;i++) {
+   const old=await app.machine.register({projectRoot:root,runId:`settled-history-${i}`,deadlineMs:Date.now()+60000});
+   await app.machine.cancelRegistration(old.id);
+  }
+  const active=await app.machine.inspectReadOnly();
+  assert.equal(active.claims.some(c=>c.idempotencyKey===next.action.sessionId),false);
+  const saved=await app.machine.getClaim({registrationId:registration.id,resource:'agentExecutions',idempotencyKey:next.action.sessionId,generation:next.action.generation});
+  assert.equal(saved.status,'released');
+ }
  const resultAction=await app.work.nextAction({...base,expectedRuntimeVersion:observed.runtimeVersion});assert.equal(resultAction.status,'result-required');
  const result=await app.work.submitResult({...base,expectedRuntimeVersion:resultAction.runtimeVersion,action:resultAction.action,result:resultFor(resultAction.action)});assert.equal(result.status,'accepted');
  const after=await app.work.nextAction({...base,expectedRuntimeVersion:result.runtimeVersion});assert.equal(after.status,'deadline');assert.equal(after.action,null);
@@ -2022,6 +2032,13 @@ test('batch ready chooser excludes paused expired and cancelled task or project 
   if(reason==='paused')await coordinator.pause(registration.id);
   if(reason==='expired')await delay(60);
   if(reason==='cancelled')await coordinator.cancelRegistration(registration.id);
+  if(scope==='task'&&reason==='cancelled') {
+   for(let i=0;i<256;i++) {
+    const old=await coordinator.register({projectRoot:f.root,runId:`batch-history-${i}`,deadlineMs:Date.now()+120000});
+    await coordinator.cancelRegistration(old.id);
+   }
+   assert.equal((await coordinator.inspectReadOnly()).registrations.some(r=>r.id===registration.id),false);
+  }
   const snapshot=await readFile(join(machineRoot,'machine.json'),'utf8'),entries=await readdir(machineRoot);
   const options={gitClient:f.gitClient,coordinator,resolveCommandExecutable:async()=>f.gate,environment:{PATH:process.env.PATH}};
   assert.equal((await inspectTaskBatchReadiness({projectRoot:f.root,runId:f.approved.runId},options)).ready,false,`${scope} ${reason}`);

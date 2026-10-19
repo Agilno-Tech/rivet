@@ -377,8 +377,9 @@ export function createHostExecution(input) {
       if(machine?.admissionClosed){
         const current=await inspectFeatureRuntime(instance);
         if(current.version!==value.expectedRuntimeVersion)fail('state-conflict');
-        closedClaims=(await machine.coordinator.inspect()).claims.filter(claim=>claim.registrationId===machine.registration.id
-          && claim.resource==='agentExecutions' && claim.dispatched===true && ['held','released'].includes(claim.status));
+        closedClaims=(await Promise.all(Object.values(current.sessions??{}).map(session=>machine.coordinator.getClaim({
+          registrationId:machine.registration.id,resource:'agentExecutions',idempotencyKey:session.id,generation:session.generation,
+        })))).filter(claim=>claim?.dispatched===true && ['held','released'].includes(claim.status));
         const stopped=current.graph.nodes.filter(node=>node.status==='running').some(node=>{
           const session=current.sessions?.[node.id];
           return session && closedClaims.some(claim=>claim.idempotencyKey===session.id && claim.generation===session.generation && claim.status==='released');
@@ -596,7 +597,7 @@ export function createHostExecution(input) {
       });
       if (JSON.stringify(action) !== JSON.stringify(expectedAction)) fail('state-conflict');
       const machine=currentMachineContext();
-      if(machine){const claims=(await machine.coordinator.inspect()).claims;const claim=claims.find(c=>c.registrationId===machine.registration.id&&c.idempotencyKey===action.sessionId&&c.generation===action.generation);if(!claim||claim.status!=='released')fail('state-conflict');}
+      if(machine){const claim=await machine.coordinator.getClaim({registrationId:machine.registration.id,resource:'agentExecutions',idempotencyKey:action.sessionId,generation:action.generation});if(!claim||claim.status!=='released')fail('state-conflict');}
       if(parallel && value.result?.status==='success') {
         const statePaths=await resolveStatePaths(value.project,run.runId);
         const reservations=await createReservationStore(statePaths).list();
@@ -734,13 +735,7 @@ export function createHostExecution(input) {
         if (!machine) fail('state-conflict');
         const receipt = validatedStopReceipt(operation.receipt, session);
         if (receipt.status !== 'stopped') fail('state-conflict');
-        const claims = (await machine.coordinator.inspect()).claims;
-        const claim = claims.find(
-          (c) =>
-            c.registrationId === machine.registration.id &&
-            c.idempotencyKey === session.id &&
-            c.generation === session.generation,
-        );
+        const claim = await machine.coordinator.getClaim({registrationId:machine.registration.id,resource:'agentExecutions',idempotencyKey:session.id,generation:session.generation});
         if (!claim) fail('state-conflict');
         await machine.coordinator.hostStop({
           claimId: claim.id,
@@ -775,12 +770,7 @@ export function createHostExecution(input) {
       ) {
         const machine = currentMachineContext();
         if (machine) {
-          const claim = (await machine.coordinator.inspect()).claims.find(
-            (c) =>
-              c.registrationId === machine.registration.id &&
-              c.idempotencyKey === session.id &&
-              c.generation === session.generation,
-          );
+          const claim = await machine.coordinator.getClaim({registrationId:machine.registration.id,resource:'agentExecutions',idempotencyKey:session.id,generation:session.generation});
           if (claim)
             await machine.coordinator.hostStop({
               claimId: claim.id,

@@ -224,3 +224,40 @@ export async function machineTransaction(
     await lock.release();
   }
 }
+
+// Archive records use the same ownership, no-follow, size and atomic durability
+// checks as the snapshot. Hash-only names keep untrusted run/claim keys out of paths.
+async function archivePaths(paths, key, create) {
+  await verify(paths);
+  if (!/^[a-f0-9]{64}$/.test(key)) fail();
+  const ancestors = [...paths.ancestors];
+  let parent = paths.root;
+  for (const name of ['history', key.slice(0, 2)]) {
+    const path = join(parent, name);
+    let stat = await missing(path);
+    if (!stat && !create) return null;
+    if (!stat) {
+      try { await mkdir(path, { mode: 0o700 }); }
+      catch (error) { if (error.code !== 'EEXIST') throw error; }
+      stat = await lstat(path);
+      // Persist directory entries before the main snapshot can forget a record.
+      const handle = await open(parent, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      try { await handle.sync(); } finally { await handle.close(); }
+    }
+    if (!directory(stat) || await realpath(path) !== path) fail();
+    ancestors.push({ path, dev: stat.dev, ino: stat.ino });
+    parent = path;
+  }
+  const archive = Object.freeze({root:parent,snapshot:join(parent,`${key}.json`),ancestors});
+  branded.add(archive);
+  await verify(paths);
+  await verify(archive);
+  return archive;
+}
+export async function readMachineArchive(paths, key) {
+  const archive = await archivePaths(paths, key, false);
+  return archive ? readMachineSnapshot(archive) : null;
+}
+export async function writeMachineArchive(paths, key, value) {
+  await write(await archivePaths(paths, key, true), value);
+}
