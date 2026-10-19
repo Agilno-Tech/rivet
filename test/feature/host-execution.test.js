@@ -1368,8 +1368,8 @@ test('enrolled host queues without poisoning state and requires observed stop be
  const observed=await call('handoff',{expectedRuntimeVersion:next.runtimeVersion,input:{operation:'observe',receipt:observation}});
  assert.equal(observed.status,'active');
  const {actions,telemetry,...identity}=observation;
- await call('handoff',{expectedRuntimeVersion:observed.runtimeVersion,input:{operation:'release',receipt:{...identity,status:'stopped'}}});
- const stopped=await call('nextAction',{expectedRuntimeVersion:observed.runtimeVersion});assert.equal(stopped.status,'result-required');
+ const released=await call('handoff',{expectedRuntimeVersion:observed.runtimeVersion,input:{operation:'release',receipt:{...identity,status:'stopped'}}});
+ const stopped=await call('nextAction',{expectedRuntimeVersion:released.runtimeVersion});assert.equal(stopped.status,'result-required');
  assert.equal((await machine.inspect()).claims.filter(c=>c.resource==='activeTasks'&&c.status==='held').length,1);
  const result=await call('submitResult',{expectedRuntimeVersion:stopped.runtimeVersion,action:stopped.action,result:resultFor(stopped.action)});assert.equal(result.status,'accepted');
  assert.equal((await machine.inspect()).claims.filter(c=>c.resource==='agentExecutions'&&c.status==='held').length,0);
@@ -1411,7 +1411,7 @@ for (const archive of [false,true]) test(`application permits stopped host recon
   const saved=await app.machine.getClaim({registrationId:registration.id,resource:'agentExecutions',idempotencyKey:next.action.sessionId,generation:next.action.generation});
   assert.equal(saved.status,'released');
  }
- const resultAction=await app.work.nextAction({...base,expectedRuntimeVersion:observed.runtimeVersion});assert.equal(resultAction.status,'result-required');
+ const resultAction=await app.work.nextAction({...base,expectedRuntimeVersion:released.runtimeVersion});assert.equal(resultAction.status,'result-required');
  const result=await app.work.submitResult({...base,expectedRuntimeVersion:resultAction.runtimeVersion,action:resultAction.action,result:resultFor(resultAction.action)});assert.equal(result.status,'accepted');
  const after=await app.work.nextAction({...base,expectedRuntimeVersion:result.runtimeVersion});assert.equal(after.status,'deadline');assert.equal(after.action,null);
  const claims=(await app.machine.inspect()).claims.filter(c=>c.registrationId===registration.id);assert.equal(claims.filter(c=>c.status==='held').length,0);
@@ -1449,8 +1449,8 @@ test('enrolled host successor starts its execution clock after queued admission'
  const observation={sessionId:successor.action.sessionId,generation:2,nativeHandle:'native-two',actorId:'host-one',observedAtMs:hostNow,source:'host-observation',assurance:'host-reported',actions:1,telemetry:sessionTelemetry('host')};
  const observed=await call('handoff',{expectedRuntimeVersion:successor.runtimeVersion,input:{operation:'observe',receipt:observation}});assert.equal(observed.status,'active');
  const {actions,telemetry,...identity}=observation;
- await call('handoff',{expectedRuntimeVersion:observed.runtimeVersion,input:{operation:'release',receipt:{...identity,status:'stopped'}}});
- const stopped=await call('nextAction',{expectedRuntimeVersion:observed.runtimeVersion});
+ const released=await call('handoff',{expectedRuntimeVersion:observed.runtimeVersion,input:{operation:'release',receipt:{...identity,status:'stopped'}}});
+ const stopped=await call('nextAction',{expectedRuntimeVersion:released.runtimeVersion});
  assert.equal((await call('submitResult',{expectedRuntimeVersion:stopped.runtimeVersion,action:stopped.action,result:resultFor(stopped.action)})).status,'accepted');
  assert.equal((await execution.status(base)).runtime.usage.timeMinutes,0);
  assert.equal((await machine.inspect()).registrations.find(r=>r.id===registered.id).deadlineMs,registered.deadlineMs);
@@ -1634,12 +1634,68 @@ test('parallel host admission preserves runnable offers and selects each stopped
   const action=next.actions.find(x=>x.status==='action').action;
   const observation={sessionId:action.sessionId,generation:action.generation,nativeHandle:'native-first',actorId:'host-one',observedAtMs:Date.parse(NOW),source:'host-observation',assurance:'host-reported',actions:1,telemetry:sessionTelemetry('host')};
   const observed=await call('handoff',{expectedRuntimeVersion:next.runtimeVersion,input:{operation:'observe',receipt:observation}});
+  const contract=JSON.parse(action.payload).contract;
+  await mkdir(join(contract.worktree.path,'app'),{recursive:true});
+  await writeFile(join(contract.worktree.path,contract.ownedPaths[0]),'export const done = true;\n');
+  await git(contract.worktree.path,'add',contract.ownedPaths[0]);
+  await git(contract.worktree.path,'-c','user.name=Test','-c','user.email=test@example.invalid','commit','-qm','finish worker');
   const {actions,telemetry,...identity}=observation;
-  await call('handoff',{expectedRuntimeVersion:observed.runtimeVersion,input:{operation:'release',receipt:{...identity,status:'stopped'}}});
-  const resumed=await call('nextAction',{expectedRuntimeVersion:observed.runtimeVersion});
+  const released=await call('handoff',{expectedRuntimeVersion:observed.runtimeVersion,input:{operation:'release',receipt:{...identity,status:'stopped'}}});
+  const resumed=await call('nextAction',{expectedRuntimeVersion:released.runtimeVersion});
   assert.equal(resumed.actions.filter(x=>x.status==='result-required').length,1);
   assert.equal(resumed.actions.filter(x=>x.status==='action').length,1);
   assert.notEqual(resumed.actions.find(x=>x.status==='action').action.sessionId,action.sessionId);
+  const completion=resumed.actions.find(x=>x.status==='result-required').action;
+  const submitted=await call('submitResult',{expectedRuntimeVersion:completion.runtimeVersion,action:completion,result:resultFor(completion)});
+  assert.equal(submitted.status,'accepted');
+
+});
+
+for (const interrupted of [false, true]) test(`host release exact retry repairs persistence boundary (${interrupted ? 'machine saved' : 'both saved'})`, async t => {
+  const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+  const {withMachineContext}=await import('../../src/runtime/machine-admission.js');
+  const {sessionTelemetry}=await import('../../src/clients/session-capabilities.js');
+  const {root,gitClient,approved}=await fixture(t,{managed:true});
+  const machine=createResourceCoordinator({root:join(dirname(root),'machine')});
+  const registration=await machine.register({projectRoot:root,runId:approved.runId,deadlineMs:Date.now()+120000});
+  let interrupt=interrupted;
+  const coordinator={...machine,async hostStop(input) {
+    await machine.hostStop(input);
+    if(interrupt){interrupt=false;throw new Error('interrupted after machine persistence');}
+  }};
+  let execution=createHostExecution({gitClient,now:()=>NOW});
+  const base={project:root,runId:approved.runId};
+  const call=(method,input)=>withMachineContext(coordinator,root,approved.runId,()=>execution[method]({...base,...input}),{nonblocking:true});
+  const prepared=await execution.prepare({...base,expectedRunVersion:approved.version});
+  const next=await call('nextAction',{expectedRuntimeVersion:prepared.runtimeVersion});
+  const action=next.action;
+  const identity={sessionId:action.sessionId,generation:action.generation,nativeHandle:'release-writer',actorId:'host-one',observedAtMs:Date.parse(NOW),source:'host-observation',assurance:'host-reported'};
+  const observation={...identity,actions:1,telemetry:sessionTelemetry('host')};
+  const observed=await call('handoff',{expectedRuntimeVersion:next.runtimeVersion,input:{operation:'observe',receipt:observation}});
+  const receipt={...identity,status:'stopped'};
+  const release=(version,proof=receipt)=>call('handoff',{expectedRuntimeVersion:version,input:{operation:'release',receipt:proof}});
+  for(const patch of [{status:'unknown'},{generation:2},{actorId:'foreign'},{nativeHandle:'foreign'},{observedAtMs:Date.parse(NOW)-1}]) {
+    await assert.rejects(release(observed.runtimeVersion,{...receipt,...patch}));
+  }
+  assert.equal((await machine.getClaim({registrationId:registration.id,resource:'agentExecutions',idempotencyKey:action.sessionId,generation:action.generation})).status,'held');
+  let version=observed.runtimeVersion;
+  if(interrupted) await assert.rejects(release(version),/interrupted after machine persistence/);
+  else version=(await release(version)).runtimeVersion;
+  execution=createHostExecution({gitClient,now:()=>NOW});
+  await assert.rejects(call('handoff',{expectedRuntimeVersion:version,input:{operation:'observe',receipt:observation}}));
+  await assert.rejects(call('checkpoint',{expectedRuntimeVersion:version,action,input:{summary:'Late checkpoint',usage:{tokens:1,costUsd:0},nativeHandle:identity.nativeHandle,actorId:identity.actorId,observedAtMs:identity.observedAtMs}}));
+  await assert.rejects(release(version,{...receipt,observedAtMs:receipt.observedAtMs+1}));
+  const repaired=await release(version);
+  assert.equal(repaired.runtimeVersion,observed.runtimeVersion+1);
+  assert.deepEqual(await release(repaired.runtimeVersion),repaired);
+  await assert.rejects(release(observed.runtimeVersion));
+  const status=await execution.status(base);
+  assert.equal(status.sessions[0].stopStatus,'stopped');
+  assert.equal(status.sessions[0].phase,'active');
+  assert.equal(status.runtime.usage.tokens,0);
+  const resumed=await call('nextAction',{expectedRuntimeVersion:repaired.runtimeVersion});
+  assert.equal(resumed.status,'result-required');
+  assert.equal(resumed.action.sessionId,action.sessionId);
 });
 
 test('explicit host retries failed candidate verification with only the frozen result and source', async t => {
@@ -1770,9 +1826,9 @@ test('expired parallel host admission still exposes the stopped second sibling w
   const identity={sessionId:second.sessionId,generation:second.generation,nativeHandle:'second-before-deadline',actorId:'host-two',observedAtMs:Date.now(),source:'host-observation',assurance:'host-reported'};
   const observed=await app.work.handoff({...base,expectedRuntimeVersion:next.runtimeVersion,input:{operation:'observe',receipt:{...identity,actions:1,telemetry:sessionTelemetry('host')}}});
   await app.machine.register({projectRoot:root,runId:approved.runId,deadlineMs:Date.now()+30});await delay(60);
-  await app.work.handoff({...base,expectedRuntimeVersion:observed.runtimeVersion,input:{operation:'release',receipt:{...identity,observedAtMs:Date.now(),status:'stopped'}}});
+  const released=await app.work.handoff({...base,expectedRuntimeVersion:observed.runtimeVersion,input:{operation:'release',receipt:{...identity,observedAtMs:Date.now(),status:'stopped'}}});
   const before=await app.work.status(base),claimsBefore=await app.machine.inspect(),treesBefore=await gitClient.listWorktrees(root);
-  const recovered=await app.work.nextAction({...base,expectedRuntimeVersion:observed.runtimeVersion});
+  const recovered=await app.work.nextAction({...base,expectedRuntimeVersion:released.runtimeVersion});
   assert.equal(recovered.status,'actions');
   assert.equal(recovered.actions.find(offer=>offer.action?.nodeId===second.nodeId)?.status,'result-required');
   assert.equal(recovered.actions.find(offer=>offer.action?.nodeId===issued[0].action.nodeId)?.status,'waiting-for-result');

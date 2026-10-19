@@ -8,6 +8,7 @@ import {assertSelectedProtocolRefs, selectedProtocolStatus} from '../protocols/p
 import {createProtocolPresentation, protocolLookupContext} from '../protocols/presentation.js';
 import { lstat, realpath } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { basename, dirname, join } from 'node:path';
 
 import { immutableJson } from '../clients/contract.js';
@@ -675,6 +676,11 @@ export function createHostExecution(input) {
       const intent=state.launchIntents[action.nodeId];const node=state.graph.nodes.find(n=>n.id===action.nodeId);
       if(action.intentId!==intent.id||action.reservationId!==intent.reservationId)fail('state-conflict');
       const content=capture(value.input,new Set(['summary','usage','nativeHandle','actorId','observedAtMs']),new Set(['summary','usage','nativeHandle','actorId','observedAtMs']));
+      const machine = currentMachineContext();
+      if (machine) {
+        const claim = await machine.coordinator.getClaim({registrationId:machine.registration.id,resource:'agentExecutions',idempotencyKey:session.id,generation:session.generation});
+        if (!claim || claim.status !== 'held') fail('state-conflict');
+      }
       // Persist the fence before reading dirty work. Recovery can repeat observation.
       state=await runtime.sessionOperation(instance,{expectedVersion:state.version,nodeId:node.id,identity:session,operation:'request'});
       const captured=await captureCheckpoint({gitClient,run,node,intent,session,...content,nowMs:featureNowMilliseconds(now)});
@@ -737,18 +743,33 @@ export function createHostExecution(input) {
         if (receipt.status !== 'stopped') fail('state-conflict');
         const claim = await machine.coordinator.getClaim({registrationId:machine.registration.id,resource:'agentExecutions',idempotencyKey:session.id,generation:session.generation});
         if (!claim) fail('state-conflict');
-        await machine.coordinator.hostStop({
+        if (claim.status === 'released') {
+          if (!isDeepStrictEqual(immutableJson(claim.execution), receipt)) fail('state-conflict');
+        } else await machine.coordinator.hostStop({
           claimId: claim.id,
           generation: session.generation,
           receipt,
           sessionId: session.id,
         });
+        // Machine persistence comes first. An exact retry repairs an interrupted
+        // runtime write without stopping or dispatching the writer a second time.
+        const released = await runtime.sessionOperation(instance, {
+          expectedVersion: current.version, nodeId: session.nodeId,
+          identity: session, operation: 'release', receipt,
+        });
         return immutableJson({
           status: 'resource-released',
-          runtimeVersion: current.version,
+          runtimeVersion: released.version,
           sessionId: session.id,
           generation: session.generation,
         });
+      }
+      if (operation.operation === 'observe') {
+        const machine = currentMachineContext();
+        if (machine) {
+          const claim = await machine.coordinator.getClaim({registrationId:machine.registration.id,resource:'agentExecutions',idempotencyKey:session.id,generation:session.generation});
+          if (!claim || claim.status !== 'held') fail('state-conflict');
+        }
       }
       if (operation.operation === 'transfer')
         await verifyCheckpoint(

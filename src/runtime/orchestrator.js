@@ -1,5 +1,6 @@
 import {newSession,validateSessions,requireSession,stopReceipt,sessionFailure,turnoverReason,validateSessionTelemetry,observeHostSession} from '../feature/sessions.js';
 import { createHash, randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 
 import { evaluateAuthority } from '../policy/authority.js';
 import { claimApproval } from '../policy/approvals.js';
@@ -1291,7 +1292,19 @@ export function createOrchestrator(input) {
       const session=requireSession(state,nodeId,identity,['active','checkpoint-requested','checkpoint-ready','stopping','stopped']);
       const intent=state.launchIntents[nodeId];const node=state.graph.nodes.find(n=>n.id===nodeId);
       if(node.status!=='running'||intent.status!=='started')sessionFailure();
-      if (operation === 'admit') {
+      if (session.phase === 'active' && session.stopReceipt?.source === 'host-observation' && session.stopReceipt.status === 'stopped' && operation !== 'release') sessionFailure();
+      if (operation === 'release') {
+        if (session.phase !== 'active') sessionFailure();
+        const proof = stopReceipt(receipt, session);
+        if (proof.status !== 'stopped' || proof.source !== 'host-observation') sessionFailure();
+        if (session.stopReceipt !== null) {
+          if (!isDeepStrictEqual(immutableJson(session.stopReceipt), proof)) sessionFailure();
+          return null;
+        }
+        // Completion keeps the active intent for normal result accounting.
+        session.stopReceipt = proof;
+        session.observedAtMs = proof.observedAtMs;
+      } else if (operation === 'admit') {
         // A queued host offer has no writer. Start its execution allowance only
         // when machine capacity is held, immediately before first dispatch.
         if (
