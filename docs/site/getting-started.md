@@ -40,7 +40,7 @@ rivet setup --write
 rivet doctor
 ```
 
-The first command previews the configuration. Review the checks and dependency commands before applying it with `--write`. Setup installs project policy and Rivet skills for Claude Code and Codex. It preserves existing valid configuration and does not run project checks or install application dependencies. Interactive `--write` also offers detected model routes and worker concurrency: accept, customize, or skip. A fresh setup recommends two concurrent workers, subject to available machine capacity. Review and approve the exact mapping before it is saved; revisit it with `rivet models configure`.
+The first command previews the configuration. Review the checks and dependency commands before applying it with `--write`. Setup installs project policy and Rivet skills for Claude Code and Codex. It preserves existing valid configuration and does not run project checks or install application dependencies. Interactive `--write` also offers detected model routes and worker concurrency: accept, customize, or skip. A fresh setup recommends two concurrent workers, subject to available machine capacity. Review and approve the exact mapping before it is saved; revisit it with `rivet models configure`. Setup then offers optional batch verification with a separate yes/no choice. Accept to check selected ready tasks together later; decline to leave batching unchanged. Rerun `rivet setup --write` to enable it later. Commit the setup files before creating tasks.
 
 Rivet proposes checks for supported Node, Django, pytest, Go and Rust layouts. If it cannot find a check, interactive setup asks for your verification command. Use your project's normal tools, including Docker if required. See [custom check and dependency configuration](./runtime-reference.md#checks-for-any-project-language) for other layouts.
 
@@ -60,7 +60,7 @@ Install and authenticate Claude Code or Codex CLI, then run:
 rivet run "Add a GET /health endpoint with a regression test"
 ```
 
-Run from the project root or any folder inside it. Rivet detects the project and offers a choice if both CLIs are available. To select one directly:
+Run from the project root or any folder inside it. Rivet detects the project and reuses saved model routing. Without saved routing, it offers a choice if both CLIs are available. To select one directly:
 
 ```sh
 rivet run "Add a GET /health endpoint with a regression test" --harness=claude

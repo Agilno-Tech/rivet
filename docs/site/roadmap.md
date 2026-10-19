@@ -2,9 +2,10 @@
 
 Current work focuses on clearer task decisions, reviewable evidence, simpler onboarding and real-world integration testing. See [task decisions and review evidence](./runtime-reference.md#task-decisions-and-review-evidence) for the supported commands and their limits.
 
+[Managed orchestration](./orchestration.md) supports dependency-aware parallel work, opt-in exact-result reuse, selected-task verification batches and approved Worker checkout cleanup with optional foreground retention. Batch reports remain advisory and do not certify each participant’s original branch.
+
 The following capabilities are deferred and are not available today:
 
-- Multi-task verification batches and completed-worktree removal with optional retention. [Managed orchestration](./orchestration.md) already supports dependency-aware parallel work, opt-in exact-result reuse and a read-only cleanup preview. A combined candidate check does not certify each participant's original branch.
 - Optional protected client deliverables with versioned archives and an explicit retention policy. This should not require copying deliverables into every repository.
 - A dedicated lessons-retrieval and memory subsystem, including shared project memory and Obsidian integration. Teams can record reviewed lessons in existing [project protocols](./memory-and-protocols.md) now; this does not provide automatic retrieval, synchronization or indefinite retention.
 - Automatic Bitbucket merging. Continue to merge Bitbucket reviews manually.

@@ -877,3 +877,13 @@ export async function prepareExecutionPolicyUpdate(root, options = {}) {
     document.setIn(['executionPolicy'], config.orchestration.executionPolicy);
   }, options);
 }
+
+export async function prepareVerificationBatchUpdate(root, options = {}) {
+  const fs = options.fs ?? filesystem;
+  const target = fs.lstatSync(join(root, '.rivet', 'quality.yaml'));
+  if (!target.isFile() || target.isSymbolicLink() || target.nlink !== 1 || (target.mode & 0o222) === 0) throw new Error('Quality policy file is not a writable private regular file');
+  return prepareConfigFileUpdate(root, 'quality.yaml', (config, document, value) => {
+    config.quality.verificationBatch = snapshot(value, MAX_TEMPLATE_BYTES);
+    document.setIn(['verificationBatch'], config.quality.verificationBatch);
+  }, options);
+}

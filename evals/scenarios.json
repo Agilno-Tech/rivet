@@ -232,6 +232,14 @@
         {
           "id": "one-approved-wizard",
           "test": "fresh interactive setup saves the approved model routes and matching worker concurrency in one wizard"
+        },
+        {
+          "id": "batch-opt-in",
+          "test": "interactive setup explicitly enables batches and preserves existing custom limits"
+        },
+        {
+          "id": "batch-approval-guards",
+          "test": "setup batch approval decline cancellation failure and drift never enable policy"
         }
       ]
     },

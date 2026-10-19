@@ -66,6 +66,8 @@ export const catalog = {
       ['interactive-only', 'interactive project setup offers routing after installation while preview JSON global and noninteractive stay unchanged'],
       ['honest-partial', 'setup reports model configuration failure separately from successful harness installation'],
       ['one-approved-wizard', 'fresh interactive setup saves the approved model routes and matching worker concurrency in one wizard'],
+      ['batch-opt-in', 'interactive setup explicitly enables batches and preserves existing custom limits'],
+      ['batch-approval-guards', 'setup batch approval decline cancellation failure and drift never enable policy'],
     ]),
     scenario('saved-run-routing', 'test/cli/human-run.test.js', [
       ['reuse-and-conflict', 'saved coordination routing selects its harness without a chooser and rejects conflicting flags'],

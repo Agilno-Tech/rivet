@@ -177,7 +177,9 @@ Retention is disabled by default. Approved retention runs only during foreground
 
 ### Verify selected tasks together
 
-Batch verification is optional. Enable it in committed `.rivet/quality.yaml` before creating tasks:
+Batch verification is optional. Interactive `rivet setup --write` offers it after model routing and concurrency. Accept the separate batch question to enable it, or decline to preserve current settings. Existing enabled settings are preserved without another question. Review and commit the setup files before creating tasks; rerun setup to enable batching later.
+
+For advanced customization, the equivalent `.rivet/quality.yaml` settings are:
 
 ```yaml
 verificationBatch:

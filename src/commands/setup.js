@@ -4,6 +4,7 @@ import { resolve, join } from 'node:path';
 import { CliError, EXIT_CODES } from '../cli/output.js';
 import { loadProjectConfig } from '../config/load.js';
 import { prepareSetupRemote } from './setup-remote.js';
+import {configureSetupBatching} from './setup-batching.js';
 import {configureModelPolicy} from './model-policy.js';
 import { init, prepareRepositoryRemoteUpdate } from './init.js';
 import { inspectManagedInstall, managedInstall } from '../install/managed.js';
@@ -193,6 +194,16 @@ export async function setupCommand(parsed, dependencies) {
         return emit(parsed,dependencies,{...result,ok:false,status:'partial',configuration,installation:installed.value,
           message:'Project configuration and harness instructions are ready, but model routing was not completed.',
           nextSteps:[error instanceof CliError?error.safeMessage:'Model configuration could not be saved safely.',`Run rivet models configure${projectArgument} to finish routing setup.`, 'Review the existing setup files before committing.']},error instanceof CliError?error.exitCode:EXIT_CODES.INVALID_INPUT);
+      }
+    }
+    if (!flags.global && !flags.json && dependencies.terminalIsInteractive?.()) {
+      try { await configureSetupBatching(root, dependencies); }
+      catch (error) {
+        return emit(parsed, dependencies, {...result, ok:false, status:'partial', configuration, installation:installed.value,
+          message:'Project setup is ready, but optional batch configuration did not complete.',
+          nextSteps:[error instanceof CliError ? error.safeMessage : 'Batch configuration could not be saved safely. Existing settings were preserved.',
+            `Review setup files and rerun rivet setup --write${projectArgument} to finish optional batching.`]},
+          error instanceof CliError ? error.exitCode : EXIT_CODES.REPOSITORY_CONFLICT);
       }
     }
     return emit(parsed, dependencies, {

@@ -70,7 +70,7 @@ Everyday commands:
   rivet --version                 Show the running Rivet version
   rivet update                    Update this machine and current project
   rivet setup                     Preview project setup
-  rivet setup --write             Configure project, models and concurrency
+  rivet setup --write             Configure project, models, concurrency and optional batching
   rivet models configure          Review model routing and worker concurrency
   rivet doctor                    Check project readiness
   rivet run "task"                 Plan, execute and offer final review
