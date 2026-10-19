@@ -107,3 +107,71 @@ test('automatic enrollment enforces aggregate project resources without a parent
  await f.coordinator.release({claimId:firstClaims[0].id,generation:1,completed:true});
  assert.ok((await f.coordinator.inspect()).claims.filter(c=>waiting.some(w=>w.id===c.id)).every(c=>c.status==='held'));
 });
+
+import {withOperationAdmission} from '../../src/runtime/task-orchestration.js';
+import {admitted} from '../../src/runtime/machine-admission.js';
+import {observeExecutionAttempt} from '../../src/clients/execution-proof.js';
+async function waitClaim(coordinator,predicate) {
+ for(let n=0;n<100;n++) {
+  const claim=(await coordinator.inspect()).claims.find(predicate);if(claim)return claim;
+  await new Promise(resolve=>setTimeout(resolve,10));
+ }
+ throw new Error('Claim did not reach expected state');
+}
+test('bounded model operations obey the machine ceiling across projects',async t=>{
+ const f=await fixture(t),other=await fixture(t);
+ await f.coordinator.configure({activeTasks:4,agentExecutions:1,heavyVerification:1,dependencyInstalls:1});
+ const r=await activateTaskAdmission(f.coordinator,other.record,other.root);
+ const occupied=await f.coordinator.request({registrationId:r.id,resource:'agentExecutions',idempotencyKey:'occupied',generation:1});
+ let calls=0;const controller=new AbortController();
+ const pending=withOperationAdmission(f.coordinator,f.root,signal=>admitted('agentExecutions','model',{signal},async()=>{calls++;}),{signal:controller.signal});
+ const rejected=assert.rejects(pending);
+ assert.equal((await waitClaim(f.coordinator,c=>c.status==='queued')).reason,'machine-agentExecutions');
+ controller.abort();await rejected;assert.equal(calls,0);
+ assert.equal((await f.coordinator.inspect()).claims.filter(c=>c.status==='held').length,1);
+ assert.equal((await f.coordinator.inspect()).claims.find(c=>c.id===occupied.id).status,'held');
+});
+test('bounded operations inherit parent pause and deadline without dispatch',async t=>{
+ const f=await fixture(t);const parent=await f.coordinator.register({projectRoot:f.root,deadlineMs:Date.now()+1000,limits:f.config.executionPolicy.limits});
+ await f.coordinator.pause(parent.id);let calls=0;
+ const pending=withOperationAdmission(f.coordinator,f.root,signal=>admitted('agentExecutions','model',{signal},async()=>{calls++;}));
+ const rejected=assert.rejects(pending);
+ assert.equal((await waitClaim(f.coordinator,c=>c.status==='queued')).reason,'paused');
+ await rejected;assert.equal(calls,0);
+ const state=await f.coordinator.inspect();assert.ok(state.registrations.every(r=>r.deadlineMs<=parent.deadlineMs));assert.equal(state.claims.some(c=>['held','queued'].includes(c.status)),false);
+});
+test('cancelled project enrollment cannot be bypassed by a fresh operation ID',async t=>{
+ const f=await fixture(t);const parent=await f.coordinator.register({projectRoot:f.root,deadlineMs:Date.now()+30000});await f.coordinator.cancelRegistration(parent.id);
+ let calls=0;await assert.rejects(withOperationAdmission(f.coordinator,f.root,async()=>{calls++;}),/cancelled/);
+ assert.equal(calls,0);assert.equal((await f.coordinator.inspect()).registrations.length,1);
+});
+test('unknown model execution remains held and blocks the next bounded operation',async t=>{
+ const f=await fixture(t);f.config.executionPolicy.limits.agentExecutions=1;await writeFile(f.path,YAML.stringify(f.config));
+ await assert.rejects(withOperationAdmission(f.coordinator,f.root,signal=>admitted('agentExecutions','unknown',{signal},async()=>{throw new Error('Unknown child outcome');})),/Unknown child/);
+ assert.equal((await f.coordinator.inspect()).claims.find(c=>c.dispatched)?.status,'held');
+ const controller=new AbortController();let calls=0;
+ const next=withOperationAdmission(f.coordinator,f.root,signal=>admitted('agentExecutions','next',{signal},async()=>{calls++;observeExecutionAttempt();}),{signal:controller.signal});const rejected=assert.rejects(next);
+ assert.equal((await waitClaim(f.coordinator,c=>c.status==='queued')).reason,'project-agentExecutions');controller.abort();await rejected;assert.equal(calls,0);
+});
+test('bounded model operation deadline expires even without project enrollment',async t=>{
+ const f=await fixture(t);let calls=0;
+ await assert.rejects(withOperationAdmission(f.coordinator,f.root,()=>{calls++;},{deadlineMs:Date.now()-1}),/deadline/);assert.equal(calls,0);assert.equal((await f.coordinator.inspect()).configured,false);
+});
+test('settled bounded operations retire their private admission records across repeated calls',async t=>{
+ const f=await fixture(t);
+ const task=await activateTaskAdmission(f.coordinator,f.record,f.root);
+ for(let i=0;i<12;i++) {
+  await withOperationAdmission(f.coordinator,f.root,signal=>admitted('agentExecutions','completed',{signal},async()=>{observeExecutionAttempt();}));
+  const state=await f.coordinator.inspect();
+  assert.deepEqual(state.registrations.map(r=>r.id),[task.id]);
+  assert.equal(state.claims.length,0);
+ }
+});
+test('retirement preserves unknown execution ownership while removing later settled operations',async t=>{
+ const f=await fixture(t);
+ await assert.rejects(withOperationAdmission(f.coordinator,f.root,signal=>admitted('agentExecutions','unknown',{signal},async()=>{throw new Error('unknown');})),/unknown/);
+ const prior=await f.coordinator.inspect();
+ for(let i=0;i<3;i++)await withOperationAdmission(f.coordinator,f.root,signal=>admitted('agentExecutions','completed',{signal},async()=>{observeExecutionAttempt();}));
+ const state=await f.coordinator.inspect();
+ assert.deepEqual(state.registrations,prior.registrations);assert.deepEqual(state.claims,prior.claims);
+});

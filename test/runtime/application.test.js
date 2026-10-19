@@ -206,14 +206,18 @@ test('default workflow reaches only the selected live planning adapter without c
   }
 });
 
-test('concurrent enrolled calls own one run task slot and release it after settlement',async t=>{
+test('concurrent enrolled calls own one run task slot and release it after settlement',{timeout:30000},async t=>{
  const parent=await realpath(await mkdtemp(join(tmpdir(),'rivet-task-owner-')));const root=join(parent,'project');await mkdir(root);t.after(()=>import('node:fs/promises').then(fs=>fs.rm(parent,{recursive:true,force:true})));
- let finish;const barrier=new Promise(resolve=>{finish=resolve;});let calls=0;
- const featureWorkflow=Object.fromEntries(['propose','start','watch','status','resume','cancel'].map(method=>[method,async()=>{if(method==='resume'){calls++;await barrier;}return {status:'blocked'};}]));
+ let finish,entered;const barrier=new Promise(resolve=>{finish=resolve;});const started=new Promise(resolve=>{entered=resolve;});let calls=0;
+ const featureWorkflow=Object.fromEntries(['propose','start','watch','status','resume','cancel'].map(method=>[method,async()=>{if(method==='resume'){calls++;entered();await barrier;}return {status:'blocked'};}]));
  const app=createRivetApplication({env:{RIVET_MACHINE_STATE_ROOT:join(parent,'machine')},featureWorkflow});await app.machine.register({projectRoot:root,runId:'same-run',deadlineMs:Date.now()+30000});
- const attempts=Promise.allSettled([app.feature.resume({project:root,runId:'same-run'}),app.feature.resume({project:root,runId:'same-run'})]);
- await new Promise(resolve=>setTimeout(resolve,150));finish();const outcomes=await attempts;
- assert.equal(calls,1);assert.equal(outcomes.filter(x=>x.status==='fulfilled').length,1);assert.equal((await app.machine.inspect()).claims.filter(c=>c.resource==='activeTasks'&&c.status==='held').length,0);
+ const first=app.feature.resume({project:root,runId:'same-run'});
+ try {
+  await started;
+  await assert.rejects(app.feature.resume({project:root,runId:'same-run'}),/task-already-owned/);
+  assert.equal(calls,1);
+ } finally {finish();await first;}
+ assert.equal(calls,1);assert.equal((await app.machine.inspect()).claims.filter(c=>c.resource==='activeTasks'&&c.status==='held').length,0);
  await app.feature.resume({project:root,runId:'same-run'});assert.equal(calls,2);assert.equal((await app.machine.inspect()).claims.filter(c=>c.resource==='activeTasks'&&c.status==='held').length,0);
 });
 
@@ -226,4 +230,50 @@ test('public cancel cleans queued and undispatched claims while preserving unkno
  assert.equal((await app.feature.cancel({project:root,runId:r.runId})).status,'cancelled');const claims=(await app.machine.inspect()).claims;
  assert.equal(claims.find(c=>c.id===writer.id).status,'held');assert.equal(claims.find(c=>c.id===task.id).status,'held');assert.equal(claims.find(c=>c.id===queued.id).status,'cancelled');assert.equal(claims.find(c=>c.id===safe.id).status,'released');
  await assert.rejects(request('dependencyInstalls','new'));
+});
+
+import {readFile,rm} from 'node:fs/promises';
+import YAML from 'yaml';
+import {managedPolicy} from '../fixtures/execution-policy.js';
+import {observeExecutionAttempt} from '../../src/clients/execution-proof.js';
+async function planningAdmissionFixture(t,managed=true) {
+ const root=await planningRepository();t.after(()=>rm(root,{recursive:true,force:true}));
+ const machineParent=await realpath(await mkdtemp(join(tmpdir(),'rivet-planning-machine-')));t.after(()=>rm(machineParent,{recursive:true,force:true}));
+ const path=join(root,'.rivet/orchestration.yaml'),config=YAML.parse(await readFile(path,'utf8'));
+ if(managed){config.executionPolicy=managedPolicy();config.executionPolicy.limits.agentExecutions=1;await writeFile(path,YAML.stringify(config));await execFile('git',['-C',root,'add','.']);await execFile('git',['-C',root,'-c','user.name=Test','-c','user.email=test@example.invalid','commit','--quiet','-m','policy']);}
+ let launches=0;
+ const app=createRivetApplication({cwd:()=>root,env:{RIVET_MACHINE_STATE_ROOT:join(machineParent,'machine')},planningClientFor:async()=>({propose:async contract=>{
+  launches++;observeExecutionAttempt();
+  return {schemaVersion:1,kind:'agilno.feature-decomposition',workItems:[{objective:'Implement feature.',ownedPaths:['src/feature.js'],acceptanceCriterionIndexes:contract.workRequest.acceptanceCriteria.map((_,i)=>i+1)}]};
+ }})});
+ const registration=await app.machine.register({projectRoot:root,runId:'existing-task',deadlineMs:Date.now()+30000,limits:config.executionPolicy?.limits,projectLimits:config.executionPolicy?.limits});
+ const claim=await app.machine.request({registrationId:registration.id,resource:'agentExecutions',idempotencyKey:'occupied',generation:1});
+ const request={project:root,client:'codex',source:{kind:'file',value:join(root,'requests/feature.md')}};
+ return {root,app,claim,request,launches:()=>launches};
+}
+async function planningWaiting(f) {
+ for(let n=0;n<150;n++) {
+  const state=await f.app.machine.inspect();
+  if(f.launches()||state.claims.some(c=>c.status==='queued'))return state;
+  await new Promise(resolve=>setTimeout(resolve,10));
+ }
+ throw new Error('Planning never reached admission');
+}
+test('application planning waits for managed project capacity and releases the completed operation',async t=>{
+ const f=await planningAdmissionFixture(t);const pending=f.app.feature.propose(f.request);
+ const state=await planningWaiting(f);assert.equal(f.launches(),0);assert.equal(state.claims.find(c=>c.status==='queued')?.reason,'project-agentExecutions');
+ await f.app.machine.release({claimId:f.claim.id,generation:1,completed:true});
+ const record=await pending;assert.equal(record.status,'proposed');assert.equal(f.launches(),1);
+ assert.equal((await f.app.machine.inspect()).claims.some(c=>['held','queued'].includes(c.status)),false);
+});
+test('application planning cancellation while queued never dispatches the client',async t=>{
+ const f=await planningAdmissionFixture(t);const controller=new AbortController();
+ const pending=f.app.feature.propose(f.request,{signal:controller.signal});const rejected=assert.rejects(pending);
+ await planningWaiting(f);controller.abort();await rejected;assert.equal(f.launches(),0);
+ assert.equal((await f.app.machine.inspect()).claims.filter(c=>['held','queued'].includes(c.status)).length,1);
+});
+test('application planning without policy keeps legacy unenrolled execution',async t=>{
+ const f=await planningAdmissionFixture(t,false);
+ assert.equal((await f.app.feature.propose(f.request)).status,'proposed');assert.equal(f.launches(),1);
+ assert.equal((await f.app.machine.inspect()).registrations.length,1);
 });

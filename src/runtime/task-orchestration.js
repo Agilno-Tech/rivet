@@ -1,7 +1,8 @@
 import { CliError } from '../cli/output.js';
 import { loadProjectConfig } from '../config/load.js';
 import { executionPolicyIdentity } from '../models/execution-policy.js';
-import { findRegistration } from './machine-admission.js';
+import { randomUUID } from 'node:crypto';
+import { findRegistration, withMachineContext } from './machine-admission.js';
 
 export function taskAllowance(value) {
   if (value === undefined) return undefined;
@@ -45,4 +46,27 @@ export async function taskCapacity(coordinator, project, runId) {
     capacity: Object.fromEntries(Object.entries(state.limits).map(([resource, limit]) => [resource, {
       held: state.claims.filter(c => c.resource === resource && c.status === 'held').length, limit,
     }])) };
+}
+
+// Planning and standalone reviews have no approved run yet. Give each bounded
+// invocation its own durable owner so it shares project and machine capacity.
+export async function withOperationAdmission(coordinator, project, operation, options = {}) {
+  const config = await loadProjectConfig(project);
+  const policy = config.orchestration.executionPolicy;
+  if (!policy) return withMachineContext(coordinator, project, null, operation, options);
+  options.signal?.throwIfAborted();
+  const parent = await findRegistration(coordinator, project, null);
+  if (parent?.cancelled) throw new CliError('Managed execution stopped: cancelled.', 'REPOSITORY_CONFLICT');
+  const deadlineMs = Math.min(Date.now() + 120000, options.deadlineMs ?? Infinity, parent?.deadlineMs ?? Infinity);
+  if (deadlineMs <= Date.now()) throw new CliError('Managed execution stopped: deadline.', 'REPOSITORY_CONFLICT');
+  const limits = { ...policy.limits };
+  for (const [key, value] of Object.entries(parent?.limits ?? {})) limits[key] = Math.min(limits[key] ?? 64, value);
+  const operationOwner = randomUUID();
+  const runId = `operation-${operationOwner}`;
+  const registration = await coordinator.register({ projectRoot: project, runId, operationOwner, deadlineMs, limits, projectLimits: policy.limits });
+  try {
+    return await withMachineContext(coordinator, project, runId, operation, { ...options, deadlineMs });
+  } finally {
+    await coordinator.retireOperation({ registrationId: registration.id, operationOwner });
+  }
 }

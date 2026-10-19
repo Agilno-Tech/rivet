@@ -68,6 +68,7 @@ function validate(s) {
     ids.add(r.id);
     limits(r.limits, true);
     if (r.projectLimits !== undefined) limits(r.projectLimits, true);
+    if (r.operationOwner !== undefined && (!id(r.operationOwner) || r.runId === null)) fail('operation-owner');
   }
   const claims = new Set();
   for (const c of s.claims) {
@@ -184,7 +185,8 @@ export function createResourceCoordinator({ root, now = Date.now }) {
       !stat.isDirectory() ||
       !Number.isSafeInteger(input.deadlineMs) ||
       input.deadlineMs <= now() ||
-      (input.runId !== undefined && !id(input.runId))
+      (input.runId !== undefined && !id(input.runId)) ||
+      (input.operationOwner !== undefined && (!id(input.operationOwner) || input.runId === undefined))
     )
       fail('registration');
     const scoped = limits(input.limits ?? {}, true);
@@ -206,6 +208,7 @@ export function createResourceCoordinator({ root, now = Date.now }) {
           (r) => r.projectRoot === projectRoot && r.runId === runId,
         );
         if (existing) {
+          if (existing.operationOwner !== input.operationOwner) fail('operation-owner');
           existing.deadlineMs = Math.min(existing.deadlineMs, input.deadlineMs);
           for (const [k, v] of Object.entries(scoped))
             existing.limits[k] = Math.min(existing.limits[k] ?? 64, v);
@@ -224,6 +227,7 @@ export function createResourceCoordinator({ root, now = Date.now }) {
             ino: stat.ino,
           },
           runId,
+          ...(input.operationOwner === undefined ? {} : { operationOwner: input.operationOwner }),
           limits: scoped,
           ...(projectLimits === undefined ? {} : { projectLimits }),
           deadlineMs: input.deadlineMs,
@@ -494,6 +498,20 @@ export function createResourceCoordinator({ root, now = Date.now }) {
       c.status = c.status === 'queued' ? 'cancelled' : 'released';
     });
   }
+  async function retireOperation({ registrationId, operationOwner }) {
+    return transaction(s => {
+      const registration = s?.registrations.find(r => r.id === registrationId);
+      if (!registration || !id(operationOwner) || registration.operationOwner !== operationOwner)
+        fail('operation-owner');
+      const claims = s.claims.filter(c => c.registrationId === registrationId);
+      // Only the settled invocation can retire its private ledger. Unknown
+      // children retain both their ownership and execution evidence unchanged.
+      if (claims.some(c => !['released', 'cancelled'].includes(c.status))) return false;
+      s.claims = s.claims.filter(c => c.registrationId !== registrationId);
+      s.registrations = s.registrations.filter(r => r.id !== registrationId);
+      return true;
+    });
+  }
   async function inspectReadOnly() {
     const paths=pinnedPaths??await resolveMachinePaths(root);
     const raw=paths?await readMachineSnapshot(paths):null;
@@ -564,6 +582,7 @@ export function createResourceCoordinator({ root, now = Date.now }) {
     execution,
     hostStop,
     release,
+    retireOperation,
     inspect,
     inspectReadOnly,
     pause,

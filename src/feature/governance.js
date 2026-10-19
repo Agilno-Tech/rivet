@@ -92,7 +92,7 @@ export async function inspectGovernance({project,run,gitClient,config,phase,chec
     acceptanceCriteria:run.workRequest.acceptanceCriteria,
     planNodeIds:run.featurePlan.nodes.filter(node=>node.role==='worker').map(node=>node.id),
     criterionPlanNodeIds:run.workRequest.acceptanceCriteria.map(criterion=>run.featurePlan.nodes.filter(node=>node.role==='worker'&&node.acceptanceCriteria.includes(criterion)).map(node=>node.id)),changedPaths,
-    workerActorIds:['host-agent',...run.featurePlan.nodes.filter(node=>node.role==='worker').map(node=>node.id)]};
+    workerActorIds:[...new Set(['host-agent',...run.featurePlan.nodes.filter(node=>node.role==='worker').flatMap(node=>[node.id,node.roleId])])]};
   // Historical reports remain auditable; only reports for these exact inputs can satisfy a gate.
   const phaseReviews=state.reviews.filter(event=>event.subject.phase===selectedPhase);
   const reports=phaseReviews.filter(event=>event.subject.headSha===headSha

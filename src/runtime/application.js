@@ -1,5 +1,5 @@
 import {sweepWorktreeRetention} from './worktree-retention.js';
-import {activateTaskAdmission} from './task-orchestration.js';
+import {activateTaskAdmission,withOperationAdmission} from './task-orchestration.js';
 import {homedir} from 'node:os';
 import {createManagedOrchestration} from './managed-orchestration.js';
 import {withMachineContext,admitted,admissionKey,taskAdmission,findRegistration} from './machine-admission.js';
@@ -40,7 +40,7 @@ import { runQualityGates } from '../quality/runner.js';
 import { resolveFeatureRunPaths } from '../state/paths.js';
 import { createOrchestrator } from './orchestrator.js';
 
-const INPUT_KEYS = new Set(['cwd', 'env', 'fs', 'fetch', 'spawn', 'now', 'featureWorkflow', 'providerTransport']);
+const INPUT_KEYS = new Set(['cwd', 'env', 'fs', 'fetch', 'spawn', 'now', 'featureWorkflow', 'providerTransport', 'planningClientFor']);
 const FEATURE_WORKFLOW_METHODS = Object.freeze(['propose', 'start', 'watch', 'status', 'resume', 'cancel']);
 
 export class ApplicationConfigurationError extends Error {
@@ -198,7 +198,8 @@ export function createRivetApplication(input = {}) {
     const value = env[`RIVET_${kind.toUpperCase()}_INTERPRETER`];
     return value === undefined ? {} : { interpreter: executable(value) };
   };
-  const rawPlanningClientFor = async request => {
+  if (configured.planningClientFor !== undefined && typeof configured.planningClientFor !== 'function') fail();
+  const rawPlanningClientFor = configured.planningClientFor ?? (async request => {
     if (!request || typeof request !== 'object' || Array.isArray(request)
       || Reflect.ownKeys(request).some(key => !['client','project','executionSelection'].includes(key))
       || !Object.hasOwn(request, 'client') || !Object.hasOwn(request, 'project')) fail();
@@ -224,16 +225,15 @@ export function createRivetApplication(input = {}) {
       });
     }
     fail();
-  };
+  });
   const planningClientFor = async (request) => {
     const client = await rawPlanningClientFor(request);
     return {
       ...client,
       propose: (contract, options = {}) =>
-        withMachineContext(
+        withOperationAdmission(
           managed.coordinator,
           request.project,
-          null,
           (signal) =>
             admitted(
               'agentExecutions',

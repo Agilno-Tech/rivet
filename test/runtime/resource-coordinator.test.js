@@ -431,3 +431,16 @@ test('read-only admission inspection neither creates state nor refreshes or rewr
   assert.equal(await readFile(join(root,'machine/machine.json'),'utf8'),before);assert.deepEqual(await readdir(join(root,'machine')),entries);
  }finally{await rm(root,{recursive:true,force:true});}
 });
+test('operation retirement rejects foreign owners and never deletes queued or unknown children',async()=>{
+ const {root,coordinator:c}=await fixture();
+ const task=await c.register({projectRoot:root,runId:'task',deadlineMs:deadline()});
+ await assert.rejects(c.retireOperation({registrationId:task.id,operationOwner:'owner'}));
+ const operation=await c.register({projectRoot:root,runId:'operation-test',operationOwner:'owner',deadlineMs:deadline()});
+ const claim=await c.request({registrationId:operation.id,resource:'agentExecutions',idempotencyKey:'model',generation:1});
+ await assert.rejects(c.retireOperation({registrationId:operation.id,operationOwner:'foreign'}));
+ assert.equal(await c.retireOperation({registrationId:operation.id,operationOwner:'owner'}),false);
+ await c.dispatch({claimId:claim.id,generation:1});
+ const before=await c.inspect();
+ assert.equal(await c.retireOperation({registrationId:operation.id,operationOwner:'owner'}),false);
+ assert.deepEqual(await c.inspect(),before);
+});
