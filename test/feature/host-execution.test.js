@@ -1544,7 +1544,7 @@ test('host verification consumes exact configured reuse and reports that evidenc
   const accepted=await createAcceptedIntegrationStore(await acceptedIntegrationPaths(paths)).readOnly();
   const config=await loadProjectConfig(root);
   const counter=join(dirname(root),'gate-count');
-  await writeFile(gate,`#!/bin/sh\nprintf 'run\\n' >> '${counter}'\nexit 0\n`);
+  await writeFile(gate,`#!${await realpath("/bin/sh")}\nprintf 'run\\n' >> '${counter}'\nexit 0\n`);
   const quality=await runQualityGates({
     ...configuredVerificationReuse(config),projectRoot:accepted.path,commitSha:accepted.commitSha,
     authority:featureQualityAuthority(config),gates:await configuredFeatureGates(config,async()=>gate,accepted.path),
@@ -1571,7 +1571,7 @@ test('host and verify command leave long shared verification pending without rec
   const accepted=await createAcceptedIntegrationStore(await acceptedIntegrationPaths(paths)).readOnly();
   const config=await loadProjectConfig(root);
   const marker=join(dirname(root),'long-owner-started');
-  await writeFile(gate,`#!/bin/sh\nprintf started > '${marker}'\nexec /bin/sleep 120\n`);
+  await writeFile(gate,`#!${await realpath("/bin/sh")}\nprintf started > '${marker}'\nexec /bin/sleep 120\n`);
   const quality={...configuredVerificationReuse(config),projectRoot:accepted.path,commitSha:accepted.commitSha,
     authority:featureQualityAuthority(config),gates:await configuredFeatureGates(config,async()=>gate,accepted.path),environment:{PATH:process.env.PATH}};
   const controller=new AbortController();
@@ -1717,7 +1717,7 @@ test('explicit host retries failed candidate verification with only the frozen r
   await assert.rejects(execution.submitResult({...input,action:{...action,generation:action.generation+1}}));
   const source=await git(contract.worktree.path,'rev-parse','HEAD');
   await writeFile(join(contract.worktree.path,'app/one.js'),'export const one = false;\n');
-  await git(contract.worktree.path,'add','app/one.js');await git(contract.worktree.path,'commit','-m','changed source');
+  await git(contract.worktree.path,'add','app/one.js');await git(contract.worktree.path,'-c','user.name=Test','-c','user.email=test@example.invalid','commit','-m','changed source');
   await assert.rejects(execution.submitResult(input));
   await git(contract.worktree.path,'reset','--hard',source);
   const accepted=await execution.submitResult(input);
@@ -1938,15 +1938,22 @@ test('batch cancellation stops an executing gate and cannot publish passing evid
  const f=await completedWorker(t,{verificationBatch:true});
  const marker=join(dirname(f.root),'batch-gate-started');
  await writeFile(f.gate,`#!/bin/sh\necho started > '${marker}'\nsleep 20\nexit 0\n`);
+ const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+ const coordinator=createResourceCoordinator({root:join(dirname(f.root),'batch-cancel-machine')});
+ await coordinator.register({projectRoot:f.root,runId:f.approved.runId,deadlineMs:Date.now()+300000});
  const controller=new AbortController();
+ t.after(()=>controller.abort());
  const {verifyTaskBatch}=await import('../../src/quality/verification-batch.js');
  const pending=verifyTaskBatch({projectRoot:f.root,runIds:[f.approved.runId]},
-  {gitClient:f.gitClient,resolveCommandExecutable:async()=>f.gate,environment:{PATH:process.env.PATH},signal:controller.signal});
+  {gitClient:f.gitClient,coordinator,resolveCommandExecutable:async()=>f.gate,environment:{PATH:process.env.PATH},signal:controller.signal});
  // Candidate assembly is real Git work; observe the command boundary before cancelling.
- for(let attempt=0;attempt<400;attempt++) {try {await access(marker);break;}catch {await delay(25);}}
+ for(let attempt=0;attempt<2400;attempt++) {try {await access(marker);break;}catch {await delay(25);}}
  await access(marker);controller.abort();
  const [result]=await pending;assert.equal(result.status,'blocked');
  assert.equal((await f.execution.status({project:f.root,runId:f.approved.runId})).verification,null);
+ const claims=(await coordinator.inspect()).claims.filter(claim=>claim.resource==='heavyVerification');
+ assert.equal(claims.length,1);
+ for(const claim of claims.filter(claim=>claim.status==='held'))assert.equal(claim.execution?.status,'unknown');
 });
 
 
@@ -2007,17 +2014,26 @@ test('batch admission includes paused and expired members even when they joined 
 test('batch uses the earliest member deadline even when the first selected task has no registration',async t=>{
  const f=await readyBatchGroup(t);
  const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+ const {withBatchAdmission}=await import('../../src/quality/batch-admission.js');
+ const {currentMachineContext}=await import('../../src/runtime/machine-admission.js');
  const c=createResourceCoordinator({root:join(dirname(f.root),'batch-deadline')});
- const deadline=Date.now()+12000;
- await c.register({projectRoot:f.root,runId:f.ids[1],deadlineMs:deadline});
- const marker=join(dirname(f.root),'batch-deadline-started');await writeFile(f.gate,`#!/bin/sh\necho started > '${marker}'\nsleep 30\nexit 0\n`);
- const {verifyTaskBatch}=await import('../../src/quality/verification-batch.js');
- const result=await verifyTaskBatch({projectRoot:f.root,runIds:f.ids},{gitClient:f.gitClient,coordinator:c,signal:AbortSignal.timeout(20000),
-  resolveCommandExecutable:async()=>f.gate,environment:{PATH:process.env.PATH}});
- assert.ok(result.every(r=>r.status==='blocked'));assert.ok(Date.now()<deadline+5000);
- const state=await c.inspect();assert.ok(state.claims.some(claim=>claim.resource==='heavyVerification'));
- assert.equal(state.claims.filter(claim=>claim.resource==='heavyVerification').length,1);
- for(const claim of state.claims.filter(claim=>claim.status==='held'))assert.equal(claim.execution?.status,'unknown');
+ const now=Date.now(),deadline=now+12000;
+ await c.register({projectRoot:f.root,runId:f.ids[1],deadlineMs:now+60000});
+ await c.register({projectRoot:f.root,runId:f.ids[2],deadlineMs:deadline});
+ // Exercise deadline selection independently of checkout preparation speed.
+ t.mock.timers.enable({apis:['Date','setTimeout'],now});
+ let entered=false;
+ await withBatchAdmission(f.root,f.ids.map(runId=>({runId})),{coordinator:c},async scoped=>{
+  entered=true;
+  assert.equal(currentMachineContext().registration.runId,f.ids[1]);
+  assert.equal(currentMachineContext().deadlineMs,deadline);
+  t.mock.timers.tick(11999);
+  assert.equal(scoped.signal.aborted,false);
+  t.mock.timers.tick(1);
+  assert.equal(scoped.signal.aborted,true);
+  await assert.rejects(scoped.validateAdmission());
+ });
+ assert.equal(entered,true);
 });
 
 

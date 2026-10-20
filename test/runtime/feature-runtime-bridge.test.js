@@ -308,7 +308,7 @@ for (const managed of [false,true]) test(`executes all Workers sequentially with
   const run = await persistedRunningRun(root, 'smart-agenda-live-run', request, featurePlan);
   const gateLog = join(dirname(root), 'gate-invocations.log');
   const gateExecutable = join(dirname(root), 'bounded-gate');
-  await writeFile(gateExecutable, '#!/bin/sh\nif [ -n "$RIVET_GATE_LOG" ]; then printf "%s\\n" "$*" >> "$RIVET_GATE_LOG"; fi\nif [ "$1" = ci ]; then mkdir -p node_modules; printf ready > node_modules/installed; exit 0; fi\n[ "$RIVET_GATE_ENV" = present ]\n', { mode: 0o700 });
+  await writeFile(gateExecutable, '#!' + await realpath('/bin/sh') + '\nif [ -n "$RIVET_GATE_LOG" ]; then printf "%s\\n" "$*" >> "$RIVET_GATE_LOG"; fi\nif [ "$1" = ci ]; then mkdir -p node_modules; printf ready > node_modules/installed; exit 0; fi\n[ "$RIVET_GATE_ENV" = present ]\n', { mode: 0o700 });
   await chmod(gateExecutable, 0o700);
   const launches = [];
   let activeLaunches = 0;
@@ -358,12 +358,12 @@ for (const managed of [false,true]) test(`executes all Workers sequentially with
   assert.equal(deferred.status, 'blocked');
   assert.equal(launches.length, 0);
 
-  await writeFile(gateExecutable, '#!/bin/sh\nexit 23\n', { mode: 0o700 });
+  await writeFile(gateExecutable, '#!' + await realpath('/bin/sh') + '\nexit 23\n', { mode: 0o700 });
   const failedInstall = await executor({ project: root, run }, { confirmDependencyInstall: async () => true });
   assert.equal(failedInstall.status, 'blocked');
   assert.match(failedInstall.summary, /Dependency command status: nonzero; exit code: 23/);
   assert.equal(launches.length, 0);
-  await writeFile(gateExecutable, '#!/bin/sh\nif [ -n "$RIVET_GATE_LOG" ]; then printf "%s\\n" "$*" >> "$RIVET_GATE_LOG"; fi\nif [ "$1" = ci ]; then mkdir -p node_modules; printf ready > node_modules/installed; exit 0; fi\n[ "$RIVET_GATE_ENV" = present ]\n', { mode: 0o700 });
+  await writeFile(gateExecutable, '#!' + await realpath('/bin/sh') + '\nif [ -n "$RIVET_GATE_LOG" ]; then printf "%s\\n" "$*" >> "$RIVET_GATE_LOG"; fi\nif [ "$1" = ci ]; then mkdir -p node_modules; printf ready > node_modules/installed; exit 0; fi\n[ "$RIVET_GATE_ENV" = present ]\n', { mode: 0o700 });
 
   const result = await executor({ project: root, run }, {
     confirmDependencyInstall: async plan => {

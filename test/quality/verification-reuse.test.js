@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, realpath, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { verificationIdentity } from '../../src/quality/verification-identity.js';
@@ -18,6 +18,19 @@ test('identity fingerprints contents and private environment without retaining e
   const executable=join(root,'tools','executable');await writeFile(executable,'binary-v1');
   const other={...input,gates:[{...input.gates[0],executable}]};const before=await verificationIdentity(other,key);
   await writeFile(executable,'binary-v2');assert.notEqual((await verificationIdentity(other,key)).identity,before.identity);
+});
+test('reuse accepts a canonical shell interpreter and rejects its symlink alias',async t=>{
+ const root=await realpath(await mkdtemp(join(tmpdir(),'reuse-shell-')));
+ t.after(()=>rm(root,{recursive:true,force:true}));
+ await mkdir(join(root,'deps'));await mkdir(join(root,'tools'));
+ const shell=await realpath('/bin/sh'),alias=join(root,'shell-alias'),executable=join(root,'gate');
+ await symlink(shell,alias);
+ const input={projectRoot:root,commitSha:'a'.repeat(40),gates:[{executable,artifactPaths:[],tests:[],resultPath:null}],environment:{},reuse:{configDigest:'b'.repeat(64),policy:{enabled:true,reproducible:true,dependencyRoots:['deps'],toolchainRoots:['tools']}}};
+ const key=Buffer.alloc(32,7);
+ await writeFile(executable,`#!${alias}\nexit 0\n`);
+ assert.equal((await verificationIdentity(input,key)).reason,'inputs-not-safely-fingerprintable');
+ await writeFile(executable,`#!${shell}\nexit 0\n`);
+ assert.match((await verificationIdentity(input,key)).identity,/^[a-f0-9]{64}$/);
 });
 test('unsafe or unattested inputs bypass reuse',async()=>{
   for(const reuse of [undefined,{policy:{enabled:true,reproducible:false}}]) assert.equal((await verificationIdentity({reuse},Buffer.alloc(32))).identity,null);

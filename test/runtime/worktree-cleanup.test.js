@@ -244,10 +244,27 @@ test('retention makes bounded progress on a task with more than eight Worker che
  const f=await fixture(t,{parallel:9});const {configureWorktreeRetention,sweepWorktreeRetention}=await import('../../src/runtime/worktree-retention.js');
  const initial=await previewTaskWorktreeCleanup({projectRoot:f.root,runId:f.runId},{gitClient:f.gitClient});assert.equal(initial.checkouts.filter(v=>v.eligible).length,9);
  await configureWorktreeRetention({projectRoot:f.root,retention:'1d'},{confirm:async()=>true});const seen=new Set();
+ // Count bounded progress independently of Git throughput; cutoff is tested separately.
+ t.mock.method(Date,'now',()=>Date.parse(NOW)+8*86400000);
  for(let i=0;i<10&&seen.size<9;i++){
   const result=await sweepWorktreeRetention(f.root,{gitClient:f.gitClient,now:()=>Date.parse(NOW)+8*86400000});assert.ok(result.removed.length<=8);assert.ok(result.removed.length>0,JSON.stringify(result));
   for(const path of result.removed){assert.equal(seen.has(path),false);seen.add(path);}
  }
  assert.equal(seen.size,9);
  assert.deepEqual((await sweepWorktreeRetention(f.root,{gitClient:f.gitClient,now:()=>Date.parse(NOW)+8*86400000})).removed,[]);
+});
+
+
+test('retention keeps checkouts when preparation exhausts the foreground time budget',async t=>{
+ const f=await fixture(t);
+ const {configureWorktreeRetention,sweepWorktreeRetention}=await import('../../src/runtime/worktree-retention.js');
+ await configureWorktreeRetention({projectRoot:f.root,retention:'1d'},{confirm:async()=>true});
+ let clock=Date.parse(NOW)+8*86400000;
+ t.mock.method(Date,'now',()=>clock);
+ // Age eligibility is checked after entering the sweep, before preview/removal.
+ // Advance the wall clock at that boundary to exercise the pre-removal guard.
+ const result=await sweepWorktreeRetention(f.root,{gitClient:f.gitClient,now:()=>{clock+=10001;return clock;}});
+ assert.deepEqual(result.removed,[]);
+ assert.ok(result.diagnostics.some(message=>message.includes('foreground time limit')),JSON.stringify(result));
+ assert.ok((await lstat(f.path)).isDirectory());
 });
