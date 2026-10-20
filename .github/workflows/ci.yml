@@ -14,10 +14,54 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
+  test:
     # Release PRs are verified through explicit dispatch; their PR event may still exist.
     if: >-
       ${{ !(github.event_name == 'pull_request'
+        && github.repository == 'Agilno-Tech/rivet'
+        && github.event.pull_request.user.login == 'github-actions[bot]'
+        && github.event.pull_request.head.repo.full_name == 'Agilno-Tech/rivet'
+        && github.event.pull_request.base.repo.full_name == 'Agilno-Tech/rivet'
+        && github.event.pull_request.base.ref == 'main'
+        && github.event.pull_request.head.ref == 'release-please--branches--main--components--rivet') }}
+    name: test (${{ matrix.os }}, ${{ matrix.node }}, ${{ matrix.shard }}/4)
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [22, 24]
+        shard: [1, 2, 3, 4]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          package-manager-cache: false
+          node-version: ${{ matrix.node }}
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run build
+      - name: Run test shard
+        run: npm test -- --shard=${{ matrix.shard }}/4
+      - name: Evaluate isolated fixture scenarios owned by this shard
+        timeout-minutes: 15
+        run: npm run evals -- --mode=fixture --shard=${{ matrix.shard }}/4
+      - name: Verify global tarball and Git installation plus first use
+        if: matrix.shard == 1
+        timeout-minutes: 10
+        run: npm run package:smoke
+      - name: Ensure committed distribution matches source
+        run: git diff --exit-code -- dist
+
+  # Preserve existing required-check names. A missing/cancelled/failed shard must
+  # fail these gates rather than allowing a skipped dependency to look neutral.
+  check:
+    needs: test
+    # Release PRs are verified through explicit dispatch; their PR event may still exist.
+    if: >-
+      ${{ always() && !(github.event_name == 'pull_request'
         && github.repository == 'Agilno-Tech/rivet'
         && github.event.pull_request.user.login == 'github-actions[bot]'
         && github.event.pull_request.head.repo.full_name == 'Agilno-Tech/rivet'
@@ -29,23 +73,21 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
         node: [22, 24]
-    runs-on: ${{ matrix.os }}
+    # Aggregation has no platform-dependent work and needs no checkout.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every platform and shard to pass
+        run: test "${{ needs.test.result }}" = success
+
+  docs-dispatch:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           package-manager-cache: false
-          node-version: ${{ matrix.node }}
+          node-version: 22
           cache: npm
-          registry-url: https://registry.npmjs.org
       - run: npm ci
-      - run: npm run check
       - run: npm run docs:build
-      - name: Evaluate deterministic workflow mechanics
-        timeout-minutes: 15
-        run: npm run evals -- --mode=fixture
-      - name: Verify global tarball and Git installation plus first use
-        timeout-minutes: 10
-        run: npm run package:smoke
-      - name: Ensure committed distribution matches source
-        run: git diff --exit-code -- dist

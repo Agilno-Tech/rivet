@@ -38,6 +38,24 @@ Add focused behavioral tests for new functionality, run the existing relevant re
 
 Use the existing workflow service and validation boundaries. Prefer native harness tools or existing project scripts when they already solve the problem. New model descriptors must distinguish registration, implemented execution, and live qualification.
 
+## CI and reproducing a shard
+
+CI runs every test on Linux and macOS with Node 22 and 24. Each combination uses four balanced shards, with two test files running at a time inside a shard. Package installation checks run once per combination. The dedicated documentation workflow builds the site once for a PR or main push.
+
+To reproduce one shard with the matching Node version:
+
+```sh
+npm run build
+npm test -- --shard=2/4
+npm run evals -- --mode=fixture --shard=2/4
+```
+
+Without `--shard`, the commands still run the complete suite or evaluation catalog. Test files and their evaluation scenarios always belong to the same shard. New test files are discovered automatically; they do not need a manifest entry.
+
+`scripts/test-durations.json` contains approximate scheduling weights from observed macOS Node 22 test durations, including isolated evaluation work. These hints affect balance only, never coverage. Refresh them when the slowest shard consistently dominates; do not remove expensive tests to improve the timing. Evaluation scenarios from one file share an isolated process and still require every named criterion to pass. Full tests and evaluations remain separate executions because evaluations deliberately strip credentials and user configuration.
+
+The existing `check (OS, Node)` statuses aggregate all shards and fail if any shard fails, is cancelled, or is unexpectedly skipped.
+
 The public repository is [Agilno-Tech/rivet](https://github.com/Agilno-Tech/rivet). Rivet uses Apache License 2.0 and the package name `@agilno-tech/rivet`. Registry publication is a separate maintainer step. Never include client code, credentials, or private work history in contributions.
 
 ## Maintainer guides

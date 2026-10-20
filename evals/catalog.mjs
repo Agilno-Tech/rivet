@@ -72,7 +72,7 @@ export const catalog = {
     scenario('saved-run-routing', 'test/cli/human-run.test.js', [
       ['reuse-and-conflict', 'saved coordination routing selects its harness without a chooser and rejects conflicting flags'],
     ]),
-    scenario('simplified-batch-flow', 'test/feature/host-execution.test.js', [
+    scenario('simplified-batch-flow', 'test/feature/host-batch-setup.test.js', [
       ['inline-install', 'batch ready listing validates accepted work without creating queue state and inline approval resumes the frozen candidate'],
       ['ready-and-stale', 'batch chooser excludes unfinished tasks and rechecks a selected head before enrollment'],
       ['admission-ready-only', 'batch ready chooser excludes paused expired and cancelled task or project admission without state writes'],
@@ -130,17 +130,17 @@ export const catalog = {
       ['recover-failed-publication', 'failed durable queue write leaves the owner capability usable for a blocked fallback'],
       ['explicit-stale-reenrollment', 'explicit re-enrollment replaces stale pending heads and invalidates waiting dependencies without changing frozen members'],
     ]),
-    scenario('orchestration-batch-execution', 'test/feature/host-execution.test.js', [
+    scenario('orchestration-batch-execution', 'test/feature/host-batch-execution.test.js', [
       ['candidate-only-and-drift', 'batch verification flushes an elapsed ready singleton without advancing task delivery state'],
       ['combined-checks-bounded-isolation', 'batch verifies three ready task heads once and preserves each accepted integration'],
       ['cancel-running-checks', 'batch cancellation stops an executing gate and cannot publish passing evidence'],
     ]),
-    scenario('orchestration-batch-admission', 'test/feature/host-execution.test.js', [
+    scenario('orchestration-batch-admission', 'test/feature/host-batch-admission.test.js', [
       ['every-queued-participant', 'batch admission includes paused and expired members even when they joined the queue earlier'],
       ['earliest-deadline', 'batch uses the earliest member deadline even when the first selected task has no registration'],
       ['dependency-admission', 'batch dependency approval cannot install while another frozen member is paused'],
     ]),
-    scenario('orchestration-batch-workflow', 'test/feature/host-execution.test.js', [
+    scenario('orchestration-batch-workflow', 'test/feature/host-batch-workflow.test.js', [
       ['approved-dependency-retry', 'batch dependencies remain pending until an explicitly approved install and retry the frozen candidate'],
       ['reject-task-delivery-proof', 'ordinary verification rejects combined-candidate evidence even for an identical singleton head'],
       ['public-cli-shared-capacity', 'public batch task selection and status execute with heavy capacity one and require no delivery transition'],
@@ -184,7 +184,7 @@ export const catalog = {
       ['unknown-measurements', 'telemetry distinguishes unknown billing and context from measured zero'],
       ['bounded-codex-config', 'Codex config escape hatches remain rejected'],
     ]),
-    scenario('orchestration-handoff', 'test/feature/host-execution.test.js', [
+    scenario('orchestration-handoff', 'test/feature/host-managed.test.js', [
       ['dirty-work-continuity', 'managed host checkpoint stopped successor completion preserves dirty work and rejects late results before integration'],
       ['uncertain-transfer-blocked', 'managed host unknown stop and changed dirty bytes block successor without resetting cumulative budgets'],
     ]),
@@ -209,7 +209,7 @@ export const catalog = {
       ['stopped-probe-control', 'stopped compatibility probe permits the admitted main execution'],
       ['settled-scope-fence', 'settled execution scope fences saved runners and opaque success retains capacity'],
     ]),
-    scenario('orchestration-host-admission', 'test/feature/host-execution.test.js', [
+    scenario('orchestration-host-admission', 'test/feature/host-managed.test.js', [
       ['queued-first-dispatch', 'enrolled host queues without poisoning state and requires observed stop before normal result'],
       ['queued-verification', 'enrolled host verification queues without recording failed checks then resumes'],
       ['expired-stop-reconciliation', 'application permits stopped host reconciliation after deadline without new admission'],
