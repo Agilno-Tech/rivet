@@ -139,6 +139,8 @@ Help checks establish advertised options; they cannot prove unchanged semantics,
 
 Spawned process adapters currently support macOS and Linux. Native Windows execution is not supported; an app running on Windows does not remove that runtime limit. WSL needs its own compatible environment and qualification.
 
+When a headless Worker cannot run a check because permission is denied or the command is unavailable, it reports that check as pending trusted-host verification. Rivet still runs the required configured checks before delivery can reach final approval. Worker claims do not replace those results, and an actual failed check must be fixed or reported as blocked.
+
 ### Claude spending caps
 
 Set optional overrides in the tracked `.rivet/project.yaml`:

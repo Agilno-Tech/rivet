@@ -39,6 +39,11 @@ test('status advises review rather than restarting a completed Worker', async t 
   const status = await execution.status({ project: root, runId: verifyInput.runId });
   assert.equal(status.workerCheckouts[0].nodeStatus, 'completed');
   assert.match(status.workerCheckouts[0].nextAction, /do not restart/i);
+  await git(root, 'worktree', 'remove', status.workerCheckouts[0].path);
+  const absent = await execution.status({ project: root, runId: verifyInput.runId });
+  assert.equal(absent.workerCheckouts[0].status, 'missing');
+  assert.match(absent.workerCheckouts[0].nextAction, /cleanup history/i);
+  assert.match(absent.workerCheckouts[0].nextAction, /do not restart/i);
   const paths = await acceptedIntegrationPaths(await resolveFeatureRunPaths(root, verifyInput.runId));
   await rm(paths.snapshotPath);
   const missing = await execution.status({project: root, runId: verifyInput.runId});

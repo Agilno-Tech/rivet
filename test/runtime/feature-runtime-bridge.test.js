@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile as execFileCallback } from 'node:child_process';
-import { access, chmod, cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, cp, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -803,6 +803,68 @@ test('resumes one blocked Worker in its exact preserved checkout and records a b
 });
 
 
+for (const preparationDrift of [null, 'input', 'directory', 'large-input', 'nested-input']) test(`automatic provider retry preserves prepared dependencies (${preparationDrift ?? 'unchanged'})`, async t => {
+  const parentRoot = await realpath(await mkdtemp(join(tmpdir(), 'rivet-provider-retry-')));
+  const root = join(parentRoot, 'project');
+  await mkdir(root);
+  t.after(() => rm(parentRoot, {recursive: true, force: true}));
+  await cp(new URL('../fixtures/config/valid/.rivet/', import.meta.url), join(root, '.rivet'), {recursive: true});
+  await writeFile(join(root, '.gitignore'), 'node_modules/\n');
+  await writeFile(join(root, 'package.json'), JSON.stringify({scripts: {build: 'x', test: 'x', lint: 'x', typecheck: 'x'}}));
+  await writeFile(join(root, 'package-lock.json'), preparationDrift === 'large-input' ? ' '.repeat(8 * 1024 * 1024 + 1) : '{"lockfileVersion":3}\n');
+  await mkdir(join(root, 'packages/shared'), {recursive: true});
+  await writeFile(join(root, 'packages/shared/package.json'), '{}\n');
+  await execFile('git', ['init', '--quiet', '--initial-branch=main', root]);
+  await execFile('git', ['-C', root, 'add', '.']);
+  await execFile('git', ['-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--quiet', '-m', 'fixture']);
+  const gitClient = await createGitClient({gitExecutable: await gitExecutable()});
+  const baselineCommit = (await gitClient.inspectRepository(root)).headSha;
+  const config = await loadProjectConfig(root);
+  const request = workRequest();
+  const planner = createFeaturePlanner({planningClient: {propose: async () => ({...proposal(), workItems: [{...proposal().workItems[0], ownedPaths: ['app/agenda', ...(preparationDrift === 'input' ? ['package-lock.json'] : preparationDrift === 'nested-input' ? ['packages/shared/package.json'] : [])], acceptanceCriterionIndexes: [1, 2]}]})}});
+  const featurePlan = await planner.propose({config, workRequest: request, baselineCommit, client: 'claude'});
+  const run = await persistedRunningRun(root, 'provider-retry', request, featurePlan);
+  const gateExecutable = join(parentRoot, 'gate');
+  await writeFile(gateExecutable, '#!/bin/sh\nif [ "$1" = ci ]; then mkdir -p node_modules; printf ready > node_modules/installed; fi\nexit 0\n', {mode: 0o700});
+  const launches = [];
+  const preparedPaths = [];
+  const executor = createFeatureExecutor({
+    gitClient, now: () => NOW, resolveCommandExecutable: async () => gateExecutable,
+    clientFor: () => ({provider: 'claude', async launch(contract) {
+      launches.push(contract.worktree.path);
+      assert.equal(await readFile(join(contract.worktree.path, 'node_modules/installed'), 'utf8'), 'ready');
+      const target = join(contract.worktree.path, contract.ownedPaths[0]);
+      if (launches.length === 1) {
+        await mkdir(dirname(target), {recursive: true});
+        await writeFile(target, 'preserved provider attempt\n');
+        if (preparationDrift === 'input') await writeFile(join(contract.worktree.path, 'package-lock.json'), '{"lockfileVersion":2}\n');
+        if (preparationDrift === 'nested-input') await writeFile(join(contract.worktree.path, 'packages/shared/package.json'), '{"name":"changed"}\n');
+        if (preparationDrift === 'directory') {
+          await rename(join(contract.worktree.path, 'node_modules'), join(parentRoot, 'original-dependencies'));
+          await mkdir(join(contract.worktree.path, 'node_modules'));
+        }
+        failAgent('provider-unavailable');
+      }
+      assert.equal(await readFile(target, 'utf8'), 'preserved provider attempt\n');
+      return {version: 1, status: 'success', output: {summary: 'Implementation complete', evidence: [...contract.evidence]}, usage: {tokens: 10, costUsd: 0}};
+    }}),
+  });
+  const result = await executor({project: root, run}, {confirmDependencyInstall: async plan => {
+    preparedPaths.push(plan.worktreePath);
+    return true;
+  }});
+  if (preparationDrift) {
+    assert.equal(result.status, 'blocked', result.summary);
+    assert.equal(launches.length, 1, 'dependency drift must block relaunch');
+    return;
+  }
+  assert.equal(result.status, 'awaiting-final-approval', result.summary);
+  assert.equal(launches.length, 2);
+  assert.equal(launches[0], launches[1]);
+  assert.equal(preparedPaths.filter(path => path === launches[0]).length, 1, 'the exact prepared worker is not installed twice');
+  assert.equal((await gitClient.inspectRepository(root)).headSha, baselineCommit);
+});
+
 test('worker-specific profile caps its sealed launch budget independently of the planning profile', async () => {
   const {clientProfileFor}=await import('../../src/feature/client-profile.js');
   const planNode={objective:'Implement',ownedPaths:['src/file.js'],authorityScopes:['implement'],commandIds:[]};
@@ -828,7 +890,7 @@ test('custom Worker ceiling respects lower approved allocations and the saved pr
   }
 });
 
-async function parallelFixture(t, {failure = false, beforeResult, dependent = false, stoppedProof = true, outerFailure = false, preparationRace = false, slowPreparation = false, cancelPreparation = false} = {}) {
+async function parallelFixture(t, {failure = false, workerChecksPending = false, beforeResult, dependent = false, stoppedProof = true, outerFailure = false, preparationRace = false, slowPreparation = false, cancelPreparation = false} = {}) {
   const parentRoot = await realpath(await mkdtemp(join(tmpdir(), 'rivet-adapter-parallel-')));
   t.after(() => rm(parentRoot, {recursive:true, force:true}));
   const root = join(parentRoot, 'project');
@@ -885,7 +947,7 @@ exec '${executableGit}' "$@"
   t.after(()=>clearTimeout(releaseTimer));
   const slowGate=outerFailure ? `if [ -f app/slow.txt ] && [ ! -f app/fast.txt ]; then printf waiting > '${slowMarker}'; while [ ! -f '${releaseMarker}' ]; do sleep 0.05; done; fi\n` : '';
   await writeFile(executable,`#!/bin/sh\nprintf '%s\\n' \"$PWD\" >> '${gateLog}'\n${slowGate}exit ${failure?1:0}\n`,{mode:0o700});
-  let active = 0; let maximum = 0; const bases = []; const events = [];
+  let active = 0; let maximum = 0; const bases = []; const events = []; const launches = [];
   let startedSlow; const slowStarted = new Promise(resolve=>{startedSlow=resolve;});
   let startedDependent; const dependentStarted = new Promise(resolve=>{startedDependent=resolve;});
   async function waitFor(promise,signal) {
@@ -902,6 +964,7 @@ exec '${executableGit}' "$@"
   const executor = createFeatureExecutor({gitClient,now:()=>NOW,resolveCommandExecutable:async()=>executable,
     clientFor:()=>({provider:'codex',async launch(contract,options){
       active++; maximum=Math.max(maximum,active); events.push(`start:${contract.nodeId}`);
+      launches.push(contract);
       bases.push((await gitClient.inspectRepository(contract.worktree.path)).headSha);
       const receipt={version:1,executionId:`execution-${contract.nodeId}`,processId:111,processGroupId:111,ownerProcessId:process.pid,processBirth:null,observedAtMs:NOW_MS,source:'owned-process',assurance:'observed',status:'started'};
       await options.onExecution(receipt);
@@ -946,7 +1009,7 @@ exec '${executableGit}' "$@"
       if(beforeResult) await beforeResult({root,run,contract,gitClient});
       if(stoppedProof) await options.onExecution({...receipt,status:'stopped'});
       active--;events.push(`finish:${contract.nodeId}`);
-      return {version:1,status:'success',output:{summary:'Complete',evidence:[...contract.evidence]},usage:{tokens:10,costUsd:0}};
+      return {version:1,status:'success',output:{summary:workerChecksPending ? 'Implementation complete. Worker checks were denied; verification is pending the trusted host.' : 'Complete',evidence:[...contract.evidence]},usage:{tokens:10,costUsd:0}};
     }})});
   const cancellationController=new AbortController();
   let cancellationError;
@@ -962,7 +1025,7 @@ exec '${executableGit}' "$@"
   await cancellation;
   if(cancellationError)throw cancellationError;
   const accepted=await createAcceptedIntegrationStore(await acceptedIntegrationPaths(await resolveFeatureRunPaths(root,run.runId))).readOnly();
-  return {result,accepted,root,run,gitClient,maximum,bases,events,baselineCommit,gateLog};
+  return {result,accepted,root,run,gitClient,maximum,bases,events,launches,baselineCommit,gateLog};
 }
 
 test('explicit adapter workers overlap and both same-base siblings are verified and accepted',async t=>{
@@ -971,6 +1034,33 @@ test('explicit adapter workers overlap and both same-base siblings are verified 
   assert.equal(fixture.maximum,2);
   assert.equal(fixture.bases[0],fixture.bases[1]);
   for(const id of ['fast','slow'])assert.equal(await readFile(join(fixture.accepted.path,`app/${id}.txt`),'utf8'),id+'\n');
+});
+
+test('worker check permission denials defer verification to passing trusted host gates', async t => {
+  const fixture = await parallelFixture(t, {workerChecksPending: true});
+  for (const launch of fixture.launches) {
+    assert.match(launch.objective, /denied|unavailable/i);
+    assert.match(launch.objective, /do not retry|do not repeatedly retry/i);
+    assert.match(launch.objective, /bypass/i);
+    assert.match(launch.objective, /pending/i);
+    assert.match(launch.objective, /fail(?:ed|ing|ure)/i);
+  }
+  assert.equal(fixture.result.status, 'awaiting-final-approval', fixture.result.summary);
+  assert.ok(fixture.accepted, 'pending worker checks still require a verified accepted candidate');
+  assert.match(await readFile(fixture.gateLog, 'utf8'), /candidate-worker-/);
+  const verification = await createVerificationReportStore(
+    await verificationReportPaths(await resolveFeatureRunPaths(fixture.root, fixture.run.runId)),
+  ).readOnly();
+  assert.equal(verification.status, 'pass');
+  assert.equal(verification.commitSha, fixture.accepted.commitSha);
+});
+
+test('worker pending verification cannot bypass failing trusted host gates', async t => {
+  const fixture = await parallelFixture(t, {workerChecksPending: true, failure: true});
+  assert.match(await readFile(fixture.gateLog, 'utf8'), /candidate-worker-/);
+  assert.equal(fixture.result.status, 'blocked');
+  assert.equal(fixture.accepted, null, 'a successful implementation response does not approve failed checks');
+  assert.equal((await fixture.gitClient.inspectRepository(fixture.root)).headSha, fixture.baselineCommit);
 });
 
 test('explicit adapter starts accepted fast dependency before slow sibling finishes',async t=>{

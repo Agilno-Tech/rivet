@@ -1,6 +1,6 @@
 # Live CLI trial — 2026-10-21
 
-An agent-operated smoke trial exercised the working branch in a disposable local Git repository with authenticated Codex. This is evidence of two small successful tasks, not a broad quality benchmark or an independent human usability study.
+An agent-operated smoke trial exercised the working branch in a disposable local Git repository with authenticated Codex and, after sign-in, Claude. This is evidence of small tasks, not a broad quality benchmark or an independent human usability study.
 
 ## Environment and setup
 
@@ -27,10 +27,22 @@ The second task confirmed that active execution no longer reports premature miss
 1. Status treated an initially ready final-review node as proof that worker dependencies were complete. It now requires all non-human work to finish before checking final integration readiness. Regression tests cover active work and still reject genuinely missing integration after completion.
 2. Successful managed completion read a stale node object after the graph transition, incorrectly marking the session blocked. Session phase now uses the transitioned graph state. Regression tests cover successful stopped workers and retain unknown-writer failure handling.
 
-Independent review checked the real task diff, build/tests, verification and local-approval evidence, cleanup results, and both fixes.
+3. Headless Claude could not run its checks and kept trying. Workers now explicitly defer denied or unavailable checks to trusted-host verification; actual failed checks remain blocking. Regression tests prove host gates cannot be skipped.
+4. Automatic provider retries unnecessarily repeated dependency preparation after preserving in-scope Worker edits. A retry can now reuse preparation completed in the same execution only when checkout identity, dependency inputs and owned installation identities remain unchanged. Failed/incomplete or uncacheable preparation does not gain that reuse. Regressions cover retained edits, failed preparation, dependency drift, replaced directories and large lockfiles.
+5. Status suggested recovery after a completed Worker checkout had been removed. It now directs the operator to cleanup history and says not to restart that completed Worker.
+
+Independent review checked the real task diffs, build/tests, verification and local-approval evidence, cleanup results, and fixes.
+
+## Claude follow-up
+
+Claude Code `2.1.280` initially reported unauthenticated and stopped before planning. After sign-in, real Opus/high planning and Haiku/high implementation ran. The first Worker exceeded its 100,000-token allowance (447,225 cumulative tokens, $0.1781634 estimated cost). A bounded diagnostic confirmed that headless `acceptEdits` denied the npm checks.
+
+The execution protocol now tells Workers to explicitly defer denied or unavailable checks to trusted-host verification without claiming they passed or bypassing permissions. Passing host gates remain mandatory. A retry also encountered a provider execution failure; the dirty checkout was preserved. A subsequent captured real response returned implementation success with checks explicitly deferred, but its native total of 285,971 tokens still exceeded the unchanged allowance ($0.1096373 estimated cost). Cached tokens are included in cumulative usage, not discarded.
+
+The successful disposable Claude trial explicitly raised the Worker token allowance to 500,000, with Manager/Boss allowances of 750,000/1,000,000. The $2 Worker spending cap and 20-minute task deadline stayed unchanged. Product defaults were not changed. With that reviewed allowance, Claude completed the null-handling fix and added one regression test. Trusted-host build and all six tests passed. The operator reviewed the two-file diff, applied the verified commit locally, and approved cleanup of the completed Worker checkout while preserving its branch and evidence. Native usage was 221,258 cumulative tokens with $0.0584548 estimated cost. A local diagnostic observer forwarded the real CLI input/output unchanged and retained the result; no model response was substituted.
+
+This qualifies the small Claude task with an explicitly adjusted budget, not reliable completion under the default 100,000-token allowance. Failed attempts and their dirty Worker checkouts were retained.
 
 ## Limits
 
-Claude Code `2.1.280` was detected, but its authentication status was `loggedIn: false`. The Claude attempt stopped before planning with provider-unavailable; it is not counted as a successful Claude trial.
-
-This trial does not qualify parallel multi-worker execution, batch verification, dependency installation, external issue intake, PR delivery, deployment, long-running recovery, or live Claude behavior. Those need separate live trials; deterministic tests are distinct evidence.
+This trial does not qualify parallel multi-worker execution, batch verification, dependency installation, external issue intake, PR delivery, deployment, long-running recovery, or default-budget Claude reliability. Those need separate live trials; deterministic tests are distinct evidence.

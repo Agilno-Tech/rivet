@@ -31,11 +31,14 @@ import { configuredVerificationReuse } from '../quality/configuration.js';
 import { createRuntimeInstance } from '../runtime/instance-store.js';
 import { createOrchestrator } from '../runtime/orchestrator.js';
 import { bootstrapWorktreeDependencies, inspectWorktreeDependencies, WorktreeBootstrapError } from '../runtime/worktree-bootstrap.js';
+import { readDependencyFile, inspectDependencyDirectory } from '../runtime/dependency-directory.js';
+import { inspectLegacyDependencyDirectory } from '../runtime/legacy-dependency-directory.js';
 import { validateWorkRequest } from '../work-request/contract.js';
 import { createFeaturePlan, featurePlanDigest } from './plan-contract.js';
 import { executionForNode } from './client-profile.js';
 
 const ID = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+const DEPENDENCY_INPUT_NAMES = new Set(['package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb', '.npmrc', '.yarnrc', '.yarnrc.yml', 'pnpm-workspace.yaml']);
 
 export class FeatureRuntimeBridgeError extends Error {
   constructor() {
@@ -446,7 +449,7 @@ export function createFeatureLaunchInput(node, intent, planNode, run) {
     nodeId: node.id,
     ...(intent.session ? {session: {id:intent.session.id,generation:intent.session.generation,maxActions:intent.session.maxActions,maxMinutes:intent.session.maxMinutes,checkpoint:intent.session.checkpoint??null}} : {}),
     parentId: node.parentId ?? null,
-    objective: `${planNode.objective}${intent.session ? `\nManaged session: stop at a safe boundary within ${intent.session.maxMinutes} minutes and ${intent.session.maxActions} observed Rivet actions. Return status checkpoint with completed work, pending work, evidence and next action when continuation is needed; only success means complete. No provider tool count is measured.` : ''}\n\nExecution protocol: implement the objective only within the sealed owned paths. The trusted host will validate scope and create the local commit after a successful result, so do not block or return retry merely because you cannot create a Git commit yourself. Return status success only after the implementation and required checks are complete, with exactly the declared evidence references.`,
+    objective: `${planNode.objective}${intent.session ? `\nManaged session: stop at a safe boundary within ${intent.session.maxMinutes} minutes and ${intent.session.maxActions} observed Rivet actions. Return status checkpoint with completed work, pending work, evidence and next action when continuation is needed; only success means complete. No provider tool count is measured.` : ''}\n\nExecution protocol: implement the objective only within the sealed owned paths. The trusted host will validate scope and create the local commit after a successful result, so do not block or return retry merely because you cannot create a Git commit yourself. The trusted host will run the required configured checks before accepting delivery. Attempt checks only when permitted. If a check is denied or unavailable, do not retry it or bypass permissions; name the deferred checks in your summary as pending trusted-host verification and never claim they passed. Return status success when implementation is complete and checks have passed or are explicitly deferred for that reason, with exactly the declared evidence references. An actual failed check is not a permission denial: fix it within scope or report blocked with the failure; never describe a failed check as passed or merely deferred.`,
     ownedPaths: planNode.ownedPaths,
     authority: { actions: planNode.authorityScopes, providers: run.featurePlan.providerRefs },
     commands: planNode.commandIds,
@@ -606,6 +609,32 @@ export function createFeatureExecutor(input) {
     let reconciledTip = null;
     const leases = new Map();
     const recoveryWorktrees = new Map();
+    // Only preparations completed in this executor invocation can be reused by
+    // an automatic retry. A failed or interrupted install never enters this map.
+    const preparedWorktrees = new Map();
+    async function preparedDependencies(root) {
+      const inputs = config.project.dependencies?.inputs ??
+        (['npm', 'pnpm', 'yarn', 'bun'].includes(config.project.stack.packageManager)
+          ? [...DEPENDENCY_INPUT_NAMES] : []);
+      const files = [];
+      let totalBytes = 0;
+      for (const path of inputs) {
+        try {
+          const bytes = await readDependencyFile(join(root, path), 8 * 1024 * 1024);
+          totalBytes += bytes.length;
+          if (totalBytes > 16 * 1024 * 1024) fail();
+          files.push([path, createHash('sha256').update(bytes).digest('hex')]);
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw error;
+          files.push([path, null]);
+        }
+      }
+      return JSON.stringify({files,
+        legacy: await inspectLegacyDependencyDirectory(root),
+        portable: await inspectDependencyDirectory(root),
+        portableInstall: await inspectLegacyDependencyDirectory(root, '.rivet-deps'),
+      });
+    }
     const client = Object.freeze({
       provider: run.featurePlan.client,
       async launch(contract, options) {
@@ -652,7 +681,7 @@ export function createFeatureExecutor(input) {
               const reused = await reusableWorkerCheckout({
                 gitClient: configured.gitClient, projectRoot: integration.path, statePaths,
                 node, planNode, branch, worktreePath, baseSha: current.headSha, nowMs: nowMs(),
-                expectedWorktree: recoveryWorktrees.get(node.id),
+                expectedWorktree: recoveryWorktrees.get(node.id) ?? preparedWorktrees.get(node.id)?.worktree,
               });
               leases.set(node.id, reused.reservation.leaseId);
               worker = reused.worker;
@@ -668,7 +697,23 @@ export function createFeatureExecutor(input) {
             }
           } finally { await lock?.release(); }
           preparationSignal.throwIfAborted();
-          if (intent.attempt <= 1 || !recoveryWorktrees.has(node.id)) await prepareDependencies(worker, branch, current.headSha, preparationSignal);
+          const prepared = preparedWorktrees.get(node.id);
+          if (intent.attempt > 1 && prepared) {
+            const changed = [...await configured.gitClient.changedPaths(worker.root, prepared.headSha, worker.headSha),
+              ...await configured.gitClient.statusPaths(worker.root)];
+            if (changed.some(path => DEPENDENCY_INPUT_NAMES.has(basename(path)))
+              || await preparedDependencies(worker.root) !== prepared.dependencies) fail();
+          } else if (intent.attempt <= 1 || !recoveryWorktrees.has(node.id)) {
+            await prepareDependencies(worker, branch, current.headSha, preparationSignal);
+            // Fingerprints are an optional retry optimization. A large or
+            // otherwise uncacheable input must not reject a successful install.
+            let dependencies;
+            try { dependencies = await preparedDependencies(worker.root); } catch {}
+            if (dependencies !== undefined) preparedWorktrees.set(node.id, {
+              worktree: {path: worker.root, dev: worker.rootIdentity.dev, ino: worker.rootIdentity.ino},
+              headSha: worker.headSha, dependencies,
+            });
+          }
           preparationSignal.throwIfAborted();
           diagnostic(intent.id).preparation = null;
           return Object.freeze({

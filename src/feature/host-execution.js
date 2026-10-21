@@ -956,7 +956,9 @@ export function createHostExecution(input) {
       }
       if ((observed?.dirtyPaths.length ?? 0) > 256 || branchLocations.length > 64) fail('state-conflict');
       const leaseExpired = Date.parse(reservation.expiresAt) <= nowMs;
-      const nextAction = status === 'dirty'
+      const nextAction = status === 'missing' && ['completed', 'archived'].includes(node.status)
+        ? 'Worker checkout is absent; inspect cleanup history if needed. Do not restart this completed Worker.'
+        : status === 'dirty'
         ? 'Inspect and preserve the Worker edits in the owning harness before continuing. Status does not commit or discard them.'
         : status !== 'clean'
           ? 'Inspect the registered Worker checkout and branch locations before recovery. Do not launch a duplicate Worker.'
