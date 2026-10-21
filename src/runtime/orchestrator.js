@@ -763,7 +763,8 @@ export function createOrchestrator(input) {
           }
           delete state.launchIntents[node.id].preparationClaim;
           state.launchIntents[node.id].status = 'complete';
-          if(state.sessions?.[node.id])state.sessions[node.id].phase=node.status==='completed'?'completed':'blocked';
+          // transition() replaces graph nodes; the launch's node is a stale snapshot.
+          if(state.sessions?.[node.id])state.sessions[node.id].phase=state.graph.nodes.find(current=>current.id===node.id)?.status==='completed'?'completed':'blocked';
           if (result?.status === 'budget-exhausted') {
             state.terminal = 'budget-exhausted';
             if (state.graph.status !== 'blocked') transition(state, state.graph, 'blocked', config.now());

@@ -1041,7 +1041,9 @@ export function createHostExecution(input) {
       ? (runtime?.nodes ?? []).filter(node => ['blocked', 'failed'].includes(node.status)).map(node => node.id)
       : [];
     const readyForVerification = (runtime?.nodes ?? [])
-      .some(node => node.id === 'final-delivery' && node.status === 'ready');
+      .some(node => node.id === 'final-delivery' && node.status === 'ready')
+      && run.featurePlan.nodes.filter(node => !node.approvalGate).every(node =>
+        runtime.nodes.some(current => current.id === node.id && ['completed', 'archived'].includes(current.status)));
     const hostRun = run.featurePlan.client === 'host';
     const verificationStale = verification !== null && accepted !== null
       && (verification.commitSha !== accepted.commitSha || checkout?.status !== 'clean');

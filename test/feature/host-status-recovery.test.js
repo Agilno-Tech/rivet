@@ -17,7 +17,7 @@ import { createFeatureWorkflow } from '../../src/feature/workflow.js';
 import { createGitClient } from '../../src/git/client.js';
 import { createReservationStore } from '../../src/git/reservations.js';
 import { createReservedWorktree } from '../../src/git/worktrees.js';
-import { resolveFeatureRunPaths, resolveStatePaths } from '../../src/state/paths.js';
+import { acceptedIntegrationPaths, resolveFeatureRunPaths, resolveStatePaths } from '../../src/state/paths.js';
 import { acquireLock } from '../../src/state/lock.js';
 import { verificationReportPaths } from '../../src/state/paths.js';
 import { createVerificationReportStore } from '../../src/feature/verification-report.js';
@@ -39,6 +39,11 @@ test('status advises review rather than restarting a completed Worker', async t 
   const status = await execution.status({ project: root, runId: verifyInput.runId });
   assert.equal(status.workerCheckouts[0].nodeStatus, 'completed');
   assert.match(status.workerCheckouts[0].nextAction, /do not restart/i);
+  const paths = await acceptedIntegrationPaths(await resolveFeatureRunPaths(root, verifyInput.runId));
+  await rm(paths.snapshotPath);
+  const missing = await execution.status({project: root, runId: verifyInput.runId});
+  assert.match(missing.nextAction, /Accepted integration identity is missing/);
+  assert.equal(missing.deliveryReady, false);
 });
 
 test('status exposes active Worker edits without changing private state or taking its lock', async t => {
@@ -57,6 +62,8 @@ test('status exposes active Worker edits without changing private state or takin
   try {
     const clean = await execution.status({ project: root, runId: approved.runId });
     assert.equal(clean.checkout, null);
+    assert.match(clean.nextAction, /work next/);
+    assert.doesNotMatch(clean.nextAction, /integration identity is missing/);
     assert.equal(clean.workerCheckouts[0].status, 'clean');
     assert.equal(clean.workerCheckouts[0].path, path);
     await mkdir(join(path, 'app'), { recursive: true });

@@ -29,6 +29,10 @@ A passing criterion means its named mechanics assertion passed. It is not an acc
 
 Memory continuity is reported as `not-implemented`, never as passed. Live model quality and pilot readiness are explicitly unevaluated. Scenario selection limits the report to the requested scenario; it does not qualify the remaining scenarios.
 
+## Recorded live trial
+
+The [2026-10-21 CLI trial](./live-cli-trial-2026-10-21.md) records two real Codex tasks from setup through cleanup, the defects found, and what remains unverified.
+
 ## Opt-in live evaluations
 
 Live mode is separate from CI's deterministic fixtures. It can call an installed, authenticated Claude/Codex CLI or a configured API/local text model, after interactive approval. It does not create external repositories, push branches or deliver changes.

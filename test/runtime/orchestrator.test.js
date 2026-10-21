@@ -2206,6 +2206,24 @@ test('review new reconciliation starts from stale snapshot after recorded exhaus
  assert.equal(terminalAtStart,'not-started','No new reconciliation may start after recorded exhaustion');
 });
 
+test('managed successful stopped workers have completed sessions', async () => {
+ const sessionPolicy={maxReplacements:2,maxActions:3,maxMinutes:2,contextThresholdPercent:75};
+ const instance=memoryInstance({activated:true,sessionPolicy,sessions:{}});
+ const runtime=createOrchestrator({now:()=>NOW,launchFor,sessionPolicy,client:{async launch(contract,options){
+  const receipt={version:1,executionId:'execution-one',processId:111,processGroupId:111,ownerProcessId:process.pid,processBirth:null,observedAtMs:NOW,source:'owned-process',assurance:'observed',status:'started'};
+  await options.onExecution(receipt);await options.onExecution({...receipt,status:'stopped'});
+  return {version:1,status:'success',output:{summary:'Complete.',evidence:contract.evidence},usage:{tokens:10,costUsd:0}};
+ }},reconcile:async()=>({status:'integrated'})});
+ await runtime.tick(instance,{expectedVersion:0,maxActiveNodes:1});
+ const state=instance.inspect();
+ for(const [id,session] of Object.entries(state.sessions)) {
+  assert.equal(state.graph.nodes.find(node=>node.id===id).status,'completed');
+  assert.equal(session.phase,'completed');
+  assert.equal(session.stopReceipt.status,'stopped');
+ }
+ assert.ok(Object.keys(state.sessions).length>0);
+});
+
 test('managed success with an unknown writer never reconciles or retries the checkout',async()=>{
  const sessionPolicy={maxReplacements:2,maxActions:3,maxMinutes:2,contextThresholdPercent:75};
  const instance=memoryInstance({activated:true,sessionPolicy,sessions:{}});let reconciles=0;let calls=0;
