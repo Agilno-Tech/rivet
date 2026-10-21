@@ -11,11 +11,15 @@ yarn run evals --mode=fixture
 yarn run evals --mode=fixture --scenario=host --json > fixture-evaluation.json
 ```
 
-The complete fixed scenario catalog is in `evals/catalog.mjs`; `evals/scenarios.json` must match it exactly. Use `--scenario=<id>` to select one scenario, or `--shard=2/4` to reproduce the evaluation portion of a CI shard. These selectors cannot be combined, and sharding is available only in fixture mode.
+The complete fixed scenario catalog is in `evals/catalog.mjs`; `evals/scenarios.json` must match it exactly. Use `--scenario=<id>` to select one scenario, or `--shard=2/4` to run the evaluation criteria belonging to a CI shard independently. These selectors cannot be combined, and sharding is available only in fixture mode.
 
 Each scenario runs exact named assertions from an existing fixture suite. The runner uses a fixed command selection, isolated temporary home, no inherited credentials, one test file at a time, and a bounded deadline of two minutes per selected scenario in that file. Scenarios from the same file share one process and each retain their exact named criteria. Timeout, cancellation, missing assertions, skipped assertions, duplicate results and failed child processes fail the evaluation. Temporary fixture files are removed after collection. After a forced stop, the runner allows a 100-millisecond finalization grace, then releases its own output streams instead of waiting indefinitely for inherited pipes. A detached descendant can escape the process group; forced-stop reports therefore mark cleanup as `uncertain`. They do not confirm that every descendant has stopped. Run fixtures only from trusted source, and inspect remaining processes after an interrupted run before reusing its environment.
 
 The host scenario exercises real disposable Git worktrees and local fixture gate execution. Its worker edits are deterministic test code. Repository and model scenarios use injected responses; they do not contact provider APIs or launch models.
+
+## CI verification
+
+CI uses `node scripts/verify-tests.mjs --shard=2/4` to run every test in that shard once, with two files at a time in the same isolated environment used for fixture evaluations. It scores the fixed catalog from native test results using both the file and exact assertion name. A failed suite or missing, duplicate, skipped or failed criterion fails the shard. No model calls are enabled. The standalone evaluation command above remains useful for focused investigations.
 
 ## Interpret the report
 

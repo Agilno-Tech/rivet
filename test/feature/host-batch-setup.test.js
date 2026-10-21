@@ -1,3 +1,4 @@
+import { fixtureGit } from '../helpers/git-executable.js';
 import {managedPolicy} from '../fixtures/execution-policy.js';
 import {bodyDigest} from '../../src/protocols/project.js';
 import assert from 'node:assert/strict';
@@ -35,7 +36,7 @@ test('batch ready listing validates accepted work without creating queue state a
  const {batchForRun}=await import('../../src/quality/verification-batch-queue.js');
  assert.equal(await main(['task','verify','--batch',`--run=${f.approved.runId}`],{cwd:()=>f.root,env:options.environment,work:f.execution,
   terminalIsInteractive:()=>true,confirmDependencyInstall:async()=>{approvals++;pending=await batchForRun(f.root,f.approved.runId);return true;},
-  resolveCommandExecutable:async runner=>runner==='git'?realpath('/usr/bin/git'):f.gate,
+  resolveCommandExecutable:async runner=>runner==='git'?realpath(fixtureGit):f.gate,
   output:{log:m=>messages.push(m),error:m=>messages.push(m),json(){}},reportFailure:false}),0,messages.join('\n'));
  assert.equal(approvals,1);assert.match(messages.join('\n'),/pass/);
  const report=await batchForRun(f.root,f.approved.runId);assert.equal(report.status,'pass');assert.equal(report.id,pending.id);assert.equal(report.candidate.commitSha,pending.candidate.commitSha);
@@ -44,7 +45,7 @@ test('batch ready listing validates accepted work without creating queue state a
 for(const interactive of [false,true])test(`batch dependency approval ${interactive?'decline':'noninteractive'} retains candidate without installation`,async t=>{
  const f=await completedWorker(t,{verificationBatch:true,lockedDependencies:true}),messages=[];let approvals=0;
  const dependencies={cwd:()=>f.root,env:{PATH:process.env.PATH},work:f.execution,terminalIsInteractive:()=>interactive,confirmDependencyInstall:async()=>{approvals++;return false;},
- resolveCommandExecutable:async runner=>runner==='git'?realpath('/usr/bin/git'):f.gate,output:{log:m=>messages.push(m),error:m=>messages.push(m),json(){}},reportFailure:false};
+ resolveCommandExecutable:async runner=>runner==='git'?realpath(fixtureGit):f.gate,output:{log:m=>messages.push(m),error:m=>messages.push(m),json(){}},reportFailure:false};
  assert.notEqual(await main(['task','verify','--batch',`--run=${f.approved.runId}`],dependencies),0);
  assert.equal(approvals,interactive?1:0);
  const {batchForRun}=await import('../../src/quality/verification-batch-queue.js');const report=await batchForRun(f.root,f.approved.runId);assert.equal(report.status,'dependencies-needed');
@@ -60,7 +61,7 @@ test('batch chooser excludes unfinished tasks and rechecks a selected head befor
  const messages=[];let selected=false;
  const code=await main(['task','verify','--batch'],{cwd:()=>f.root,env:{PATH:process.env.PATH},work:f.execution,terminalIsInteractive:()=>true,
  prompt:async question=>{selected=true;assert.deepEqual(question.choices.map(c=>c.value),[f.approved.runId]);await writeFile(join(f.root,'foreign-change'),'changed after selection');return [f.approved.runId];},
- resolveCommandExecutable:async runner=>runner==='git'?realpath('/usr/bin/git'):f.gate,
+ resolveCommandExecutable:async runner=>runner==='git'?realpath(fixtureGit):f.gate,
  output:{log:m=>messages.push(m),error:m=>messages.push(m),json(){}},reportFailure:false});
  assert.equal(selected,true);assert.notEqual(code,0);
  const {batchForRun}=await import('../../src/quality/verification-batch-queue.js');assert.equal(await batchForRun(f.root,f.approved.runId),null);
@@ -88,7 +89,7 @@ test('batch ready chooser excludes paused expired and cancelled task or project 
   assert.equal((await inspectTaskBatchReadiness({projectRoot:f.root,runId:f.approved.runId},options)).ready,false,`${scope} ${reason}`);
   const messages=[];
   assert.equal(await main(['task','verify','--batch'],{cwd:()=>f.root,env:options.environment,work:f.execution,machine:coordinator,terminalIsInteractive:()=>true,
-   prompt:async()=>{throw Error('Unavailable task must not be offered');},resolveCommandExecutable:async runner=>runner==='git'?realpath('/usr/bin/git'):f.gate,
+   prompt:async()=>{throw Error('Unavailable task must not be offered');},resolveCommandExecutable:async runner=>runner==='git'?realpath(fixtureGit):f.gate,
    output:{log:m=>messages.push(m),error:m=>messages.push(m),json(){}},reportFailure:false}),0,messages.join('\n'));
   assert.match(messages.join('\n'),/No tasks are ready/);
   assert.equal(await readFile(join(machineRoot,'machine.json'),'utf8'),snapshot);assert.deepEqual(await readdir(machineRoot),entries);

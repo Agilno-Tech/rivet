@@ -1,3 +1,4 @@
+import { fixtureGit } from '../helpers/git-executable.js';
 import assert from 'node:assert/strict';
 import { execFile as execFileCallback } from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -27,7 +28,7 @@ test('activation preview exposes approved concurrency and shared resources', asy
 async function fixture(t) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'rivet-human-run-')));
   t.after(() => rm(root, { recursive: true, force: true }));
-  await execFile('/usr/bin/git', ['-C', root, 'init', '-q']);
+  await execFile(fixtureGit, ['-C', root, 'init', '-q']);
   await cp(CONFIG, join(root, '.rivet'), { recursive: true });
   const nested = join(root, 'src');
   await mkdir(nested);

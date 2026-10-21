@@ -1,3 +1,4 @@
+import { fixtureGit } from '../helpers/git-executable.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, cp, realpath, rm } from 'node:fs/promises';
@@ -27,9 +28,9 @@ async function fixture(t) {
       recursive: true,
     },
   );
-  await execFile('/usr/bin/git', ['init', '-q', '--initial-branch=main', root]);
-  await execFile('/usr/bin/git', ['-C', root, 'add', '.']);
-  await execFile('/usr/bin/git', [
+  await execFile(fixtureGit, ['init', '-q', '--initial-branch=main', root]);
+  await execFile(fixtureGit, ['-C', root, 'add', '.']);
+  await execFile(fixtureGit, [
     '-C',
     root,
     '-c',

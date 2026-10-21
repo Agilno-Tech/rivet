@@ -1,3 +1,4 @@
+import { fixtureGit } from '../helpers/git-executable.js';
 import assert from 'node:assert/strict';
 import {execFile as callback} from 'node:child_process';
 import {promisify} from 'node:util';
@@ -10,11 +11,11 @@ const execFile=promisify(callback);
 async function setup(t) {
  const root=await realpath(await mkdtemp(join(tmpdir(),'rivet-checkpoint-')));
  t.after(()=>rm(root,{recursive:true,force:true}));
- const git=async(...args)=>(await execFile('/usr/bin/git',['-C',root,...args])).stdout;
+ const git=async(...args)=>(await execFile(fixtureGit,['-C',root,...args])).stdout;
  await git('init','--quiet','--initial-branch=main');
  await writeFile(join(root,'tracked'),'original'); await writeFile(join(root,'deleted'),'remove');
  await git('add','.'); await git('-c','user.name=Test','-c','user.email=test@example.invalid','commit','-qm','initial');
- return {root,git,client:await createGitClient({gitExecutable:await realpath('/usr/bin/git')})};
+ return {root,git,client:await createGitClient({gitExecutable:await realpath(fixtureGit)})};
 }
 test('checkpoint manifest preserves staged unstaged untracked deletion and mode identities without committing',async t=>{
  const {root,git,client}=await setup(t);

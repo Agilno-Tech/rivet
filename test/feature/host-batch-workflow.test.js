@@ -1,3 +1,4 @@
+import { fixtureGit } from '../helpers/git-executable.js';
 import {managedPolicy} from '../fixtures/execution-policy.js';
 import {bodyDigest} from '../../src/protocols/project.js';
 import assert from 'node:assert/strict';
@@ -34,7 +35,7 @@ test('batch dependencies remain pending until an explicitly approved install and
  const messages=[];
  assert.equal(await main(['task','deps',`--run=${f.approved.runId}`],{cwd:()=>f.root,env:options.environment,work:f.execution,
   terminalIsInteractive:()=>true,confirmDependencyInstall:async()=>true,
-  resolveCommandExecutable:async runner=>runner==='git'?realpath('/usr/bin/git'):f.gate,
+  resolveCommandExecutable:async runner=>runner==='git'?realpath(fixtureGit):f.gate,
   output:{log:m=>messages.push(m),error:m=>messages.push(m),json(){}},reportFailure:false}),0,messages.join('\n'));
  assert.match(messages.join('\n'),/frozen batch candidate/);
  await writeFile(f.gate,'#!/bin/sh\nexit 0\n');
@@ -59,7 +60,7 @@ test('public batch task selection and status execute with heavy capacity one and
  const messages=[];
  const dependencies={cwd:()=>f.root,env:{PATH:process.env.PATH},work:f.execution,machine,
   terminalIsInteractive:()=>true,prompt:async question=>{assert.ok(question.choices.some(c=>c.value===f.approved.runId));return [f.approved.runId];},
-  resolveCommandExecutable:async runner=>runner==='git'?realpath('/usr/bin/git'):f.gate,
+  resolveCommandExecutable:async runner=>runner==='git'?realpath(fixtureGit):f.gate,
   output:{log:m=>messages.push(m),error:m=>messages.push(m),json(){}},reportFailure:false};
  assert.equal(await main(['task','verify','--batch'],dependencies),0,messages.join('\n'));
  assert.match(messages.join('\n'),/advisory/);

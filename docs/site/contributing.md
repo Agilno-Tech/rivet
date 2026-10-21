@@ -46,13 +46,12 @@ To reproduce one shard with the matching Node version:
 
 ```sh
 npm run build
-npm test -- --shard=2/4
-npm run evals -- --mode=fixture --shard=2/4
+node scripts/verify-tests.mjs --shard=2/4
 ```
 
-Without `--shard`, the commands still run the complete suite or evaluation catalog. Test files and their evaluation scenarios always belong to the same shard. New test files are discovered automatically; they do not need a manifest entry.
+Without `--shard`, this command verifies the complete suite and evaluation catalog. `npm test` and `npm run evals -- --mode=fixture` remain available for separate local runs. Test files and their evaluation scenarios always belong to the same shard. New test files are discovered automatically; they do not need a manifest entry.
 
-`scripts/test-durations.json` contains approximate scheduling weights from observed macOS Node 22 test durations, including isolated evaluation work. These hints affect balance only, never coverage. Refresh them when the slowest shard consistently dominates; do not remove expensive tests to improve the timing. Evaluation scenarios from one file share an isolated process and still require every named criterion to pass. Full tests and evaluations remain separate executions because evaluations deliberately strip credentials and user configuration.
+`scripts/test-durations.json` contains approximate scheduling weights from observed macOS Node 22 test durations, used as scheduling hints. These hints affect balance only, never coverage. Refresh them when the slowest shard consistently dominates; do not remove expensive tests to improve the timing. CI executes each test once in a temporary home with credentials and user configuration stripped. It scores evaluation criteria from the native test events, matching both the source file and exact test name. Missing, duplicate, skipped or failed criteria fail the shard, as does any suite failure. The standalone evaluation command still runs selected scenarios independently. macOS fixtures resolve the native Apple Git executable once to avoid repeatedly launching its system shim; executable-discovery tests retain their explicit paths.
 
 The existing `check (OS, Node)` statuses aggregate all shards and fail if any shard fails, is cancelled, or is unexpectedly skipped.
 

@@ -1,3 +1,4 @@
+import { fixtureGit } from '../helpers/git-executable.js';
 import assert from 'node:assert/strict';
 import { execFile as execFileCallback } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
@@ -25,7 +26,7 @@ const BASELINE = 'a'.repeat(40);
 async function fixture(t) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'rivet-human-task-')));
   t.after(() => rm(root, { recursive: true, force: true }));
-  await execFile('/usr/bin/git', ['-C', root, 'init', '-q']);
+  await execFile(fixtureGit, ['-C', root, 'init', '-q']);
   await cp(CONFIG, join(root, '.rivet'), { recursive: true });
   return root;
 }
@@ -78,7 +79,7 @@ test('task deps selects the run but refuses installation before an accepted chec
   const result = await main(['task', 'deps'], overrides(root, messages, {
     terminalIsInteractive: () => true,
     confirmDependencyInstall: async () => { confirmations += 1; return true; },
-    resolveCommandExecutable: async () => '/usr/bin/git',
+    resolveCommandExecutable: async () => fixtureGit,
   }));
   assert.equal(result, EXIT_CODES.REPOSITORY_CONFLICT, messages.join('\n'));
   assert.equal(confirmations, 0);

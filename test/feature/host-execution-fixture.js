@@ -1,3 +1,4 @@
+import { fixtureGit } from '../helpers/git-executable.js';
 import {managedPolicy} from '../fixtures/execution-policy.js';
 import {bodyDigest} from '../../src/protocols/project.js';
 import assert from 'node:assert/strict';
@@ -37,7 +38,7 @@ PROTOCOL_METADATA.digest = bodyDigest(PROTOCOL_METADATA, PROTOCOL_BODY);
 const PROTOCOL_REF = `protocol:database-changes:3:${PROTOCOL_METADATA.digest}`;
 
 async function git(root, ...args) {
-  return (await execFile('/usr/bin/git', ['-C', root, ...args])).stdout.trim();
+  return (await execFile(fixtureGit, ['-C', root, ...args])).stdout.trim();
 }
 
 async function npmExecutable() {
@@ -184,7 +185,7 @@ async function fixture(t, { now = NOW, schemaV2 = false, ownedPaths = ['app/agen
   }
   await mkdir(join(root, '.rivet', 'protocols'), {recursive: true});
   await writeFile(join(root, '.rivet', 'protocols', 'database-changes.md'), '---\n' + YAML.stringify(PROTOCOL_METADATA) + '---\n\n' + PROTOCOL_BODY);
-  await execFile('/usr/bin/git', ['init', '--quiet', '--initial-branch=main', root]);
+  await execFile(fixtureGit, ['init', '--quiet', '--initial-branch=main', root]);
   await git(root, 'add', '.');
   await git(root, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--quiet', '-m', 'fixture');
   const { stdout: gitPath } = await execFile('which', ['git']);

@@ -1,3 +1,4 @@
+import { fixtureGit } from '../helpers/git-executable.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { execFile as callback } from 'node:child_process';
@@ -25,7 +26,7 @@ async function fixture(t, conflict = false) {
   await writeFile(join(primary,'.gitignore'),'build.log\nreports/\nnode_modules/\n');
   await git(primary,'add','.gitignore');
   const baseSha = await commit(primary, 'base', 'base\n');
-  const gitClient = await createGitClient({gitExecutable: await realpath('/usr/bin/git')});
+  const gitClient = await createGitClient({gitExecutable: await realpath(fixtureGit)});
   const statePaths = await resolveStatePaths(primary, 'test-run');
   const target = join(root, 'integration'); await gitClient.createWorktree(primary, {path:target,branch:'feature/integration',baseSha});
   const participants = [];

@@ -1,3 +1,4 @@
+import { fixtureGit } from '../helpers/git-executable.js';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {cp,mkdir,mkdtemp,realpath,rm,readFile,writeFile,chmod,symlink,link,rename,lstat} from 'node:fs/promises';
@@ -13,7 +14,7 @@ import {validatePolicyTranslation,compileModelPolicy} from '../../src/models/pol
 const prose='Use high reasoning: Astra/Opus for coordination and independent review; Sol for implementation; Luna for bounded fixes.';
 const routes=['coordination','independent-review','implementation','bounded-fix'];
 function translation(){return {routes:routes.map((route,i)=>({route,candidates:(i<2?['Astra','Opus']:[i===2?'Sol':'Luna']).map(modelReference=>({modelReference,harness:null,effort:'high'})),source:prose,rationale:'Requested work category.'})),assumptions:[]};}
-async function fixture(t){const root=await realpath(await mkdtemp(join(tmpdir(),'rivet-policy-test-')));t.after(()=>rm(root,{recursive:true,force:true}));execFileSync('/usr/bin/git',['init','-q',root]);await cp(new URL('../fixtures/config/valid/.rivet/',import.meta.url),join(root,'.rivet'),{recursive:true});return root;}
+async function fixture(t){const root=await realpath(await mkdtemp(join(tmpdir(),'rivet-policy-test-')));t.after(()=>rm(root,{recursive:true,force:true}));execFileSync(fixtureGit,['init','-q',root]);await cp(new URL('../fixtures/config/valid/.rivet/',import.meta.url),join(root,'.rivet'),{recursive:true});return root;}
 function services(root){const messages=[],questions=[];let calls=0;return {messages,questions,get calls(){return calls;},overrides:{env:{HOME:root},cwd:()=>root,reportFailure:false,terminalIsInteractive:()=>true,output:{log:s=>messages.push(s),error:s=>messages.push(s)},harnesses:{discover:async()=>[{kind:'codex',executable:'/opt/codex',version:'1'}],select:async()=>({kind:'codex',executable:'/opt/codex',version:'1'})},models:{translatePolicy:async()=>{calls++;return translation();}},modelPolicyPrompt:async q=>{questions.push(q);if(q.type==='confirm')return true;if(q.id.startsWith('candidate'))return 0;if(q.id.startsWith('harness'))return 'codex';if(q.id.startsWith('model'))return `exact-${q.reference.toLowerCase()}`;throw Error(q.id);}}};}
 
 test('plain policy rejects missing duplicate unsafe and authority-bearing translations',()=>{for(const mutate of [x=>x.routes.pop(),x=>x.routes[1].route='coordination',x=>x.limits={},x=>x.routes[0].candidates[0].effort='turbo',x=>x.assumptions.push('\x1b[31m')]){const value=translation();mutate(value);assert.throws(()=>validatePolicyTranslation(value,prose));}assert.equal(validatePolicyTranslation(translation(),prose).routes.length,4);});

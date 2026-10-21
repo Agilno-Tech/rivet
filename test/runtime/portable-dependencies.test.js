@@ -1,3 +1,4 @@
+import { fixtureGit } from '../helpers/git-executable.js';
 import assert from 'node:assert/strict';
 import {execFile as callback} from 'node:child_process';
 import {mkdtemp,mkdir,writeFile,readFile,realpath,rm,access,symlink,cp,rename} from 'node:fs/promises';
@@ -32,7 +33,7 @@ async function fixture(t,steps=[{cwd:'.',argv:['python3','-m','venv','--without-
  await execFile('git',['init','--quiet','--initial-branch=main',projectRoot]);
  await execFile('git',['-C',projectRoot,'add','.']);
  await execFile('git',['-C',projectRoot,'-c','user.name=Test','-c','user.email=test@example.invalid','commit','--quiet','-m','fixture']);
- const gitClient=await createGitClient({gitExecutable:await realpath('/usr/bin/git')});
+ const gitClient=await createGitClient({gitExecutable:await realpath(fixtureGit)});
  const expectedCommit=(await gitClient.inspectRepository(projectRoot)).headSha;
  await execFile('git',['-C',projectRoot,'worktree','add','--quiet','-b','feature/deps',worktreePath,expectedCommit]);
  const dependencies={inputs:['requirements.txt'],provides:['./.rivet-deps/venv/bin/python'],steps};

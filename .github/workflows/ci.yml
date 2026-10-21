@@ -29,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [macos-latest, ubuntu-latest]
         node: [22, 24]
         shard: [1, 2, 3, 4]
     runs-on: ${{ matrix.os }}
@@ -43,11 +43,8 @@ jobs:
           registry-url: https://registry.npmjs.org
       - run: npm ci
       - run: npm run build
-      - name: Run test shard
-        run: npm test -- --shard=${{ matrix.shard }}/4
-      - name: Evaluate isolated fixture scenarios owned by this shard
-        timeout-minutes: 15
-        run: npm run evals -- --mode=fixture --shard=${{ matrix.shard }}/4
+      - name: Run isolated tests and score fixture criteria
+        run: node scripts/verify-tests.mjs --shard=${{ matrix.shard }}/4
       - name: Verify global tarball and Git installation plus first use
         if: matrix.shard == 1
         timeout-minutes: 10

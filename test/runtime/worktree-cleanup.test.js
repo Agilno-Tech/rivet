@@ -1,3 +1,4 @@
+import { fixtureGit } from '../helpers/git-executable.js';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {execFile as callback} from 'node:child_process';
@@ -15,14 +16,14 @@ import {resolveExistingStatePaths,resolveExistingFeatureRunPaths} from '../../sr
 import {previewTaskWorktreeCleanup,applyTaskWorktreeCleanup,confirmTaskWorktreeCleanup} from '../../src/git/worktree-cleanup.js';
 import {main} from '../../src/cli/main.js';
 const execFile=promisify(callback), NOW='2029-01-01T00:00:00.000Z';
-async function git(root,...args){return (await execFile('/usr/bin/git',['-C',root,...args])).stdout.trim();}
+async function git(root,...args){return (await execFile(fixtureGit,['-C',root,...args])).stdout.trim();}
 async function fixture(t,{parallel=false}={}){
  const parent=await realpath(await mkdtemp(join(tmpdir(),'rivet-cleanup-'))),root=join(parent,'project');
  t.after(()=>rm(parent,{recursive:true,force:true}));await mkdir(root);
  await cp(new URL('../fixtures/config/valid/.rivet/',import.meta.url),join(root,'.rivet'),{recursive:true});
  const policyPath=join(root,'.rivet','orchestration.yaml');const policy=YAML.parse(await readFile(policyPath,'utf8'));policy.executionPolicy=managedPolicy();if(typeof parallel==='number'){policy.executionPolicy.limits.workersPerTask=parallel;policy.executionPolicy.limits.agentExecutions=parallel;}if(parallel)for(const role of policy.roles){if(['worker','manager'].includes(role.kind))role.capacity=typeof parallel==='number'?parallel:2;if(typeof parallel==='number'&&role.kind==='worker')role.budget={timeMinutes:1,tokenLimit:1000,costUsd:1,taskLimit:1};}await writeFile(policyPath,YAML.stringify(policy));
  await writeFile(join(root,'.gitignore'),'ignored/\n');await git(root,'init','-q','-b','main');await git(root,'add','.');await git(root,'-c','user.name=Test','-c','user.email=test@example.invalid','commit','-qm','fixture');
- const gitClient=await createGitClient({gitExecutable:await realpath('/usr/bin/git')});const workflow=createFeatureWorkflow({gitClient,now:()=>NOW,protocolsFor:async()=>[],planningClientFor:async()=>{throw Error('no provider');},executeFeature:async()=>{throw Error('no provider');}});
+ const gitClient=await createGitClient({gitExecutable:await realpath(fixtureGit)});const workflow=createFeatureWorkflow({gitClient,now:()=>NOW,protocolsFor:async()=>[],planningClientFor:async()=>{throw Error('no provider');},executeFeature:async()=>{throw Error('no provider');}});
  const proposal=await workflow.propose({project:root,source:{kind:'inline',value:'# Add agenda\n\n## Acceptance criteria\n\n- Add agenda.\n'},client:'host',decomposition:{schemaVersion:1,kind:'agilno.feature-decomposition',workItems:parallel?Array.from({length:typeof parallel==='number'?parallel:2},(_,i)=>`item${i}`).map(id=>({id,dependencies:[],objective:`Add ${id}.`,ownedPaths:[`${id}.js`],acceptanceCriterionIndexes:[1]})):[{objective:'Add agenda.',ownedPaths:['agenda.js'],acceptanceCriterionIndexes:[1]}]}});
  const approved=await workflow.start({project:root,runId:proposal.runId,expectedVersion:proposal.version,proposalDigest:proposal.proposalDigest});
  const execution=createHostExecution({gitClient,now:()=>NOW});const prepared=await execution.prepare({project:root,runId:approved.runId,expectedRunVersion:approved.version});
@@ -60,7 +61,7 @@ test('cleanup retains active/failed/blocked tasks, unknown owners, dirt, ignored
  await rename(f.path,f.path+'-saved');await symlink(f.path+'-saved',f.path);assert.equal((await inspect()).reason,'symlink-or-noncanonical');
 });
 test('task cleanup previews completed tasks and requires interactive exact approval',async t=>{
- const f=await fixture(t),messages=[];const options={resolveCommandExecutable:async()=>realpath('/usr/bin/git'),cwd:()=>f.root,output:{log:v=>messages.push(v),error:v=>messages.push(v),json(){}}};
+ const f=await fixture(t),messages=[];const options={resolveCommandExecutable:async()=>realpath(fixtureGit),cwd:()=>f.root,output:{log:v=>messages.push(v),error:v=>messages.push(v),json(){}}};
  assert.equal(await main(['task','cleanup','--preview'],options),0);assert.ok(messages.some(v=>v.startsWith('Eligible:')));assert.ok(messages.some(v=>v.includes('No checkout')));
  assert.notEqual(await main(['task','cleanup'],{...options,terminalIsInteractive:()=>false}),0);
  assert.equal(await main(['task','cleanup'],{...options,terminalIsInteractive:()=>true,confirmWorktreeCleanup:async()=>false}),0);assert.ok((await lstat(f.path)).isDirectory());
@@ -188,7 +189,7 @@ test('retention is disabled by default, requires separate approval, honors age a
 test('retention configuration drift suspends removal and CLI approval is separate from one-time cleanup',async t=>{
  const f=await fixture(t);const {configureWorktreeRetention,sweepWorktreeRetention}=await import('../../src/runtime/worktree-retention.js');
  const output={log(){},error(){},json(){}};
- const options={resolveCommandExecutable:async()=>realpath('/usr/bin/git'),cwd:()=>f.root,output,terminalIsInteractive:()=>true,confirmWorktreeCleanup:async()=>{throw Error('wrong approval');},confirmWorktreeRetention:async()=>false};
+ const options={resolveCommandExecutable:async()=>realpath(fixtureGit),cwd:()=>f.root,output,terminalIsInteractive:()=>true,confirmWorktreeCleanup:async()=>{throw Error('wrong approval');},confirmWorktreeRetention:async()=>false};
  assert.equal(await main(['task','cleanup','--retention=7d'],options),0);
  assert.notEqual(await main(['task','cleanup','--retention=7d'],{...options,terminalIsInteractive:()=>false}),0);
  assert.equal(await main(['task','cleanup','--retention=7d'],{...options,confirmWorktreeRetention:async()=>true}),0);
@@ -201,7 +202,7 @@ test('retention configuration drift suspends removal and CLI approval is separat
 test('application status never runs retention but foreground host execution does',async t=>{
  const f=await fixture(t);const {configureWorktreeRetention}=await import('../../src/runtime/worktree-retention.js');const {createRivetApplication}=await import('../../src/runtime/application.js');
  await configureWorktreeRetention({projectRoot:f.root,retention:'7d'},{confirm:async()=>true});
- const app=createRivetApplication({env:{...process.env,RIVET_GIT_EXECUTABLE:await realpath('/usr/bin/git')},now:()=>new Date(Date.parse(NOW)+8*86400000).toISOString()});
+ const app=createRivetApplication({env:{...process.env,RIVET_GIT_EXECUTABLE:await realpath(fixtureGit)},now:()=>new Date(Date.parse(NOW)+8*86400000).toISOString()});
  await app.work.status({project:f.root,runId:f.runId});assert.ok((await lstat(f.path)).isDirectory());
  // This task is terminal, so preparation itself can reject after the foreground sweep.
  await app.work.prepare({project:f.root,runId:f.runId,expectedRunVersion:f.run.version}).catch(()=>{});

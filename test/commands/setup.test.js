@@ -1,3 +1,4 @@
+import { fixtureGit } from '../helpers/git-executable.js';
 import assert from 'node:assert/strict';
 import * as nodeFs from 'node:fs';
 import {
@@ -513,7 +514,7 @@ test('setup reports model configuration failure separately from successful harne
 
 test('fresh interactive setup saves the approved model routes and matching worker concurrency in one wizard',async t=>{
  const root=await createProject(t),capture=captureOutput(),{dependencies}=makeDependencies(root,capture);
- const {execFileSync}=await import('node:child_process');execFileSync('/usr/bin/git',['init','-q',root]);
+ const {execFileSync}=await import('node:child_process');execFileSync(fixtureGit,['init','-q',root]);
  dependencies.terminalIsInteractive=()=>true;dependencies.env={RIVET_CODEX_MODEL:'setup-model'};
  dependencies.harnesses={discover:async()=>[{kind:'codex',executable:'/opt/codex'}]};
  dependencies.setupBatchPrompt=async()=>true;

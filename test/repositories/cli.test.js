@@ -1,3 +1,4 @@
+import { fixtureGit } from '../helpers/git-executable.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, cp, readFile, writeFile, rm, mkdir, realpath } from 'node:fs/promises';
@@ -100,7 +101,7 @@ test('repository CLI suppresses provider error payloads',async t=>{
 
 test('remote discovery uses the same configured Git executable as project discovery',async t=>{
   const f=await fixture(t);
-  f.deps.env.RIVET_GIT_EXECUTABLE='/usr/bin/git';
+  f.deps.env.RIVET_GIT_EXECUTABLE=fixtureGit;
   const commands=[];
   f.deps.runGit=async(command,args)=>{
     commands.push({command,args});

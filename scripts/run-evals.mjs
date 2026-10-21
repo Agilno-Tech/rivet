@@ -118,11 +118,17 @@ export function summarizeScenario(scenario, observation) {
   };
 }
 
-async function loadManifest() {
+export async function loadManifest() {
   const path = join(ROOT, 'evals', 'scenarios.json');
   const stat = await lstat(path);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024) invalid();
   return validateManifest(JSON.parse(await readFile(path, 'utf8')));
+}
+export function fixtureEnvironment(scratch) {
+  return { PATH: process.env.PATH, HOME: scratch, USERPROFILE: scratch,
+    TMPDIR: scratch, TMP: scratch, TEMP: scratch, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: join(scratch, 'gitconfig'),
+    GIT_TERMINAL_PROMPT: '0', npm_config_cache: join(scratch, 'npm-cache'), npm_config_userconfig: join(scratch, 'npmrc'),
+    npm_config_globalconfig: join(scratch, 'global-npmrc'), npm_config_update_notifier: 'false' };
 }
 export async function runEvaluations(options, { execute = runBounded, signal, liveDependencies = {} } = {}) {
   // Revalidate programmatic options too; no caller-controlled argv or suite paths.
@@ -137,10 +143,7 @@ export async function runEvaluations(options, { execute = runBounded, signal, li
   }
   const manifest = await loadManifest();
   const scratch = await mkdtemp(join(tmpdir(), 'rivet-evals-'));
-  const environment = { PATH: process.env.PATH, HOME: scratch, USERPROFILE: scratch,
-    TMPDIR: scratch, TMP: scratch, TEMP: scratch, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: join(scratch, 'gitconfig'),
-    GIT_TERMINAL_PROMPT: '0', npm_config_cache: join(scratch, 'npm-cache'), npm_config_userconfig: join(scratch, 'npmrc'),
-    npm_config_globalconfig: join(scratch, 'global-npmrc'), npm_config_update_notifier: 'false' };
+  const environment = fixtureEnvironment(scratch);
   try {
     const revision = await execute('git', ['rev-parse', 'HEAD'], { cwd: ROOT, env: environment, timeoutMs: 3000, signal });
     const sourceCommit = /^[a-f0-9]{40,64}\s*$/.test(revision.stdout ?? '') ? revision.stdout.trim() : null;

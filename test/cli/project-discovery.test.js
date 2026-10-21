@@ -1,3 +1,4 @@
+import { fixtureGit } from '../helpers/git-executable.js';
 import assert from 'node:assert/strict';
 import { execFile as execFileCallback } from 'node:child_process';
 import { cp, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
@@ -14,7 +15,7 @@ const CONFIG = new URL('../fixtures/config/valid/.rivet/', import.meta.url);
 test('configured project is inferred from root or a nested directory', async t => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'rivet-project-discovery-')));
   t.after(() => rm(root, { recursive: true, force: true }));
-  await execFile('/usr/bin/git', ['-C', root, 'init', '-q']);
+  await execFile(fixtureGit, ['-C', root, 'init', '-q']);
   await cp(CONFIG, join(root, '.rivet'), { recursive: true });
   const nested = join(root, 'src', 'nested');
   await mkdir(nested, { recursive: true });
@@ -42,13 +43,13 @@ test('configured project discovery supports spaces and linked Git worktree metad
   const root = join(parent, 'main project');
   const worktree = join(parent, 'linked project');
   await mkdir(root);
-  await execFile('/usr/bin/git', ['-C', root, 'init', '-q', '-b', 'main']);
+  await execFile(fixtureGit, ['-C', root, 'init', '-q', '-b', 'main']);
   await cp(CONFIG, join(root, '.rivet'), { recursive: true });
   await writeFile(join(root, 'README.md'), 'fixture\n');
-  await execFile('/usr/bin/git', ['-C', root, 'add', '.']);
-  await execFile('/usr/bin/git', ['-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+  await execFile(fixtureGit, ['-C', root, 'add', '.']);
+  await execFile(fixtureGit, ['-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
     'commit', '-q', '-m', 'fixture']);
-  await execFile('/usr/bin/git', ['-C', root, 'worktree', 'add', '-q', '-b', 'linked', worktree]);
+  await execFile(fixtureGit, ['-C', root, 'worktree', 'add', '-q', '-b', 'linked', worktree]);
   const nested = join(worktree, 'nested folder');
   await mkdir(nested);
   assert.equal((await resolveConfiguredProject(nested)).root, worktree);
@@ -59,6 +60,6 @@ test('unconfigured or non-Git current directories have actionable errors', async
   const root = await realpath(await mkdtemp(join(tmpdir(), 'rivet-project-discovery-')));
   t.after(() => rm(root, { recursive: true, force: true }));
   await assert.rejects(() => resolveConfiguredProject(root), /Git project configured/);
-  await execFile('/usr/bin/git', ['-C', root, 'init', '-q']);
+  await execFile(fixtureGit, ['-C', root, 'init', '-q']);
   await assert.rejects(() => resolveConfiguredProject(root), /rivet setup --write/);
 });
