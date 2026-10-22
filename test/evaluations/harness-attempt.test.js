@@ -45,11 +45,18 @@ test('cancelling an active Worker records cancellation and dispatches no retry',
  const result=await runLiveEvaluation({scenario:'feature',profile:{id:'codex',costPolicy}},{interactive:true,confirm:async()=>true,confirmActivation:async()=>true,clients:client,signal:controller.signal});
  if(result.evidence.workspace)t.after(()=>rm(result.evidence.workspace,{recursive:true,force:true}));assert.equal(result.outcome,'cancelled');assert.equal(client.calls.worker,1);assert.equal(result.retryCount,0);
 });
-test('an unanswered activation is bounded by the same deadline and late approval never dispatches a Worker',async t=>{
- const client=clients('feature');let approve,approvalSignal,workspace;
- const pending=runLiveEvaluation({scenario:'feature',profile:{id:'codex',costPolicy,timeoutMs:3000}},{interactive:true,confirm:async()=>true,confirmActivation:(proposal,options)=>{workspace=proposal.workspace;approvalSignal=options?.signal;return new Promise(resolve=>{approve=resolve})},clients:client});
+test('an unanswered activation is bounded by the same deadline and late approval never dispatches a Worker',{timeout:60000},async t=>{
+ const client=clients('feature');let approve,approvalSignal,workspace,activationReached;
+ const activated=new Promise(resolve=>{activationReached=resolve});
+ // Keep repository setup independent of runner speed while exercising the real deadline timer.
+ t.mock.timers.enable({apis:['setTimeout']});
+ const plan=client.planning.propose;
+ client.planning.propose=async contract=>{const result=await plan(contract);t.mock.timers.tick(2000);return result};
+ const pending=runLiveEvaluation({scenario:'feature',profile:{id:'codex',costPolicy,timeoutMs:3000}},{interactive:true,confirm:async()=>true,confirmActivation:(proposal,options)=>{workspace=proposal.workspace;approvalSignal=options?.signal;return new Promise(resolve=>{approve=resolve;activationReached()})},clients:client});
  t.after(async()=>{if(workspace)await rm(workspace,{recursive:true,force:true})});
- let guard;const result=await Promise.race([pending,new Promise(resolve=>{guard=setTimeout(()=>resolve('stalled'),4500)})]);clearTimeout(guard);
- assert.notEqual(result,'stalled');assert.equal(typeof approve,'function');assert.equal(result.outcome,'cancelled');assert.equal(result.reason,'timeout');assert.equal(approvalSignal.aborted,true);
+ await Promise.race([activated,pending.then(result=>assert.fail(`Evaluation ended before activation: ${JSON.stringify(result)}`))]);
+ t.mock.timers.tick(999);assert.equal(approvalSignal.aborted,false);assert.equal(client.calls.worker,0);
+ t.mock.timers.tick(1);const result=await pending;
+ assert.equal(typeof approve,'function');assert.equal(result.outcome,'cancelled');assert.equal(result.reason,'timeout');assert.equal(approvalSignal.aborted,true);
  approve(true);await new Promise(resolve=>setImmediate(resolve));assert.equal(client.calls.worker,0);assert.equal(client.calls.planning,1);
 });
