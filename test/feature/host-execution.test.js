@@ -452,21 +452,26 @@ test('verification rejects source changes made while configured gates run', asyn
   const before = await execution.status({ project: root, runId: approved.runId });
   const integration = before.checkout.path;
   const marker = join(dirname(root), 'gate-started');
+  const release = `${marker}-release`;
   await writeFile(gate, [
     '#!/usr/bin/env node',
     "const fs = require('node:fs');",
     `const marker = ${JSON.stringify(marker)};`,
-    "if (!fs.existsSync(marker)) { fs.writeFileSync(marker, 'started'); setTimeout(() => process.exit(0), 2000); }",
+    `const release = ${JSON.stringify(release)};`,
+    "if (!fs.existsSync(marker)) { fs.writeFileSync(marker, 'started'); setInterval(() => { if (fs.existsSync(release)) process.exit(0); }, 20); setTimeout(() => process.exit(1), 30000); }",
     'else process.exit(0);',
     '',
   ].join('\n'));
   const verification = execution.verify(verifyInput);
-  await waitForFile(marker);
-  await writeFile(join(integration, 'UNAPPROVED.txt'), 'changed during checks\n');
-  await git(integration, 'add', 'UNAPPROVED.txt');
-  await git(integration, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
-    'commit', '--quiet', '-m', 'mid-gate drift');
-  await assert.rejects(verification, error => error.code === 'ERR_HOST_EXECUTION_REPOSITORY');
+  const rejected = assert.rejects(verification, error => error.code === 'ERR_HOST_EXECUTION_REPOSITORY');
+  rejected.catch(() => {});
+  try {
+    await waitForFile(marker);
+    await writeFile(join(integration, 'UNAPPROVED.txt'), 'changed during checks\n');
+    await git(integration, 'add', 'UNAPPROVED.txt');
+    await git(integration, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+      'commit', '--quiet', '-m', 'mid-gate drift');
+  } finally { await writeFile(release, 'release'); await rejected; }
   const observed = await execution.status({ project: root, runId: approved.runId });
   assert.equal(observed.run.status, 'running');
   assert.equal(observed.verification, null);
@@ -549,27 +554,32 @@ test('final approval status requires its private report and accepted commit iden
 test('verification holds the host lock through final run publication', async t => {
   const { root, approved, gate, execution, verifyInput } = await completedWorker(t);
   const marker = join(dirname(root), 'publication-gate-started');
+  const release = `${marker}-release`;
   await writeFile(gate, [
     '#!/usr/bin/env node',
     "const fs = require('node:fs');",
     `const marker = ${JSON.stringify(marker)};`,
-    "if (!fs.existsSync(marker)) { fs.writeFileSync(marker, 'started'); setTimeout(() => process.exit(0), 700); }",
+    `const release = ${JSON.stringify(release)};`,
+    "if (!fs.existsSync(marker)) { fs.writeFileSync(marker, 'started'); setInterval(() => { if (fs.existsSync(release)) process.exit(0); }, 20); setTimeout(() => process.exit(1), 30000); }",
     'else process.exit(0);',
     '',
   ].join('\n'));
   let settled = false;
   const verifying = execution.verify(verifyInput).finally(() => { settled = true; });
-  await waitForFile(marker);
-  const paths = await resolveFeatureRunPaths(root, approved.runId);
-  const stateLock = await acquireLock(paths.lockPath);
+  verifying.catch(() => {});
+  let stateLock;
   try {
+    await waitForFile(marker);
+    const paths = await resolveFeatureRunPaths(root, approved.runId);
+    stateLock = await acquireLock(paths.lockPath);
+    await writeFile(release, 'release');
     await waitForFile(join(paths.runDir, 'verification.json'));
     assert.equal(settled, false);
     const observed = await execution.status({ project: root, runId: approved.runId });
     assert.equal(observed.run.status, 'running');
     await assert.rejects(() => acquireLock(join(paths.runDir, 'host-operation.lock')),
       error => error.code === 'ERR_STATE_LOCKED');
-  } finally { await stateLock.release(); }
+  } finally { await writeFile(release, 'release'); await stateLock?.release(); await verifying; }
   const verified = await verifying;
   assert.equal(verified.status, 'awaiting-final-approval');
 });

@@ -265,7 +265,8 @@ async function completedWorker(t, options = {}) {
 }
 
 async function waitForFile(path) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  // Wait for readiness, allowing slow CI process startup without sleeping after success.
+  for (let attempt = 0; attempt < 1200; attempt += 1) {
     try { await access(path); return; } catch {}
     await delay(25);
   }

@@ -58,7 +58,8 @@ test('bootstrap termination cleans the owned private copy and preserves the inst
  await writeFile(join(f.runtime,'npm'),`#!/usr/bin/env node\nconst fs=require('node:fs');if(process.argv[2]==='--version')console.log('10.9.0');else{fs.writeFileSync(process.env.BOOTSTRAP_CALLS,'ready');setInterval(()=>{},1000);}\n`,{mode:0o755});
  const child=spawn('/bin/sh',[installer,'--artifact',f.artifact,'--sha256',f.digest,'--prefix',f.prefix],{env:f.env,stdio:'ignore'});t.after(()=>child.kill('SIGKILL'));
  const exit=new Promise(resolve=>child.once('close',(code,signal)=>resolve({code,signal})));
- let ready=false;for(let attempt=0;attempt<100;attempt++){if(await readFile(f.calls).then(()=>true,()=>false)){ready=true;break;}await new Promise(resolve=>setTimeout(resolve,20));}
+ // Allow slow CI startup; continue immediately when the child signals readiness.
+ let ready=false;for(let attempt=0;attempt<1500;attempt++){if(await readFile(f.calls).then(()=>true,()=>false)){ready=true;break;}await new Promise(resolve=>setTimeout(resolve,20));}
  assert.equal(ready,true);assert.equal((await readdir(f.temporary)).filter(name=>name.startsWith('rivet-install-')).length,1);child.kill('SIGTERM');assert.equal((await exit).code,143);
  assert.deepEqual((await readdir(f.temporary)).filter(name=>name.startsWith('rivet-install-')),[]);assert.equal(await readFile(join(f.prefix,'keep'),'utf8'),'preserved');
 });
@@ -70,7 +71,8 @@ test('bootstrap interruption stops npm descendants before reporting exit and rem
  const child=spawn('/bin/sh',[installer,'--artifact',f.artifact,'--sha256',f.digest,'--prefix',f.prefix],{env:f.env,stdio:'ignore'});let descendantPid;
  t.after(()=>{child.kill('SIGKILL');if(descendantPid)try{process.kill(descendantPid,'SIGKILL');}catch{}});
  const exit=new Promise(resolve=>child.once('close',(code,signal)=>resolve({code,signal})));
- let ready=false;for(let attempt=0;attempt<100;attempt++){if(await readFile(heartbeat).then(()=>true,()=>false)){ready=true;break;}await new Promise(resolve=>setTimeout(resolve,20));}
+ // Allow slow CI startup; continue immediately when the child signals readiness.
+ let ready=false;for(let attempt=0;attempt<1500;attempt++){if(await readFile(heartbeat).then(()=>true,()=>false)){ready=true;break;}await new Promise(resolve=>setTimeout(resolve,20));}
  assert.equal(ready,true);descendantPid=Number(await readFile(pidFile,'utf8'));child.kill('SIGTERM');assert.equal((await exit).code,143);
  const before=await readFile(heartbeat,'utf8');await new Promise(resolve=>setTimeout(resolve,100));assert.equal(await readFile(heartbeat,'utf8'),before,'descendant must stop before bootstrap exits');
  assert.deepEqual((await readdir(f.temporary)).filter(name=>name.startsWith('rivet-install-')),[]);
