@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.1.0-alpha.5](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.4...v0.1.0-alpha.5) (2026-10-22)
+
+
+### Features
+
+* add managed task orchestration and guided setup ([#66](https://github.com/Agilno-Tech/rivet/issues/66)) ([77cdfd2](https://github.com/Agilno-Tech/rivet/commit/77cdfd24bd73786261d0fa8cbb07adee8df3184a))
+
+### Fixes
+
+* Resolve abbreviated Bitbucket pull-request commit hashes, including fork sources, before validating a review. Open PRs are no longer rejected solely because Bitbucket returned a shortened hash.
+* Defer denied headless Worker checks to trusted-host verification, preserve safe preparation across provider retries, and clarify status after cleanup.
+
+### Recommended defaults and upgrading
+
+Fresh setup recommends 500,000 cumulative Worker tokens with larger parent allowances for parallel work. Claude's $2 Worker spending cap is unchanged. Existing project configuration and approved task budgets are preserved.
+
+Run `rivet update` from your configured project, confirm `rivet --version` reports `0.1.0-alpha.5` (or newer), and restart your coding session. Then retry `rivet review` with the Bitbucket PR URL. No token or provider configuration change is required specifically for the shortened-hash fix.
+
 ## [0.1.0-alpha.4](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.3...v0.1.0-alpha.4) (2026-10-09)
 
 
