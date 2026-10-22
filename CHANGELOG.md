@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0-alpha.5](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.4...v0.1.0-alpha.5) (2026-10-22)
+
+
+### Features
+
+* add managed task orchestration and guided setup ([#66](https://github.com/Agilno-Tech/rivet/issues/66)) ([77cdfd2](https://github.com/Agilno-Tech/rivet/commit/77cdfd24bd73786261d0fa8cbb07adee8df3184a))
+
 ## [0.1.0-alpha.4](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.3...v0.1.0-alpha.4) (2026-10-09)
 
 
