@@ -58,6 +58,8 @@ Bootstrap failures also include a bounded reason: `target-spawn-failed` means th
 
 ## A Claude task exhausts its token budget despite a low cost
 
+Fresh setup now recommends 500,000 tokens per Worker while retaining Claude’s $2 spending cap. Projects created with the earlier 100,000-token recommendation retain their saved limits; see the [recommended allowances](./runtime-reference.md#native-usage-and-task-budgets) before updating policy.
+
 Cached context still contributes to the token count. Rivet uses Claude's native counters, including repeated cache reads, and retains an overrun as `budget-exhausted`. Inspect task status, review the token and cost allocations in project orchestration policy, then create and approve a new plan if a larger allowance is appropriate. Resuming the same approved task does not increase its budget. See [native usage and task budgets](./runtime-reference.md#native-usage-and-task-budgets).
 
 ## A branch is already checked out

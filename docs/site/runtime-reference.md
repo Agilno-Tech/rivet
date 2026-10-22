@@ -163,6 +163,18 @@ Claude Worker results use the CLI's native `modelUsage` counters and `total_cost
 
 A measured overrun or native cost-cap stop records the observed usage and ends the task as `budget-exhausted`. It cannot accept success evidence or start another reconciliation. An operation already in progress may finish, but its result cannot advance an exhausted task to completion. Limits are checked against the approved allocation; counts are never clamped to make a task pass.
 
+New setup recommends these cumulative token allowances:
+
+| Role | Tokens |
+| --- | ---: |
+| Worker | 500,000 |
+| Manager | 1,250,000 |
+| Boss | 2,500,000 |
+
+The shared role allowances accommodate Claude's cumulative cache accounting and leave room for two Worker allocations within a Manager. Claude's default **$2 per Worker launch** and **$1 per planning call**, time limits, and approval gates are unchanged. The 500,000-token Worker allowance covered the small authenticated Claude trial; it is not a guarantee for every task.
+
+Existing configuration and approved plans retain their saved budgets. To adopt these recommendations in an existing project, review the role `budget.tokenLimit` values in `.rivet/orchestration.yaml`, commit the configuration, and approve a new task plan. Rerunning setup does not overwrite your policy.
+
 Large contexts can consume a token allowance even when cache use keeps the estimated cost low. Review the project's orchestration budgets and approve a new plan when a different allowance is needed. Existing approved runs keep their limits. Codex's current direct-result adapter still uses model-reported usage; those figures are estimates, not native usage measurements or billing guarantees.
 
 ### CLI and desktop host sessions

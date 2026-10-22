@@ -293,12 +293,17 @@ test('rerunning setup preserves an edited valid configuration and skips init rep
   const projectPath = join(root, '.rivet', 'project.yaml');
   const edited = (await readFile(projectPath, 'utf8')).replace('name: setup-fixture', 'name: user-owned-config');
   await writeFile(projectPath, edited);
+  const budgetPath = join(root, '.rivet', 'orchestration.yaml');
+  const savedBudget = (await readFile(budgetPath, 'utf8')).replace('tokenLimit: 500000', 'tokenLimit: 175000');
+  await writeFile(budgetPath, savedBudget);
 
   const second = await runSetup(t, root, { write: true });
   assert.equal(second.code, EXIT_CODES.SUCCESS);
   assert.equal(second.result.status, 'configured');
   assert.equal(second.result.configuration.status, 'preserved');
   assert.equal(await readFile(projectPath, 'utf8'), edited);
+  assert.equal(await readFile(budgetPath, 'utf8'), savedBudget);
+  assert.equal((await loadProjectConfig(root)).orchestration.roles.find(role => role.kind === 'worker').budget.tokenLimit, 175000);
   assert.equal(second.calls.init.length, 0);
   await loadProjectConfig(root);
 });
@@ -569,4 +574,20 @@ test('setup batch approval decline cancellation failure and drift never enable p
     assert.equal(await readFile(quality,'utf8'),before+(mode==='drift'?'\n# concurrent edit\n':''),mode);
     if(['readonly','hardlink','output'].includes(mode))assert.equal(questions,0);
   }
+});
+
+test('fresh setup budgets support Claude cumulative tokens and two parallel workers without raising its spending cap',async t=>{
+ const root=await createProject(t),capture=captureOutput(),{dependencies}=makeDependencies(root,capture);
+ assert.equal(await setupCommand(parsedSetup(root,{write:true,json:false}),dependencies),0);
+ const config=await loadProjectConfig(root);
+ const budgets=Object.fromEntries(config.orchestration.roles.map(role=>[role.kind,role.budget]));
+ assert.equal(budgets.worker.tokenLimit,500000);
+ assert.equal(budgets.manager.tokenLimit,1250000);
+ assert.equal(budgets.boss.tokenLimit,2500000);
+ assert.ok(budgets.manager.tokenLimit>=2*budgets.worker.tokenLimit);
+ const {clientProfileFor}=await import('../../src/feature/client-profile.js');
+ assert.equal(clientProfileFor('claude',config.project.claude).execution.maxCostUsd,2);
+ assert.equal(clientProfileFor('claude',config.project.claude).planning.maxCostUsd,1);
+ assert.equal(budgets.worker.timeMinutes,120);
+ assert.equal(budgets.worker.costUsd,20);
 });

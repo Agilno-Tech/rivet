@@ -51,3 +51,53 @@ test('exact configured credential in diff is rejected before context escapes',as
  const transport=createTrustedProviderTransport({resolve:async()=>['93.184.216.34'],fetchPinned:async(_url,init)=>new Response(init.headers.accept==='application/vnd.github.diff'?`diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-old\n+${token}\n`:JSON.stringify({number:7,changed_files:1,state:'open',head:{sha:head},base:{sha:base},title:'Fix',body:''}))});
  await assert.rejects(createReviewSource({target,transport,headers:{authorization:`Bearer ${token}`}}).capture(),/secret|credential/i);
 });
+
+function shortBitbucket({sourceRepo='fork/repo', destinationRepo='team/repo', resolvedHead=head, resolvedBase=base, hash=head.slice(0,12), baseHash=base.slice(0,12), drift=false, closed=false, missing=false}={}) {
+ const target=parseReviewUrl('https://bitbucket.org/team/repo/pull-requests/7');
+ const requests=[];let headReads=0,posts=0;
+ const metadata={id:7,state:closed?'MERGED':'OPEN',source:{repository:{full_name:sourceRepo},commit:{hash}},destination:{repository:{full_name:destinationRepo},commit:{hash:baseHash}},title:'Fix',description:''};
+ const transport=createTrustedProviderTransport({resolve:async()=>['93.184.216.34'],fetchPinned:async(url,init)=>{
+  const path=new URL(url).pathname;requests.push(path);
+  if(init.method==='POST'){posts++;return new Response(JSON.stringify({id:9}));}
+  if(path.includes('/commit/')) {
+   if(missing)return new Response('{}',{status:404});
+   const value=path.endsWith('/'+hash)?(++headReads>1&&drift?hash+'c'.repeat(40-hash.length):resolvedHead):resolvedBase;
+   return new Response(JSON.stringify({hash:value}));
+  }
+  if(path.includes('/diffstat/'))return new Response(JSON.stringify({size:1}));
+  if(path.includes('/diff/'))return new Response('diff --git a/a.js b/a.js\n--- a/a.js\n+++ b/a.js\n@@ -1 +1 @@\n-old\n+new\n');
+  return new Response(JSON.stringify(metadata));
+ }});
+ return {source:createReviewSource({target,transport,headers:{}}),requests,posts:()=>posts};
+}
+test('Bitbucket resolves abbreviated fork and destination commits before capture and rechecks them',async()=>{
+ const f=shortBitbucket();const snapshot=await f.source.capture();
+ assert.equal(snapshot.headSha,head);assert.equal(snapshot.baseSha,base);
+ assert.equal(f.requests.filter(p=>p.endsWith(`/repositories/fork/repo/commit/${head.slice(0,12)}`)).length,2);
+ assert.equal(f.requests.filter(p=>p.endsWith(`/repositories/team/repo/commit/${base.slice(0,12)}`)).length,2);
+ assert.ok(f.requests.some(p=>p.endsWith(`/repositories/team/repo/diff/${head}..${base}`)));
+ await f.source.publishComment(snapshot,'Summary');assert.equal(f.posts(),1);
+});
+for(const options of [{resolvedHead:'a'.repeat(12)},{resolvedHead:base},{resolvedBase:head},{hash:'../bad'},{sourceRepo:'../evil'},{destinationRepo:'other/repo'},{missing:true},{closed:true}])test(`Bitbucket rejects unsafe or unresolved short identity ${JSON.stringify(options)}`,async()=>{
+ const f=shortBitbucket(options);await assert.rejects(f.source.capture());assert.equal(f.posts(),0);
+ assert.ok(!f.requests.some(p=>p.includes('/diff/')));
+});
+test('Bitbucket re-resolves short commits and rejects drift during capture or before publication',async()=>{
+ const f=shortBitbucket({drift:true});await assert.rejects(f.source.capture(),/changed/);
+ const g=shortBitbucket({drift:true});
+ const snapshot={headSha:head,baseSha:base,title:'Fix',description:''};
+ await g.source.assertCurrent(snapshot);
+ await assert.rejects(g.source.publishComment(snapshot,'Summary'),/changed/);assert.equal(g.posts(),0);
+});
+
+for(const options of [{hash:head},{baseHash:base}])test(`Bitbucket resolves only the abbreviated side ${JSON.stringify(options)}`,async()=>{
+ const f=shortBitbucket(options);const snapshot=await f.source.capture();
+ assert.equal(snapshot.headSha,head);assert.equal(snapshot.baseSha,base);
+ const lookups=f.requests.filter(p=>p.includes('/commit/'));
+ assert.equal(lookups.length,2);
+ assert.ok(lookups.every(p=>p.endsWith('/'+(options.hash?base:head).slice(0,12))));
+});
+for(const options of [{closed:true},{hash:'../bad'},{sourceRepo:'../evil'}])test(`Bitbucket rejects before commit lookup ${JSON.stringify(options)}`,async()=>{
+ const f=shortBitbucket(options);await assert.rejects(f.source.capture());
+ assert.ok(!f.requests.some(p=>p.includes('/commit/')));
+});
