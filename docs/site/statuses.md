@@ -13,6 +13,10 @@ Run `rivet task status` from your project to inspect its sole active task. If se
 | `awaiting-final-approval` | Review the integration diff and checks, then use the final-review menu offered by `rivet run`, or reopen it with `rivet task resume` / `rivet task approve`. |
 | `completed` | The task has a recorded completion. Inspect it with `--run=<id>`; local acceptance does not imply remote publication or deployment. |
 
+## Combined candidate checks
+
+When a task joins an optional verification batch, `task status` also shows its combined candidate, exact participant commits, criteria, check results and private report path. A passing batch report is advisory and does not change the task state or qualify its original branch for delivery. A dependency-waiting candidate can be prepared with `task deps`; retry `task verify --batch` afterward. Queued work needs a foreground verification invocation to continue. An unresolved running owner remains retained for inspection.
+
 ## Worker checkouts
 
 Status reports reserved and active Worker checkouts even before an accepted integration checkout is recorded. It shows the expected branch, observed branch, checkout path and any registered location holding the expected branch. Changed paths identify unfinished work to preserve.

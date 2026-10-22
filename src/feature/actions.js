@@ -31,6 +31,8 @@ export function validateWorkAction(input) {
   if (!validateSchema(captured)) fail();
   let contract;
   try { contract = validateLaunchPayload(captured.payload); } catch { fail(); }
+  if (contract.session && (contract.session.id !== captured.sessionId || contract.session.generation !== captured.generation)
+    || !contract.session && captured.sessionId !== undefined) fail();
   if (contract.nodeId !== captured.nodeId
     || contract.worktree.reservationId !== captured.reservationId) fail();
   return captured;

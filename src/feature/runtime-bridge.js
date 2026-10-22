@@ -1,3 +1,5 @@
+import {admitted,admissionKey} from '../runtime/machine-admission.js';
+import {captureCheckpoint,verifyCheckpoint} from './checkpoints.js';
 import { renderBranchName } from './branch-naming.js';
 import { requireGovernance } from './governance.js';
 import {assertSelectedProtocolRefs, selectedProtocolStatus} from '../protocols/project.js';
@@ -12,6 +14,9 @@ import { compileQualitySteps } from '../config/commands.js';
 import { validateProjectConfiguration } from '../config/validate.js';
 import { prepareIntegrationWorktree } from '../git/integration-worktree.js';
 import { reconcileWorktree } from '../git/reconcile.js';
+import { integrateFeatureWorker } from './worker-integration.js';
+import { acquireCandidateIntegrationLock } from '../git/integration-candidate.js';
+import { createFeatureRunStore } from './run-store.js';
 import { createAcceptedIntegrationStore } from './accepted-integration.js';
 import { createVerificationReportStore, verificationReport } from './verification-report.js';
 import { acceptedIntegrationPaths, resolveFeatureRunPaths, resolveStatePaths, verificationReportPaths } from '../state/paths.js';
@@ -22,14 +27,18 @@ import { createApprovalReceipt, createApprovalRegistry } from '../policy/approva
 import { createAuthorityEnvelope } from '../policy/authority.js';
 import { buildLaunchContract, validateLaunchPayload } from '../prompts/launch-contract.js';
 import { runQualityGates } from '../quality/runner.js';
+import { configuredVerificationReuse } from '../quality/configuration.js';
 import { createRuntimeInstance } from '../runtime/instance-store.js';
 import { createOrchestrator } from '../runtime/orchestrator.js';
 import { bootstrapWorktreeDependencies, inspectWorktreeDependencies, WorktreeBootstrapError } from '../runtime/worktree-bootstrap.js';
+import { readDependencyFile, inspectDependencyDirectory } from '../runtime/dependency-directory.js';
+import { inspectLegacyDependencyDirectory } from '../runtime/legacy-dependency-directory.js';
 import { validateWorkRequest } from '../work-request/contract.js';
 import { createFeaturePlan, featurePlanDigest } from './plan-contract.js';
 import { executionForNode } from './client-profile.js';
 
 const ID = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+const DEPENDENCY_INPUT_NAMES = new Set(['package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb', '.npmrc', '.yarnrc', '.yarnrc.yml', 'pnpm-workspace.yaml']);
 
 export class FeatureRuntimeBridgeError extends Error {
   constructor() {
@@ -174,6 +183,7 @@ export function createFeatureRuntimeState(input) {
     terminal: null,
     graph,
     events: [],
+    ...(value.config.orchestration.executionPolicy ? {sessionPolicy:value.config.orchestration.executionPolicy.sessions,sessions:{}} : {}),
     attempts: {},
     launchIntents: {},
     results: {},
@@ -383,6 +393,7 @@ async function recoverBlockedWorker(input) {
     parent, run, nowMs, recoveryWorktrees,
   } = input;
   if (state.terminal !== 'blocked' || state.graph.status !== 'blocked') fail();
+  if(Object.values(state.sessions??{}).some(session=>session.phase==='blocked'&&session.stopReceipt?.status!=='stopped')) fail();
   const candidates = state.graph.nodes.filter(node => node.owner.role === 'worker'
     && !node.approvalGate && node.status === 'blocked');
   if (candidates.length !== 1) fail();
@@ -436,15 +447,16 @@ export function createFeatureLaunchInput(node, intent, planNode, run) {
     : Math.min(approvedCost, clientProfile.execution.maxCostUsd);
   return {
     nodeId: node.id,
+    ...(intent.session ? {session: {id:intent.session.id,generation:intent.session.generation,maxActions:intent.session.maxActions,maxMinutes:intent.session.maxMinutes,checkpoint:intent.session.checkpoint??null}} : {}),
     parentId: node.parentId ?? null,
-    objective: `${planNode.objective}\n\nExecution protocol: implement the objective only within the sealed owned paths. The trusted host will validate scope and create the local commit after a successful result, so do not block or return retry merely because you cannot create a Git commit yourself. Return status success only after the implementation and required checks are complete, with exactly the declared evidence references.`,
+    objective: `${planNode.objective}${intent.session ? `\nManaged session: stop at a safe boundary within ${intent.session.maxMinutes} minutes and ${intent.session.maxActions} observed Rivet actions. Return status checkpoint with completed work, pending work, evidence and next action when continuation is needed; only success means complete. No provider tool count is measured.` : ''}\n\nExecution protocol: implement the objective only within the sealed owned paths. The trusted host will validate scope and create the local commit after a successful result, so do not block or return retry merely because you cannot create a Git commit yourself. The trusted host will run the required configured checks before accepting delivery. Attempt checks only when permitted. If a check is denied or unavailable, do not retry it or bypass permissions; name the deferred checks in your summary as pending trusted-host verification and never claim they passed. Return status success when implementation is complete and checks have passed or are explicitly deferred for that reason, with exactly the declared evidence references. An actual failed check is not a permission denial: fix it within scope or report blocked with the failure; never describe a failed check as passed or merely deferred.`,
     ownedPaths: planNode.ownedPaths,
     authority: { actions: planNode.authorityScopes, providers: run.featurePlan.providerRefs },
     commands: planNode.commandIds,
     evidence: node.evidenceRefs,
     budget: {
       maxTokens: intent.allocation.tokenLimit,
-      maxRuntimeMs: intent.allocation.timeMinutes * 60_000,
+      maxRuntimeMs: Math.min(intent.allocation.timeMinutes, intent.session?.maxMinutes ?? intent.allocation.timeMinutes) * 60_000,
       maxCostUsd,
     },
     worktree: intent.worktree,
@@ -505,8 +517,9 @@ export function createFeatureExecutor(input) {
       || Reflect.ownKeys(options).some(key => !['signal', 'confirmDependencyInstall'].includes(key))
       || (options.signal !== undefined && !(options.signal instanceof AbortSignal))
       || (options.confirmDependencyInstall !== undefined && typeof options.confirmDependencyInstall !== 'function')) fail();
-    const signal = options.signal;
-    if (signal?.aborted) fail();
+    const executionController = new AbortController();
+    const signal = options.signal ? AbortSignal.any([options.signal, executionController.signal]) : executionController.signal;
+    if (signal.aborted) fail();
     if (!request || typeof request !== 'object' || Array.isArray(request)
       || Reflect.ownKeys(request).length !== 2 || !Object.hasOwn(request, 'project') || !Object.hasOwn(request, 'run')) fail();
     const project = request.project;
@@ -526,14 +539,14 @@ export function createFeatureExecutor(input) {
     const selectedClients = new Map();
     for (const planNode of run.featurePlan.nodes.filter(node => node.role === 'worker')) {
       const execution = executionForNode(run.featurePlan, planNode);
-      if (!selectedClients.has(execution.client)) {
-        const selected = await configured.clientFor(execution.client, execution.clientProfile, { project, signal });
+      if (!selectedClients.has(execution.executionSelection?.profileDigest ?? execution.client)) {
+        const selected = await configured.clientFor(execution.client, execution.clientProfile, { project, signal, ...(execution.executionSelection === undefined ? {} : {executionSelection: execution.executionSelection}) });
         if (!selected || selected.provider !== execution.client || typeof selected.launch !== 'function') fail();
-        selectedClients.set(execution.client, selected);
+        selectedClients.set(execution.executionSelection?.profileDigest ?? execution.client, selected);
       }
     }
 
-    async function prepareDependencies(worker, branch, expectedCommit) {
+    async function prepareDependencies(worker, branch, expectedCommit, dependencySignal = signal) {
       if (config.project.schemaVersion === 3 && !config.project.dependencies
         && !['npm', 'pnpm', 'yarn', 'bun'].includes(config.project.stack.packageManager)) return;
       const input = {
@@ -551,7 +564,7 @@ export function createFeatureExecutor(input) {
         gitClient: configured.gitClient,
         resolveCommandExecutable: configured.resolveCommandExecutable,
         confirm: options.confirmDependencyInstall,
-        signal,
+        signal: dependencySignal,
       });
       if (installed.status === 'declined') throw new WorktreeBootstrapError('approval-declined');
       if (installed.status !== 'ready') throw new WorktreeBootstrapError('install-failed', installed.result);
@@ -575,12 +588,53 @@ export function createFeatureExecutor(input) {
     const planNodes = new Map(run.featurePlan.nodes.map(node => [node.id, node]));
     const parent = await prepareFeatureWorkerParent(worktreeRunRoot);
     const nowMs = () => featureNowMilliseconds(configured.now);
-    let preparationReason = null;
-    let executionReason = null;
-    let reconciliationReason = null;
+    const parallel = run.featurePlan.maxParallelWorkers !== undefined;
+    const approvedConfiguration = JSON.stringify(config);
+    const integrationPolicyDigest = createHash('sha256').update(run.proposalDigest + approvedConfiguration).digest('hex');
+    const featurePaths = await resolveFeatureRunPaths(project, run.runId);
+    const accepted = createAcceptedIntegrationStore(await acceptedIntegrationPaths(featurePaths));
+    const runStore = createFeatureRunStore(featurePaths);
+    const diagnostics = new Map();
+    const launchedIntentIds = new Map();
+    const diagnostic = id => {
+      if (!diagnostics.has(id)) diagnostics.set(id, {preparation: null, execution: null, reconciliation: null});
+      return diagnostics.get(id);
+    };
+    const capacityByOwner = Object.fromEntries(config.orchestration.roles
+      .filter(role => run.featurePlan.nodes.some(node => node.roleId === role.id))
+      .map(role => [role.id, role.capacity]));
+    const childCapacityByParent = Object.fromEntries(run.featurePlan.nodes
+      .filter(node => run.featurePlan.nodes.some(child => child.parentId === node.id))
+      .map(node => [node.id, capacityByOwner[node.roleId]]));
     let reconciledTip = null;
     const leases = new Map();
     const recoveryWorktrees = new Map();
+    // Only preparations completed in this executor invocation can be reused by
+    // an automatic retry. A failed or interrupted install never enters this map.
+    const preparedWorktrees = new Map();
+    async function preparedDependencies(root) {
+      const inputs = config.project.dependencies?.inputs ??
+        (['npm', 'pnpm', 'yarn', 'bun'].includes(config.project.stack.packageManager)
+          ? [...DEPENDENCY_INPUT_NAMES] : []);
+      const files = [];
+      let totalBytes = 0;
+      for (const path of inputs) {
+        try {
+          const bytes = await readDependencyFile(join(root, path), 8 * 1024 * 1024);
+          totalBytes += bytes.length;
+          if (totalBytes > 16 * 1024 * 1024) fail();
+          files.push([path, createHash('sha256').update(bytes).digest('hex')]);
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw error;
+          files.push([path, null]);
+        }
+      }
+      return JSON.stringify({files,
+        legacy: await inspectLegacyDependencyDirectory(root),
+        portable: await inspectDependencyDirectory(root),
+        portableInstall: await inspectLegacyDependencyDirectory(root, '.rivet-deps'),
+      });
+    }
     const client = Object.freeze({
       provider: run.featurePlan.client,
       async launch(contract, options) {
@@ -589,93 +643,102 @@ export function createFeatureExecutor(input) {
           const planNode = planNodes.get(payload.nodeId);
           if (!planNode || planNode.role !== 'worker') fail();
           const execution = executionForNode(run.featurePlan, planNode);
-          const selected = selectedClients.get(execution.client);
+          const selected = selectedClients.get(execution.executionSelection?.profileDigest ?? execution.client);
           if (!selected) fail();
           const { version, ...sealedInput } = payload;
           const protocolContext = run.workRequest.contextRefs.some(ref => ref.startsWith('protocol:'))
             ? createProtocolPresentation({sourceRoot: project, refs: run.workRequest.contextRefs}) : undefined;
-          return await selected.launch(sealedInput, {...options, ...(protocolContext ? {protocolContext} : {})});
+          return await admitted('agentExecutions',`worker-${admissionKey([run.runId,payload.nodeId,payload.session?.id??payload.worktree.reservationId])}`,{...options,generation:payload.session?.generation??1},admission=>{const {generation,...launchOptions}=admission;return selected.launch(sealedInput,{...launchOptions,...(protocolContext?{protocolContext}:{})});});
         }
         catch (error) {
           const detail = typeof error?.details?.reason === 'string' ? `:${error.details.reason}` : '';
-          executionReason = typeof error?.code === 'string' ? `${error.code}${detail}` : 'worker-execution-error';
+          diagnostic(launchedIntentIds.get(contract.nodeId) ?? contract.nodeId).execution = typeof error?.code === 'string' ? `${error.code}${detail}` : 'worker-execution-error';
           throw error;
         }
       },
     });
     const runtime = createOrchestrator({
+      ...(config.orchestration.executionPolicy ? {sessionPolicy:config.orchestration.executionPolicy.sessions} : {}),
       client,
+      checkpointFor:(node,intent,session,result)=>captureCheckpoint({gitClient:configured.gitClient,run,node,intent,session,summary:result.output.summary,usage:result.usage,nowMs:nowMs()}),
+      verifyCheckpoint:checkpoint=>verifyCheckpoint(configured.gitClient,checkpoint,run,nowMs()),
       now: nowMs,
-      async prepareWorktree(node, intent) {
+      async prepareWorktree(node, intent, {signal: workerSignal} = {}) {
+        const preparationSignal = workerSignal ? AbortSignal.any([signal, workerSignal]) : signal;
         try {
           const planNode = planNodes.get(node.id);
           if (!planNode || planNode.role !== 'worker') fail();
-          const current = await configured.gitClient.inspectRepository(integration.path);
-          if (current.branch !== integration.branch || current.dirty) fail();
           const branch = `worker/${run.runId}/${node.id}`;
           const worktreePath = join(parent, node.id);
-          if (intent.attempt > 1) {
-            const reused = await reusableWorkerCheckout({
-              gitClient: configured.gitClient,
-              projectRoot: integration.path,
-              statePaths,
-              node,
-              planNode,
-              branch,
-              worktreePath,
-              baseSha: current.headSha,
-              nowMs: nowMs(),
-              expectedWorktree: recoveryWorktrees.get(node.id),
-            });
-            leases.set(node.id, reused.reservation.leaseId);
-            if (!recoveryWorktrees.has(node.id)) await prepareDependencies(reused.worker, branch, current.headSha);
-            preparationReason = null;
-            return Object.freeze({
-              path: reused.worker.root,
-              dev: reused.worker.rootIdentity.dev,
-              ino: reused.worker.rootIdentity.ino,
-              reservationId: node.id === intent.nodeId ? intent.reservationId : fail(),
+          let worker; let current;
+          // Selecting a base and reserving its checkout is one cooperating Git
+          // transaction with candidate acceptance. Installs run after release.
+          const lock = parallel ? await acquireCandidateIntegrationLock(statePaths, {signal: preparationSignal}) : null;
+          try {
+            current = await configured.gitClient.inspectRepository(integration.path);
+            if (current.branch !== integration.branch || current.dirty) fail();
+            if (intent.attempt > 1) {
+              const reused = await reusableWorkerCheckout({
+                gitClient: configured.gitClient, projectRoot: integration.path, statePaths,
+                node, planNode, branch, worktreePath, baseSha: current.headSha, nowMs: nowMs(),
+                expectedWorktree: recoveryWorktrees.get(node.id) ?? preparedWorktrees.get(node.id)?.worktree,
+              });
+              leases.set(node.id, reused.reservation.leaseId);
+              worker = reused.worker;
+            } else {
+              const created = await createReservedWorktree({
+                projectRoot: integration.path, statePaths, nodeId: node.id, branch, worktreePath,
+                ownerId: node.owner.id, baseSha: current.headSha,
+                responsibilities: planNode.ownedPaths, intendedPaths: planNode.ownedPaths,
+                expiresAt: new Date(nowMs() + 24 * 60 * 60 * 1000).toISOString(),
+              }, {gitClient: configured.gitClient, nowMs: nowMs()});
+              worker = await configured.gitClient.inspectRepository(created.reservation.worktreePath);
+              leases.set(node.id, created.reservation.leaseId);
+            }
+          } finally { await lock?.release(); }
+          preparationSignal.throwIfAborted();
+          const prepared = preparedWorktrees.get(node.id);
+          if (intent.attempt > 1 && prepared) {
+            const changed = [...await configured.gitClient.changedPaths(worker.root, prepared.headSha, worker.headSha),
+              ...await configured.gitClient.statusPaths(worker.root)];
+            if (changed.some(path => DEPENDENCY_INPUT_NAMES.has(basename(path)))
+              || await preparedDependencies(worker.root) !== prepared.dependencies) fail();
+          } else if (intent.attempt <= 1 || !recoveryWorktrees.has(node.id)) {
+            await prepareDependencies(worker, branch, current.headSha, preparationSignal);
+            // Fingerprints are an optional retry optimization. A large or
+            // otherwise uncacheable input must not reject a successful install.
+            let dependencies;
+            try { dependencies = await preparedDependencies(worker.root); } catch {}
+            if (dependencies !== undefined) preparedWorktrees.set(node.id, {
+              worktree: {path: worker.root, dev: worker.rootIdentity.dev, ino: worker.rootIdentity.ino},
+              headSha: worker.headSha, dependencies,
             });
           }
-          const created = await createReservedWorktree({
-            projectRoot: integration.path,
-            statePaths,
-            nodeId: node.id,
-            branch,
-            worktreePath,
-            ownerId: node.owner.id,
-            baseSha: current.headSha,
-            responsibilities: planNode.ownedPaths,
-            intendedPaths: planNode.ownedPaths,
-            expiresAt: new Date(nowMs() + 24 * 60 * 60 * 1000).toISOString(),
-          }, { gitClient: configured.gitClient, nowMs: nowMs() });
-          const worker = await configured.gitClient.inspectRepository(created.reservation.worktreePath);
-          leases.set(node.id, created.reservation.leaseId);
-          await prepareDependencies(worker, branch, current.headSha);
-          preparationReason = null;
+          preparationSignal.throwIfAborted();
+          diagnostic(intent.id).preparation = null;
           return Object.freeze({
-            path: worker.root,
-            dev: worker.rootIdentity.dev,
-            ino: worker.rootIdentity.ino,
+            path: worker.root, dev: worker.rootIdentity.dev, ino: worker.rootIdentity.ino,
             reservationId: node.id === intent.nodeId ? intent.reservationId : fail(),
           });
         } catch (error) {
-          preparationReason = typeof error?.code === 'string' ? error.code : 'worktree-preparation-error';
-          if (error instanceof WorktreeBootstrapError) preparationReason += `: ${error.safeMessage}`;
+          diagnostic(intent.id).preparation = typeof error?.code === 'string' ? error.code : 'worktree-preparation-error';
+          if (error instanceof WorktreeBootstrapError) diagnostic(intent.id).preparation += `: ${error.safeMessage}`;
           throw error;
         }
       },
       launchFor(node, intent) {
+        launchedIntentIds.set(node.id, intent.id);
         try {
           const source = createFeatureLaunchInput(node, intent, planNodes.get(node.id), run);
           buildLaunchContract(source);
           return source;
         } catch (error) {
-          executionReason = typeof error?.code === 'string' ? error.code : 'launch-contract-error';
+          diagnostic(intent.id).execution = typeof error?.code === 'string' ? error.code : 'launch-contract-error';
           throw error;
         }
       },
-      async reconcile(node, intent, result) {
+      async reconcile(node, intent, result, {signal: workerSignal} = {}) {
+        const reconciliationSignal = workerSignal ? AbortSignal.any([signal, workerSignal]) : signal;
         try {
           assertSelectedProtocolRefs(project, run.workRequest.contextRefs);
           let leaseId = leases.get(node.id);
@@ -698,7 +761,7 @@ export function createFeatureExecutor(input) {
               nowMs: nowMs(),
             });
           }
-          const report = await reconcileWorktree({
+          const reconciliationInput = {
             projectRoot: integration.path,
             statePaths,
             nodeId: node.id,
@@ -706,22 +769,66 @@ export function createFeatureExecutor(input) {
             leaseId,
             integrationBranch: integration.branch,
             integrate: evidenceMatches,
-          }, { gitClient: configured.gitClient, nowMs: nowMs() });
+          };
+          const report = parallel && evidenceMatches && result.status === 'success'
+            ? await integrateFeatureWorker({
+              ...reconciliationInput, runId: run.runId, baselineCommit: run.featurePlan.baselineCommit,
+              runtimeVersion: (await inspectFeatureRuntime(instance)).version,
+              intentId: intent.id, sessionId: intent.session?.id, generation: intent.session?.generation,
+              policyDigest: integrationPolicyDigest, verificationOutputs: config.quality.verificationOutputs ?? [],
+            }, {
+              gitClient: configured.gitClient, acceptedStore: accepted, nowMs, signal: reconciliationSignal,
+              validateOwner: async () => {
+                if (reconciliationSignal.aborted) fail();
+                const liveRun = await runStore.readOnly();
+                if (!liveRun || liveRun.status !== 'running'
+                  || liveRun.proposalDigest !== run.proposalDigest
+                  || JSON.stringify(liveRun.activation) !== JSON.stringify(run.activation)) fail();
+                const liveConfig = await loadProjectConfig(project);
+                if (JSON.stringify(liveConfig) !== approvedConfiguration) fail();
+                validRun(liveConfig, liveRun);
+                assertSelectedProtocolRefs(project, run.workRequest.contextRefs);
+                const current = await inspectFeatureRuntime(instance);
+                const liveIntent = current.launchIntents[node.id];
+                const liveNode = current.graph.nodes.find(item => item.id === node.id);
+                if (current.terminal !== null || liveNode?.status !== 'running'
+                  || liveIntent?.id !== intent.id || liveIntent.status !== 'started'
+                  || liveIntent.attempt !== intent.attempt || liveIntent.reservationId !== intent.reservationId
+                  || JSON.stringify(liveIntent.session) !== JSON.stringify(intent.session)
+                  || JSON.stringify(liveIntent.worktree) !== JSON.stringify(intent.worktree)) fail();
+                if (intent.session) {
+                  const session = current.sessions[node.id];
+                  if (session?.id !== intent.session.id || session.generation !== intent.session.generation
+                    || session.phase !== 'reconciling' || session.stopReceipt?.status !== 'stopped') fail();
+                }
+              },
+              verify: async manifest => {
+                await prepareDependencies({root: manifest.path}, manifest.branch, manifest.commitSha, reconciliationSignal);
+                return runQualityGates({
+                  ...configuredVerificationReuse(config), projectRoot: manifest.path,
+                  commitSha: manifest.commitSha, authority: featureQualityAuthority(config),
+                  gates: await configuredFeatureGates(config, configured.resolveCommandExecutable, manifest.path),
+                  environment: configured.environment,
+                }, {gitClient: configured.gitClient, now: nowMs, signal: reconciliationSignal});
+              },
+            })
+            : await reconcileWorktree(reconciliationInput, {gitClient: configured.gitClient, nowMs: nowMs()});
           if (!evidenceMatches) {
-            reconciliationReason = 'result-evidence-mismatch';
+            diagnostic(intent.id).reconciliation = 'result-evidence-mismatch';
             return Object.freeze({ ...report, status: 'blocked', reason: 'result-evidence-mismatch' });
           }
-          reconciliationReason = report.status === 'integrated' ? null : report.reason ?? 'reconciliation-blocked';
-          if (report.status === 'integrated') reconciledTip = report.integrationTip;
+          diagnostic(intent.id).reconciliation = report.status === 'integrated' ? null : report.reason ?? 'reconciliation-blocked';
+          if (!parallel && report.status === 'integrated') reconciledTip = report.integrationTip;
           return report;
         } catch (error) {
-          reconciliationReason = typeof error?.code === 'string' ? error.code : 'reconciliation-error';
+          diagnostic(intent.id).reconciliation = typeof error?.code === 'string' ? error.code : 'reconciliation-error';
           throw error;
         }
       },
     });
 
     let state = await inspectFeatureRuntime(instance);
+    let workersComplete = false;
     try {
       if (!state.activated) {
         state = await runtime.activate(instance, {
@@ -749,34 +856,53 @@ export function createFeatureExecutor(input) {
       const maximumTicks = run.featurePlan.nodes.length * 4 + 8;
       for (let tick = 0; tick < maximumTicks; tick += 1) {
         await requireGovernance({project,run,gitClient:configured.gitClient,phase:'plan'});
-        const outcome = await runtime.tick(instance, { expectedVersion: state.version, maxActiveNodes: 1, signal });
+        let outcome;
+        for (let retry = 0; retry < 8; retry++) {
+          try {
+            outcome = await runtime[parallel ? 'advance' : 'tick'](instance, {
+              expectedVersion: state.version, maxActiveNodes: parallel ? run.featurePlan.maxParallelWorkers : 1,
+              ...(parallel ? {capacityByOwner, childCapacityByParent} : {}), signal,
+            });
+            break;
+          } catch (error) {
+            if (!parallel || error.details?.reason !== 'version-conflict' || retry === 7) throw error;
+            state = await inspectFeatureRuntime(instance);
+          }
+        }
         state = await inspectFeatureRuntime(instance);
         if (['blocked', 'failed', 'budget-exhausted', 'cancelled'].includes(outcome.terminal)) {
           const stopped = state.graph.nodes.filter(node => ['blocked', 'failed', 'cancelled'].includes(node.status)).map(node => node.id);
-          const preparation = preparationReason ? ` Preparation reason: ${preparationReason}.` : '';
-          const execution = executionReason ? ` Execution reason: ${executionReason}.` : '';
-          const reconciliation = reconciliationReason ? ` Reconciliation reason: ${reconciliationReason}.` : '';
+          const describe = kind => [...diagnostics].filter(([, value]) => value[kind]).map(([id, value]) => ` ${kind[0].toUpperCase() + kind.slice(1)} reason: ${value[kind]} (${id}).`).join('');
+          const preparation = describe('preparation');
+          const execution = describe('execution');
+          const reconciliation = describe('reconciliation');
           return blocked(run, state, protocolRecovery() ?? `Runtime stopped at ${outcome.terminal}${stopped.length ? ` (${stopped.join(', ')})` : ''}.${preparation}${execution}${reconciliation} Correct the reported condition and resume the feature run.`);
         }
         const finalNode = state.graph.nodes.find(node => node.approvalGate === 'final-delivery');
         const nonHumanComplete = state.graph.nodes
           .filter(node => !node.approvalGate)
           .every(node => ['completed', 'archived'].includes(node.status));
-        if (outcome.launched.length === 0 && nonHumanComplete && finalNode?.status === 'ready') break;
-        if (outcome.launched.length === 0) return blocked(run, state);
+        if (outcome.launched.length === 0 && nonHumanComplete && finalNode?.status === 'ready') {
+          workersComplete = true;
+          break;
+        }
+        if (outcome.launched.length === 0 && !outcome.pending) return blocked(run, state);
       }
     } catch (error) {
+      if (parallel) { executionController.abort(); await runtime.drain(instance); }
       state = await inspectFeatureRuntime(instance).catch(() => state);
       const reason = typeof error?.code === 'string' ? ` Runtime reason: ${error.code}.` : '';
       return blocked(run, state, protocolRecovery() ?? `Feature execution stopped safely.${reason} Correct the reported condition and resume the feature run.`);
     }
 
+    if (!workersComplete) {
+      if (parallel) { executionController.abort(); await runtime.drain(instance); }
+      return blocked(run, await inspectFeatureRuntime(instance));
+    }
     if (signal?.aborted) return blocked(run, state, 'Feature execution was interrupted. Inspect the run before resuming.');
 
     const integrated = await configured.gitClient.inspectRepository(integration.path);
     if (integrated.dirty || integrated.branch !== integration.branch) return blocked(run, state);
-    const featurePaths = await resolveFeatureRunPaths(project, run.runId);
-    const accepted = createAcceptedIntegrationStore(await acceptedIntegrationPaths(featurePaths));
     let identity = await accepted.readOnly();
     if (reconciledTip !== null) {
       if (integrated.headSha !== reconciledTip) return blocked(run, state, 'Integration changed after Worker reconciliation. A new reviewed proposal is required.');
@@ -803,6 +929,7 @@ export function createFeatureExecutor(input) {
     try {
       if (config.project.dependencies) await prepareDependencies({root:integration.path}, integration.branch, identity.commitSha);
       quality = await runQualityGates({
+        ...configuredVerificationReuse(config),
         projectRoot: integration.path,
         commitSha: identity.commitSha,
         authority: featureQualityAuthority(config),
@@ -811,6 +938,9 @@ export function createFeatureExecutor(input) {
       }, { gitClient: configured.gitClient, now: nowMs, signal });
       if(quality.status==='pass') await requireGovernance({project,run,gitClient:configured.gitClient,config,phase:'final',checkout:{path:integration.path,branch:integration.branch,commitSha:identity.commitSha}});
     } catch (error) {
+      if(error?.code === 'ERR_VERIFICATION_PENDING') {
+        return blocked(run,state,'Verification is still owned by another execution. Inspect the task and retry verification after that owner finishes; no failed check was recorded.');
+      }
       failure = typeof error?.safeMessage === 'string' ? error.safeMessage : 'Configured quality gates could not complete safely.';
     }
     const afterChecks = await configured.gitClient.inspectRepository(integration.path);

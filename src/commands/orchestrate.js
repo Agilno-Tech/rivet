@@ -30,7 +30,36 @@ function emitCliResult(parsed, dependencies, result) {
   return EXIT_CODES.SUCCESS;
 }
 
+async function managedCommand(parsed, dependencies) {
+  const service = dependencies.orchestration.managed;
+  const { subcommand, flags, operands } = parsed;
+  const allowed = {status:['json'],limits:['limits-json','json']};
+  if(!allowed[subcommand] || operands.length || Object.keys(flags).some(key=>!allowed[subcommand].includes(key)))
+    cliFailure('Use task start, status, pause or resume. Advanced machine commands are orchestrate status and limits.');
+  let result;
+  if(subcommand==='limits') {
+    let limits;
+    try { limits=JSON.parse(flags['limits-json']); } catch {cliFailure('Invalid limits-json.');}
+    result=await service.limits(limits);
+  } else {
+    const state=await service.coordinator.inspect();
+    result={configured:state.configured,limits:state.limits,tasks:state.registrations.filter(r=>r.runId).map(r=>({
+      project:r.projectRoot,runId:r.runId,paused:r.paused,deadlineMs:r.deadlineMs,
+      waiting:[...new Set(state.claims.filter(c=>c.registrationId===r.id&&c.status==='queued').map(c=>c.reason??c.resource))],
+    })),capacity:Object.fromEntries(Object.entries(state.limits??{}).map(([resource,limit])=>[resource,{held:state.claims.filter(c=>c.resource===resource&&c.status==='held').length,limit}]))};
+  }
+  if (flags.json)
+    dependencies.output.json({
+      ok: true,
+      command: 'orchestrate',
+      subcommand,
+      result,
+    });
+  else dependencies.output.log(JSON.stringify(result, null, 2));
+  return EXIT_CODES.SUCCESS;
+}
 export async function orchestrateCommand(parsed, dependencies) {
+  if(dependencies.orchestration?.managed && (parsed.subcommand!=='run') && !dependencies.orchestration?.runtime)return managedCommand(parsed,dependencies);
   const { context, instanceId } = cliInput(parsed, dependencies);
   const expectedVersion = cliInteger(parsed.flags['expected-version'], 'expected-version');
   let options;

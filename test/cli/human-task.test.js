@@ -1,3 +1,4 @@
+import { fixtureGit } from '../helpers/git-executable.js';
 import assert from 'node:assert/strict';
 import { execFile as execFileCallback } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
@@ -6,6 +7,8 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import test from 'node:test';
 
+import YAML from 'yaml';
+import { managedPolicy } from '../fixtures/execution-policy.js';
 import { main } from '../../src/cli/main.js';
 import { EXIT_CODES } from '../../src/cli/output.js';
 import { loadProjectConfig } from '../../src/config/load.js';
@@ -23,7 +26,7 @@ const BASELINE = 'a'.repeat(40);
 async function fixture(t) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'rivet-human-task-')));
   t.after(() => rm(root, { recursive: true, force: true }));
-  await execFile('/usr/bin/git', ['-C', root, 'init', '-q']);
+  await execFile(fixtureGit, ['-C', root, 'init', '-q']);
   await cp(CONFIG, join(root, '.rivet'), { recursive: true });
   return root;
 }
@@ -76,7 +79,7 @@ test('task deps selects the run but refuses installation before an accepted chec
   const result = await main(['task', 'deps'], overrides(root, messages, {
     terminalIsInteractive: () => true,
     confirmDependencyInstall: async () => { confirmations += 1; return true; },
-    resolveCommandExecutable: async () => '/usr/bin/git',
+    resolveCommandExecutable: async () => fixtureGit,
   }));
   assert.equal(result, EXIT_CODES.REPOSITORY_CONFLICT, messages.join('\n'));
   assert.equal(confirmations, 0);
@@ -327,3 +330,50 @@ test('final review output failure cannot proceed to local application',async t=>
     resolveCommandExecutable:async()=>assert.fail('no Git after failed review output'),
   }));assert.equal(code,EXIT_CODES.REPOSITORY_CONFLICT);
 });
+
+test('task pause and host resume select the task and retain writer ownership without exposing registration IDs',async t=>{
+ const root=await fixture(t);const {managedPolicy}=await import('../fixtures/execution-policy.js');const YAML=(await import('yaml')).default;
+ const path=join(root,'.rivet/orchestration.yaml');const config=YAML.parse(await readFile(path,'utf8'));config.executionPolicy=managedPolicy();await writeFile(path,YAML.stringify(config));
+ const {store,record}=await createRun(root,'managed-task','host');await store.update({status:'approved',updatedAt:NOW,activation:{approverId:'human',approvedAt:NOW,requestDigest:record.workRequest.digest,proposalDigest:record.proposalDigest},runtimeRefs:[],evidenceRefs:[]},{expectedVersion:record.version});
+ const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+ const parent=await realpath(await mkdtemp(join(tmpdir(),'rivet-task-machine-')));t.after(()=>rm(parent,{recursive:true,force:true}));
+ const machine=createResourceCoordinator({root:join(parent,'machine')});const registration=await machine.register({projectRoot:root,runId:'managed-task',deadlineMs:Date.now()+30000});
+ const writer=await machine.request({registrationId:registration.id,resource:'agentExecutions',idempotencyKey:'writer',generation:1});await machine.dispatch({claimId:writer.id,generation:1});
+ const messages=[];const services=overrides(root,messages,{machine});
+ assert.equal(await main(['task','pause','--input-json={}'],services),EXIT_CODES.INVALID_INPUT);assert.equal((await machine.inspect()).registrations[0].paused,false);
+ assert.equal(await main(['task','pause'],services),EXIT_CODES.SUCCESS);assert.equal((await machine.inspect()).registrations[0].paused,true);
+ assert.equal(await main(['task','resume'],services),EXIT_CODES.SUCCESS);assert.equal((await machine.inspect()).registrations[0].paused,false);
+ assert.equal((await machine.inspect()).claims.find(c=>c.id===writer.id).status,'held');
+ assert.equal(await main(['task','status'],services),EXIT_CODES.SUCCESS);assert.match(messages.join('\n'),/Machine capacity:/);assert.doesNotMatch(messages.join('\n'),/registration-/);
+});
+
+test('invalid task allowance is rejected before task selection or state mutation',async t=>{
+ const root=await fixture(t);const messages=[];
+ assert.equal(await main(['task','resume','--for=0h'],overrides(root,messages)),EXIT_CODES.INVALID_INPUT);
+ assert.match(messages.join('\n'),/positive duration/);
+});
+
+for(const command of ['start','resume']) {
+  for(const unavailable of [false,true]) {
+    test(`managed task ${command} checks only effective worker harness (unavailable=${unavailable})`,async t=>{
+      const root=await fixture(t),path=join(root,'.rivet','orchestration.yaml');
+      const config=YAML.parse(await readFile(path,'utf8'));config.executionPolicy=managedPolicy();config.executionPolicy.profiles.review.harness='codex';
+      config.roles.find(role=>role.kind==='worker').harness='claude';
+      await writeFile(path,YAML.stringify(config));
+      const {store,record}=await createRun(root,'managed-selection','claude');
+      if(command==='resume')await store.update({status:'approved',updatedAt:NOW,activation:{approverId:'human',approvedAt:NOW,requestDigest:record.workRequest.digest,proposalDigest:record.proposalDigest},runtimeRefs:[],evidenceRefs:[]},{expectedVersion:record.version});
+      const messages=[],calls=[];
+      const code=await main(['task',command],overrides(root,messages,{
+        terminalIsInteractive:()=>true,
+        harnesses:{async select(kind){calls.push(kind);if(kind!=='codex'||unavailable)throw new Error('missing');return {kind,version:'test'};}},
+        confirmFeatureActivation:async()=>{calls.push('approve');return false;},
+        feature:{async start(){assert.fail('declined');},async watch(){assert.fail('declined');},async resume(){calls.push('resume');return {status:'blocked'};}}
+      }));
+      assert.equal(code,unavailable?EXIT_CODES.PROVIDER_UNAVAILABLE:command==='start'?EXIT_CODES.SUCCESS:EXIT_CODES.FAILED_GATE,messages.join('\n'));
+      assert.deepEqual(calls,unavailable?['codex']:['codex',command==='start'?'approve':'resume']);
+      const status=[];
+      assert.equal(await main(['task','status'],overrides(root,status)),EXIT_CODES.SUCCESS);
+      assert.match(status.join('\n'),/Planning harness: codex; model: sonnet; reasoning: low/);assert.match(status.join('\n'),/Worker harnesses: codex/);
+    });
+  }
+}

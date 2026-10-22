@@ -84,6 +84,796 @@
           "test": "invalid profiles, prompts, credentials, spend limits and unsupported providers fail before network"
         }
       ]
+    },
+    {
+      "id": "model-policy-approval",
+      "file": "test/cli/model-policy.test.js",
+      "criteria": [
+        {
+          "id": "bounded-translation",
+          "test": "plain policy rejects missing duplicate unsafe and authority-bearing translations"
+        },
+        {
+          "id": "mapping-approval",
+          "test": "models configure translates prose once clarifies shared aliases and approves exact mapping"
+        },
+        {
+          "id": "decline-and-stale-save",
+          "test": "models configure decline and changed config cannot publish"
+        },
+        {
+          "id": "cancel-and-invalid-output",
+          "test": "models configure output failure EOF interruption and invalid translator output leave config unchanged"
+        },
+        {
+          "id": "preserve-configuration",
+          "test": "models configure reuses configured exact profiles and retains unrelated profiles comments and permissions"
+        },
+        {
+          "id": "safe-file-update",
+          "test": "model policy safe writer refuses readonly symlink hardlink and changed topology"
+        },
+        {
+          "id": "exact-file-permissions",
+          "test": "model policy update preserves exact file permissions despite process umask"
+        },
+        {
+          "id": "exact-model-identity",
+          "test": "model policy keeps case-sensitive existing model identities distinct"
+        },
+        {
+          "id": "approval-output-failure",
+          "test": "models configure asynchronous output error during approval refuses save"
+        },
+        {
+          "id": "explicit-missing-settings",
+          "test": "models configure missing model and reasoning are clarified rather than defaulted silently"
+        }
+      ]
+    },
+    {
+      "id": "model-policy-defaults",
+      "file": "test/cli/model-policy.test.js",
+      "criteria": [
+        {
+          "id": "codex-saved-model",
+          "test": "models configure detects saved Codex user model without manual entry and retains approval"
+        },
+        {
+          "id": "codex-suggestions",
+          "test": "models configure uses saved Codex model in prose suggestions and harness route edits"
+        },
+        {
+          "id": "codex-policy-precedence",
+          "test": "models configure saved Rivet mapping wins over Codex user config and unresolved config asks safely"
+        },
+        {
+          "id": "detected-defaults",
+          "test": "models configure without prose proposes detected Claude defaults without translation and requires approval"
+        },
+        {
+          "id": "saved-policy-first",
+          "test": "models configure without prose reuses existing routes and limits even without installed harnesses"
+        },
+        {
+          "id": "codex-explicit-model",
+          "test": "models configure Codex defaults request one exact model or use explicit Rivet model setting"
+        },
+        {
+          "id": "editable-approval",
+          "test": "models configure default proposal can be edited or declined without translating"
+        },
+        {
+          "id": "invalid-and-cancelled",
+          "test": "models configure defaults refuse absent harnesses invalid model settings and interrupted approval"
+        }
+      ]
+    },
+    {
+      "id": "recommended-model-setup",
+      "file": "test/cli/model-policy.test.js",
+      "criteria": [
+        {
+          "id": "role-recommendations",
+          "test": "models configure recommends cached Codex role mapping and requires exact final approval"
+        },
+        {
+          "id": "customize-and-fence",
+          "test": "models configure customizes detected models with advertised reasoning and rejects stale approval"
+        },
+        {
+          "id": "preserve-user-policy",
+          "test": "models configure cached recommendations preserve saved routes and explicit override"
+        },
+        {
+          "id": "custom-and-supported-efforts",
+          "test": "models configure cached customization permits custom IDs and refuses unsupported known efforts"
+        }
+      ]
+    },
+    {
+      "id": "simplified-model-routing",
+      "file": "test/cli/model-policy.test.js",
+      "criteria": [
+        {
+          "id": "observed-aliases",
+          "test": "plain language model families resolve unambiguous observed catalog identities"
+        },
+        {
+          "id": "fresh-concurrency",
+          "test": "fresh setup recommendations align worker role and policy only after exact approval"
+        },
+        {
+          "id": "preserve-concurrency",
+          "test": "standalone model wizard preserves custom effective capacity unless explicitly customized"
+        },
+        {
+          "id": "skip-unknown-model",
+          "test": "setup routing can be skipped before entering an unknown Codex model and without changing policy"
+        },
+        {
+          "id": "translator-choice",
+          "test": "prose translator choice works with both installed harnesses"
+        }
+      ]
+    },
+    {
+      "id": "unified-project-setup",
+      "file": "test/commands/setup.test.js",
+      "criteria": [
+        {
+          "id": "interactive-only",
+          "test": "interactive project setup offers routing after installation while preview JSON global and noninteractive stay unchanged"
+        },
+        {
+          "id": "honest-partial",
+          "test": "setup reports model configuration failure separately from successful harness installation"
+        },
+        {
+          "id": "one-approved-wizard",
+          "test": "fresh interactive setup saves the approved model routes and matching worker concurrency in one wizard"
+        },
+        {
+          "id": "batch-opt-in",
+          "test": "interactive setup explicitly enables batches and preserves existing custom limits"
+        },
+        {
+          "id": "batch-approval-guards",
+          "test": "setup batch approval decline cancellation failure and drift never enable policy"
+        }
+      ]
+    },
+    {
+      "id": "saved-run-routing",
+      "file": "test/cli/human-run.test.js",
+      "criteria": [
+        {
+          "id": "reuse-and-conflict",
+          "test": "saved coordination routing selects its harness without a chooser and rejects conflicting flags"
+        }
+      ]
+    },
+    {
+      "id": "simplified-batch-flow",
+      "file": "test/feature/host-batch-setup.test.js",
+      "criteria": [
+        {
+          "id": "inline-install",
+          "test": "batch ready listing validates accepted work without creating queue state and inline approval resumes the frozen candidate"
+        },
+        {
+          "id": "ready-and-stale",
+          "test": "batch chooser excludes unfinished tasks and rechecks a selected head before enrollment"
+        },
+        {
+          "id": "admission-ready-only",
+          "test": "batch ready chooser excludes paused expired and cancelled task or project admission without state writes"
+        },
+        {
+          "id": "declined-install",
+          "test": "batch dependency approval decline retains candidate without installation"
+        },
+        {
+          "id": "noninteractive-install",
+          "test": "batch dependency approval noninteractive retains candidate without installation"
+        }
+      ]
+    },
+    {
+      "id": "codex-model-catalog",
+      "file": "test/cli/codex-model-catalog.test.js",
+      "criteria": [
+        {
+          "id": "family-and-effort",
+          "test": "catalog recommends detected role families by priority with supported reasoning"
+        },
+        {
+          "id": "visible-valid-models",
+          "test": "catalog excludes hidden models and rejects duplicate or malformed catalogs"
+        },
+        {
+          "id": "bounded-file",
+          "test": "catalog bounded reader rejects symlink invalid UTF8 and oversized files"
+        },
+        {
+          "id": "honest-fallback",
+          "test": "catalog fallback preserves override then configured model then first visible candidate"
+        },
+        {
+          "id": "stable-home-and-order",
+          "test": "catalog preserves tie order and respects CODEX_HOME without reading fallback HOME"
+        },
+        {
+          "id": "safe-metadata",
+          "test": "catalog refuses invalid reasoning shapes and never returns secret-like IDs or raw timestamps"
+        }
+      ]
+    },
+    {
+      "id": "codex-config-model",
+      "file": "test/runtime/codex-config-model.test.js",
+      "criteria": [
+        {
+          "id": "toml-model",
+          "test": "Codex model detection resolves custom and default homes with TOML syntax"
+        },
+        {
+          "id": "override-profile-precedence",
+          "test": "Codex model detection uses explicit override before config and selected legacy profile before root model"
+        },
+        {
+          "id": "safe-unresolved-config",
+          "test": "Codex model detection fails closed for missing malformed unsafe oversized nonregular and invalid UTF8 config"
+        }
+      ]
+    },
+    {
+      "id": "model-provider-detection",
+      "file": "test/cli/models.test.js",
+      "criteria": [
+        {
+          "id": "local-evidence",
+          "test": "models list detects every supported provider from local evidence without leaking credentials"
+        },
+        {
+          "id": "honest-readiness",
+          "test": "models list rejects blank and unsafe endpoint evidence without claiming authentication"
+        }
+      ]
+    },
+    {
+      "id": "model-policy-translator",
+      "file": "test/runtime/model-policy-client.test.js",
+      "criteria": [
+        {
+          "id": "bounded-native-request",
+          "test": "model policy translator uses literal stdin isolated cwd schema and read-only no-tools arguments"
+        },
+        {
+          "id": "invalid-and-timeout",
+          "test": "model policy translator rejects extra output authority and bounds native timeout"
+        },
+        {
+          "id": "settled-cancellation",
+          "test": "model policy translator cancellation settles owned subprocess before returning"
+        },
+        {
+          "id": "application-composition",
+          "test": "models configure actual application discovers selects and translates through native fixture"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-routing",
+      "file": "test/models/execution-policy.test.js",
+      "criteria": [
+        {
+          "id": "legacy-compatible",
+          "test": "accepts managed policy without changing legacy enabled:false"
+        },
+        {
+          "id": "bounded-profiles",
+          "test": "rejects unsafe profiles, unknown efforts, missing/ambiguous routes and advisory writes"
+        },
+        {
+          "id": "pinned-selection",
+          "test": "resolves immutable approved identity and never falls back to another route"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-parallel-integration",
+      "file": "test/runtime/feature-runtime-bridge.test.js",
+      "criteria": [
+        {
+          "id": "sibling-acceptance",
+          "test": "explicit adapter workers overlap and both same-base siblings are verified and accepted"
+        },
+        {
+          "id": "dependency-progress",
+          "test": "explicit adapter starts accepted fast dependency before slow sibling finishes"
+        },
+        {
+          "id": "failed-candidate-retained",
+          "test": "explicit adapter refuses failed candidate quality without accepting a worker"
+        },
+        {
+          "id": "cancel-before-acceptance",
+          "test": "explicit adapter rejects live run cancellation before candidate acceptance"
+        },
+        {
+          "id": "slow-preparation",
+          "test": "explicit adapter waits through a slow cooperating checkout instead of blocking its sibling"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-verification-reuse",
+      "file": "test/quality/verification-reuse.test.js",
+      "criteria": [
+        {
+          "id": "exact-proof",
+          "test": "runner reuses exact passing verification, brands inside boundary, and invalidates changed policy"
+        },
+        {
+          "id": "cross-process-owner",
+          "test": "separate OS processes execute one shared runner generation"
+        },
+        {
+          "id": "uncertain-owner",
+          "test": "crashed owner remains blocked; PID absence does not authorize stealing"
+        },
+        {
+          "id": "no-forged-proof",
+          "test": "generic queue completion cannot manufacture branded passing proof"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-batch-queue",
+      "file": "test/runtime/verification-batch-queue.test.js",
+      "criteria": [
+        {
+          "id": "frozen-membership",
+          "test": "batch queue freezes FIFO compatible membership and never adopts running ownership"
+        },
+        {
+          "id": "elapsed-singleton",
+          "test": "elapsed singleton is actually claimed only after its deadline"
+        },
+        {
+          "id": "one-owner-current-result",
+          "test": "simultaneous claims execute only one owner and pending runs never display an old pass"
+        },
+        {
+          "id": "frozen-policy",
+          "test": "an incompatible caller cannot change the frozen queue flush policy"
+        },
+        {
+          "id": "reject-modified-ownership",
+          "test": "queue rejects modified durable ownership instead of treating an unknown owner as stopped"
+        },
+        {
+          "id": "bounded-verbose-evidence",
+          "test": "verbose reports stay separate from bounded queue ownership and do not wedge later batches"
+        },
+        {
+          "id": "recover-failed-publication",
+          "test": "failed durable queue write leaves the owner capability usable for a blocked fallback"
+        },
+        {
+          "id": "explicit-stale-reenrollment",
+          "test": "explicit re-enrollment replaces stale pending heads and invalidates waiting dependencies without changing frozen members"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-batch-execution",
+      "file": "test/feature/host-batch-execution.test.js",
+      "criteria": [
+        {
+          "id": "candidate-only-and-drift",
+          "test": "batch verification flushes an elapsed ready singleton without advancing task delivery state"
+        },
+        {
+          "id": "combined-checks-bounded-isolation",
+          "test": "batch verifies three ready task heads once and preserves each accepted integration"
+        },
+        {
+          "id": "cancel-running-checks",
+          "test": "batch cancellation stops an executing gate and cannot publish passing evidence"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-batch-admission",
+      "file": "test/feature/host-batch-admission.test.js",
+      "criteria": [
+        {
+          "id": "every-queued-participant",
+          "test": "batch admission includes paused and expired members even when they joined the queue earlier"
+        },
+        {
+          "id": "earliest-deadline",
+          "test": "batch uses the earliest member deadline even when the first selected task has no registration"
+        },
+        {
+          "id": "dependency-admission",
+          "test": "batch dependency approval cannot install while another frozen member is paused"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-batch-workflow",
+      "file": "test/feature/host-batch-workflow.test.js",
+      "criteria": [
+        {
+          "id": "approved-dependency-retry",
+          "test": "batch dependencies remain pending until an explicitly approved install and retry the frozen candidate"
+        },
+        {
+          "id": "reject-task-delivery-proof",
+          "test": "ordinary verification rejects combined-candidate evidence even for an identical singleton head"
+        },
+        {
+          "id": "public-cli-shared-capacity",
+          "test": "public batch task selection and status execute with heavy capacity one and require no delivery transition"
+        },
+        {
+          "id": "project-executable-compatibility",
+          "test": "identical tracked project executables batch across distinct task checkout paths"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-cleanup-preview",
+      "file": "test/runtime/worktree-cleanup.test.js",
+      "criteria": [
+        {
+          "id": "read-only-observation",
+          "test": "cleanup preview observes exact stopped completed Worker without changing state, refs or files"
+        },
+        {
+          "id": "retain-unsafe-checkouts",
+          "test": "cleanup retains active/failed/blocked tasks, unknown owners, dirt, ignored contents and symlinks"
+        },
+        {
+          "id": "explicit-approval-interface",
+          "test": "task cleanup previews completed tasks and requires interactive exact approval"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-cleanup-removal",
+      "file": "test/runtime/worktree-cleanup.test.js",
+      "criteria": [
+        {
+          "id": "preserve-commits-and-evidence",
+          "test": "approved cleanup removes only checkout, preserves worker commits and durable evidence, and replay is explicit"
+        },
+        {
+          "id": "approval-capability",
+          "test": "cleanup rejects copied previews, changed approval and active owners"
+        },
+        {
+          "id": "immediate-identity-check",
+          "test": "cleanup rechecks after confirmation and rejects changed checkout inode and commit"
+        },
+        {
+          "id": "partial-removal-recovery",
+          "test": "fresh confirmed preview resumes a partial multi-worker cleanup without original approval objects"
+        },
+        {
+          "id": "reject-replacement-work",
+          "test": "fresh partial-cleanup approval cannot adopt a changed still-present pending checkout"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-owned-artifact-cleanup",
+      "file": "test/runtime/worktree-cleanup.test.js",
+      "criteria": [
+        {
+          "id": "owned-roots-external-links",
+          "test": "cleanup removes protected regenerable dependencies but preserves external symlink targets and evidence"
+        },
+        {
+          "id": "pending-and-tracked-retained",
+          "test": "pending installer and tracked regenerable roots retain checkout"
+        },
+        {
+          "id": "absent-root-install-lock",
+          "test": "dependency installer locks fence cleanup even when directory is absent"
+        },
+        {
+          "id": "partial-root-recovery",
+          "test": "partial artifact deletion resumes only the approved inode and preserves replacement content"
+        },
+        {
+          "id": "portable-install-to-cleanup",
+          "test": "fresh approved portable install is reclaimable with its protected receipt"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-retention",
+      "file": "test/runtime/worktree-cleanup.test.js",
+      "criteria": [
+        {
+          "id": "separate-authority-age-revoke",
+          "test": "retention is disabled by default, requires separate approval, honors age and revocation"
+        },
+        {
+          "id": "configuration-and-cli-approval",
+          "test": "retention configuration drift suspends removal and CLI approval is separate from one-time cleanup"
+        },
+        {
+          "id": "execution-only-hook",
+          "test": "application status never runs retention but foreground host execution does"
+        },
+        {
+          "id": "bounded-continuation",
+          "test": "retention makes bounded progress on a task with more than eight Worker checkouts"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-portable-ownership",
+      "file": "test/runtime/portable-dependencies.test.js",
+      "criteria": [
+        {
+          "id": "protected-install-receipt",
+          "test": "fresh portable bootstrap establishes protected cleanup receipt; self marker alone does not"
+        },
+        {
+          "id": "legacy-marker-not-authority",
+          "test": "legacy portable marker is never promoted to cleanup authority during a later install"
+        },
+        {
+          "id": "reject-replaced-root",
+          "test": "portable install cannot complete ownership for a replaced dependency root"
+        },
+        {
+          "id": "unknown-stop-fenced",
+          "test": "portable unknown-stop pending receipt blocks retry and cleanup even before directory creation"
+        },
+        {
+          "id": "stopped-failure-retry",
+          "test": "portable known-stopped failed install retries the same owned directory safely"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-telemetry",
+      "file": "test/runtime/session-capabilities.test.js",
+      "criteria": [
+        {
+          "id": "literal-arguments",
+          "test": "bounded selected model and effort become literal argv"
+        },
+        {
+          "id": "independent-selection",
+          "test": "independent review dispatches selection without duplicate legacy model"
+        },
+        {
+          "id": "unknown-measurements",
+          "test": "telemetry distinguishes unknown billing and context from measured zero"
+        },
+        {
+          "id": "bounded-codex-config",
+          "test": "Codex config escape hatches remain rejected"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-handoff",
+      "file": "test/feature/host-managed.test.js",
+      "criteria": [
+        {
+          "id": "dirty-work-continuity",
+          "test": "managed host checkpoint stopped successor completion preserves dirty work and rejects late results before integration"
+        },
+        {
+          "id": "uncertain-transfer-blocked",
+          "test": "managed host unknown stop and changed dirty bytes block successor without resetting cumulative budgets"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-capacity",
+      "file": "test/runtime/resource-coordinator.test.js",
+      "criteria": [
+        {
+          "id": "task-fairness",
+          "test": "lazy reads and five task FIFO admissions share four slots"
+        },
+        {
+          "id": "cross-project-cap",
+          "test": "independent processes contend for one agent without overadmission"
+        },
+        {
+          "id": "uncertain-owner-retained",
+          "test": "restart with reused parent PID cannot release dispatched unknown descendants"
+        },
+        {
+          "id": "attempt-bound-no-execution",
+          "test": "no-execution proof is bound to one dispatched attempt and rejects fabricated evidence"
+        },
+        {
+          "id": "guard-after-capacity-wait",
+          "test": "scoped admission validation runs after capacity wait before dispatch"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-supervision",
+      "file": "test/cli/managed-orchestration.test.js",
+      "criteria": [
+        {
+          "id": "machine-diagnostics",
+          "test": "normal CLI exposes only machine diagnostics and limits without registration IDs"
+        },
+        {
+          "id": "durable-deadline",
+          "test": "managed watch preserves run deadline across restarted services and stops at decisions"
+        },
+        {
+          "id": "host-prepare-deadline",
+          "test": "managed host watch stops after preparation crosses its own cutoff"
+        },
+        {
+          "id": "host-prepare-cancellation",
+          "test": "managed host watch honors explicit cancellation during slow preparation"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-process-lifecycle",
+      "file": "test/runtime/process-runner.test.js",
+      "criteria": [
+        {
+          "id": "settled-cancellation",
+          "test": "managed watch cancellation awaits real owned process settlement before capacity release"
+        },
+        {
+          "id": "descendant-retention",
+          "test": "managed successful provider with surviving descendant retains unknown machine capacity"
+        },
+        {
+          "id": "proven-preflight-failure",
+          "test": "actual Codex preflight without a child releases only its current machine attempt"
+        },
+        {
+          "id": "probe-descendant-retention",
+          "test": "surviving compatibility probe blocks main execution and retains machine capacity"
+        },
+        {
+          "id": "stopped-probe-control",
+          "test": "stopped compatibility probe permits the admitted main execution"
+        },
+        {
+          "id": "settled-scope-fence",
+          "test": "settled execution scope fences saved runners and opaque success retains capacity"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-host-admission",
+      "file": "test/feature/host-managed.test.js",
+      "criteria": [
+        {
+          "id": "queued-first-dispatch",
+          "test": "enrolled host queues without poisoning state and requires observed stop before normal result"
+        },
+        {
+          "id": "queued-verification",
+          "test": "enrolled host verification queues without recording failed checks then resumes"
+        },
+        {
+          "id": "expired-stop-reconciliation",
+          "test": "application permits stopped host reconciliation after deadline without new admission"
+        },
+        {
+          "id": "queued-successor-clock",
+          "test": "enrolled host successor starts its execution clock after queued admission"
+        },
+        {
+          "id": "automatic-host-enrollment",
+          "test": "application automatically enrolls approved host execution while status and invalid prepare remain inert"
+        },
+        {
+          "id": "prepared-host-admission",
+          "test": "application enrolls a previously prepared managed host at first valid next action"
+        },
+        {
+          "id": "legacy-admission-guard",
+          "test": "enrolled legacy host rejects before changing its approved run or checkout"
+        },
+        {
+          "id": "cancel-before-dispatch",
+          "test": "host admission cancellation before durable dispatch retains no new writer"
+        },
+        {
+          "id": "cancel-retains-owner",
+          "test": "application forwards host cancellation and preserves previously dispatched owners"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-task-ownership",
+      "file": "test/runtime/application.test.js",
+      "criteria": [
+        {
+          "id": "single-task-owner",
+          "test": "concurrent enrolled calls own one run task slot and release it after settlement"
+        },
+        {
+          "id": "cancel-safe-claims",
+          "test": "public cancel cleans queued and undispatched claims while preserving unknown writers"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-task-interface",
+      "file": "test/runtime/task-orchestration.test.js",
+      "criteria": [
+        {
+          "id": "approved-only",
+          "test": "task enrollment is approved only and legacy cannot acquire an allowance"
+        },
+        {
+          "id": "host-executor-boundary",
+          "test": "owned execution entry points reject managed host requests before enrolling"
+        },
+        {
+          "id": "strict-request-boundary",
+          "test": "hidden request and option keys cannot enroll a managed execution"
+        },
+        {
+          "id": "durable-allowance",
+          "test": "task allowance survives restart and resume, can shorten, and keeps capacity IDs internal"
+        },
+        {
+          "id": "policy-binding",
+          "test": "changed policy cannot silently enroll an existing approval"
+        },
+        {
+          "id": "automatic-dispatch-admission",
+          "test": "application enrolls approved execution before dispatch and leaves stale requests unenrolled"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-human-controls",
+      "file": "test/cli/human-task.test.js",
+      "criteria": [
+        {
+          "id": "task-controls",
+          "test": "task pause and host resume select the task and retain writer ownership without exposing registration IDs"
+        },
+        {
+          "id": "invalid-duration-inert",
+          "test": "invalid task allowance is rejected before task selection or state mutation"
+        }
+      ]
+    },
+    {
+      "id": "orchestration-command-admission",
+      "file": "test/core/commands.test.js",
+      "criteria": [
+        {
+          "id": "observed-command-stop",
+          "test": "command lifecycle awaits observed process-group stop before release"
+        },
+        {
+          "id": "heavy-queue",
+          "test": "enrolled heavy command waits for capacity then releases only its observed owner"
+        },
+        {
+          "id": "no-child-cancellation",
+          "test": "command cancellation after admission before spawn releases proven unused capacity"
+        }
+      ]
     }
   ],
   "deferred": [

@@ -1,3 +1,4 @@
+import { validateExecutionPolicy } from '../models/execution-policy.js';
 import { clientProfileFor } from '../feature/client-profile.js';
 import { validateBranchPattern } from '../feature/branch-naming.js';
 import { parseRepositoryRemote } from '../repositories/identity.js';
@@ -190,6 +191,10 @@ function assertSafeRelativePath(value, path) {
 
 function validateConfigSemantics(config) {
   scanForSecrets(config);
+  if (config.orchestration.executionPolicy !== undefined) {
+    try { validateExecutionPolicy(config.orchestration.executionPolicy); }
+    catch { fail('/orchestration/executionPolicy', 'execution-policy'); }
+  }
 
   const providerIds = uniqueBy(config.providers.providers, 'id', '/providers/providers');
   if (config.project.deployment && !providerIds.has(config.project.deployment.providerId))
@@ -250,6 +255,9 @@ function validateConfigSemantics(config) {
   }
 
   const commandNames = new Set(Object.keys(config.project.commands));
+  for (const [index,path] of (config.quality.verificationOutputs ?? []).entries()) {
+    if (path.normalize('NFKC') !== path) fail(`/quality/verificationOutputs/${index}`, 'unsafe-path');
+  }
   const gateIds = uniqueBy(config.quality.commandGates, 'id', '/quality/commandGates');
   for (const gate of config.quality.commandGates) {
     if (!commandNames.has(gate.command)) fail(`/quality/commandGates/${gate.id}/command`, 'command-reference');

@@ -1,3 +1,4 @@
+import { fixtureGit } from '../helpers/git-executable.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {execFile as callback} from 'node:child_process';
@@ -18,7 +19,7 @@ import {createAcceptedIntegrationStore} from '../../src/feature/accepted-integra
 import {acceptedIntegrationPaths,governancePaths,resolveExistingFeatureRunPaths} from '../../src/state/paths.js';
 import {readSnapshotWithoutLock} from '../../src/state/snapshot-store.js';
 const execFile=promisify(callback);
-const git=async(root,...args)=>(await execFile('/usr/bin/git',['-C',root,...args])).stdout.trim();
+const git=async(root,...args)=>(await execFile(fixtureGit,['-C',root,...args])).stdout.trim();
 async function fixture(t,{review,contentScan,client='host',workItems}={}){
  const parent=await realpath(await mkdtemp(join(tmpdir(),'rivet-governance-'))),root=join(parent,'app');
  await mkdir(root);t.after(()=>rm(parent,{recursive:true,force:true}));
@@ -28,10 +29,10 @@ async function fixture(t,{review,contentScan,client='host',workItems}={}){
  const qpath=join(root,'.rivet','quality.yaml'),quality=YAML.parse(await readFile(qpath,'utf8'));
  if(review!==undefined)quality.review=review;if(contentScan!==undefined)quality.contentScan=contentScan;
  await writeFile(qpath,YAML.stringify(quality));
- await execFile('/usr/bin/git',['init','--quiet','--initial-branch=main',root]);
+ await execFile(fixtureGit,['init','--quiet','--initial-branch=main',root]);
  await git(root,'add','.');await git(root,'-c','user.name=Test','-c','user.email=test@example.invalid','commit','--quiet','-m','fixture');
  await loadProjectConfig(root);
- const gitClient=await createGitClient({gitExecutable:await realpath('/usr/bin/git')});
+ const gitClient=await createGitClient({gitExecutable:await realpath(fixtureGit)});
  const decomposition={schemaVersion:1,kind:'agilno.feature-decomposition',workItems:workItems??[{objective:'Add a working health endpoint.',ownedPaths:['src/health.js','docs/health.md'],acceptanceCriterionIndexes:[1]}]};
  const workflow=createFeatureWorkflow({gitClient,now:()=>new Date().toISOString(),protocolsFor:async()=>[],planningClientFor:async()=>{
   if(client==='host')throw Error('No extra model');return {propose:async()=>decomposition};
@@ -94,6 +95,32 @@ test('required plan review blocks until submitted coverage and rejects self-revi
  const value=report(observed.subject);assert.equal((await f.call('review-submit',{phase:'plan',input:value})).status,'recorded');
  assert.equal((await f.inspect({phase:'plan'})).ready,true);
  await assert.rejects(f.call('review-submit',{phase:'plan',input:value}),/already recorded/);
+});
+test('review rejects the runtime worker owner identity as well as the plan node identity',async t=>{
+ const f=await fixture(t,{review:{required:true},client:'codex'});
+ const observed=await f.call('review',{phase:'plan'});
+ const workers=f.run.featurePlan.nodes.filter(node=>node.role==='worker');
+ assert.ok(workers.some(node=>node.roleId!==node.id));
+ for(const actorId of new Set(workers.flatMap(node=>[node.id,node.roleId]))){
+  await assert.rejects(f.call('review-submit',{phase:'plan',input:report(observed.subject,{actorId})}),/self-review/);
+ }
+ assert.equal(await f.snapshot(),null);
+ assert.equal((await f.call('review-submit',{phase:'plan',input:report(observed.subject)})).status,'recorded');
+ assert.equal((await f.inspect({phase:'plan'})).ready,true);
+});
+for(const legacyActor of ['independent-reviewer','worker-owner']) test(`historical reports preserve independence checks for ${legacyActor}`,async t=>{
+ const f=await fixture(t,{review:{required:true},client:'codex'});
+ const observed=await f.call('review',{phase:'plan'});
+ await f.call('review-submit',{phase:'plan',input:report(observed.subject)});
+ const file=(await governancePaths(f.paths)).snapshotPath;
+ const saved=JSON.parse(await readFile(file,'utf8'));
+ const event=saved.data.events.find(item=>item.type==='review.recorded');
+ const workers=f.run.featurePlan.nodes.filter(node=>node.role==='worker');
+ event.subject.workerActorIds=['host-agent',...workers.map(node=>node.id)];
+ if(legacyActor==='worker-owner')event.data.actorId=workers[0].roleId;
+ await writeFile(file,JSON.stringify(saved)+'\n');
+ if(legacyActor==='worker-owner')await assert.rejects(f.inspect({phase:'plan'}),/self-review/);
+ else assert.equal((await f.inspect({phase:'plan'})).ready,true);
 });
 test('review cap escalates failure and cannot be cleared by an extra round',async t=>{
  const f=await fixture(t,{review:{required:true,maxRounds:1}}),observed=await f.call('review',{phase:'plan'});

@@ -70,16 +70,22 @@ Everyday commands:
   rivet --version                 Show the running Rivet version
   rivet update                    Update this machine and current project
   rivet setup                     Preview project setup
-  rivet setup --write             Apply reviewed setup
+  rivet setup --write             Configure project, models, concurrency and optional batching
+  rivet models configure          Review model routing and worker concurrency
   rivet doctor                    Check project readiness
   rivet run "task"                 Plan, execute and offer final review
   rivet review <PR-URL>            Review someone’s pull request locally
   rivet task status               Inspect work and the next step
   rivet task resume               Continue a saved task or final review
+  rivet task pause                Pause new work in a managed task
   rivet task start                Reopen an unapproved plan
   rivet task approve              Review and finish verified work
   rivet task deps                 Approve configured dependency setup
+  rivet task verify --batch       Check selected task heads together (advisory)
+  rivet task cleanup [--preview]  Review and approve completed-task checkout cleanup
   rivet task recover              Inspect abandoned operation locks
+  rivet task checkpoint           Preserve a managed host checkpoint
+  rivet task handoff              Fence and transfer a managed session
   rivet support --save            Save diagnostics for a bug report
 
 Run inside your project; most commands accept --project=<path> when elsewhere.
@@ -109,26 +115,35 @@ Usage:
   rivet repositories inspect [--review=<number>] [--remote=<name>] [--provider=<id>] [--project=<path>] [--json]
   rivet integrations setup [--project=<path>]  Guide local read-only provider configuration
   rivet integrations list|check [--project=<path>] [--host-inventory-json=<json>] [--json]
+  rivet models configure ["policy"] [--harness=claude|codex] [--project=<path>]
+                                  Recommend model/reasoning routes and worker concurrency; accept or customize, then approve
   rivet models role --roles=<file> --role=<name> [--json]
   rivet models delegate "prompt" --roles=<file> --role=<name> [--project=<path>]
   rivet models delegate "prompt" --profile=<file>  Approve one text-only model request
-  rivet models list [--json]                List model adapters and implementation status
+  rivet models list [--json]                List model adapters and local detection evidence
   rivet models check --profile=<file> [--json]  Validate a model profile without calling a model
   rivet install                    Interactive — pick which skills to install (project)
   rivet install --all              Install all skills (project)
   rivet setup [--project=<path>|--global] [--remote=<name>] [--target=claude|codex|both] [--checks-json='<json>'] [--dependencies-json='<json>'] [--write] [--json]
-                                  Project checks are exact argv arrays; unknown projects prompt with --write
-  rivet run "task" [--harness=claude|codex] [--project=<path>] [--details]
+                                  Interactive --write guides checks, model routing and worker concurrency; accept, customize or skip
+  rivet run "task" [--harness=claude|codex] [--project=<path>] [--for=1h] [--details]
+  rivet task checkpoint --input=<session.json> [--project=<path>] [--run=<id>]
+  rivet task handoff --input=<session.json> [--project=<path>] [--run=<id>]
   rivet task recover [--project=<path>] [--run=<id>]
   rivet task status [--project=<path>] [--run=<id>]
-  rivet task start [--project=<path>] [--run=<id>]
+  rivet task start [--project=<path>] [--run=<id>] [--for=1h]
   rivet task approve [--project=<path>] [--run=<id>]
-  rivet task resume [--project=<path>] [--run=<id>]
+  rivet task resume [--project=<path>] [--run=<id>] [--for=1h]
+  rivet task pause [--project=<path>] [--run=<id>]
   rivet task decisions [--project=<path>] [--run=<id>]
   rivet task decide --input=<decision.json> [--project=<path>] [--run=<id>]
   rivet task approve-decision --decision=<id> [--project=<path>] [--run=<id>]
   rivet task review [--phase=plan|final] [--input=<report.json>] [--project=<path>] [--run=<id>]
+  rivet task verify --batch [--project=<path>] [--run=<id>]
+                                  Select ready tasks; approve candidate dependencies inline
   rivet task deps [--project=<path>] [--run=<id>]
+  rivet task cleanup [--preview] [--project=<path>] [--run=<id>]
+  rivet task cleanup --retention=<1d..365d|off> [--project=<path>]
   rivet protocols add <slug> [--from=<path>] [--project=<path>] [--json]
   rivet protocols import <slug> --from=<path> [--project=<path>] [--json]
   rivet protocols validate [<slug>] [--project=<path>] [--json]
@@ -141,6 +156,8 @@ Usage:
   rivet work next <run-id> --project=<path> --expected-runtime-version=<n> [--json]
   rivet work submit <run-id> --project=<path> --expected-runtime-version=<n> (--action=<file>|--action-json=<json>) (--result=<file>|--result-json=<json>) [--json]
   rivet work verify <run-id> --project=<path> --expected-version=<n> --expected-runtime-version=<n> [--json]
+  rivet work checkpoint <run-id> --project=<path> --expected-runtime-version=<n> --action=<action.json> --input=<checkpoint.json> [--json]
+  rivet work handoff <run-id> --project=<path> --expected-runtime-version=<n> --input=<handoff.json> [--json]
   rivet work recover <run-id> --project=<path> [--json]
   rivet work status <run-id> --project=<path> [--json]
   rivet install --project-runtime [--project=<path>] [--target=both|claude|codex] [--json] Pin a private project runtime and entry skills
@@ -166,6 +183,8 @@ Usage:
   rivet init --project <path> --write [--overwrite] [--remote=<name>] [--checks-json='<json>'] [--dependencies-json='<json>']
   rivet doctor [--project <path>] [--json]
   rivet support [--project=<path>] [--probe-harnesses] [--save] [--json]
+  rivet orchestrate status [--json]
+  rivet orchestrate limits --limits-json=<json> [--json]
   rivet preflight [--project <path>] [--mode=host|orchestration] [--json]
   rivet verify [--json]
   rivet evidence [--json]
@@ -178,8 +197,6 @@ Usage:
   rivet status <instance> [--fixture=<path>] [--port=<n>] [--json]
   rivet goals status <instance> [--json]
   rivet goals events <instance> [--limit=<n>] [--json]
-  rivet orchestrate run <instance> --expected-version=<n> [--json]
-  rivet orchestrate watch <instance> --expected-version=<n> --interval-ms=<n> --max-ticks=<n> --deadline-ms=<n> [--json]
 `;
 
 async function defaultConfirmOverwrite() {
@@ -219,6 +236,21 @@ async function defaultConfirmModelDelegation(_preview, options = {}) {
     return /^(?:y|yes)$/i.test(String(answer).trim());
   } catch { return false; }
   finally { options.signal?.removeEventListener('abort', abort); readline.close(); }
+}
+
+async function defaultConfirmWorktreeRetention() {
+  const readline=createInterface({input:process.stdin,output:process.stdout});
+  try {return /^(?:y|yes)$/i.test(String(await readline.question('Approve this future automatic cleanup policy? [y/N] ')).trim());}
+  catch{return false;}finally{readline.close();}
+}
+
+async function defaultConfirmWorktreeCleanup() {
+  const readline = createInterface({input:process.stdin,output:process.stdout});
+  try {
+    const answer = await readline.question('Remove exactly the eligible checkouts and owned artifacts displayed above, preserving their branches? [y/N] ');
+    return /^(?:y|yes)$/i.test(String(answer).trim());
+  } catch { return false; }
+  finally { readline.close(); }
 }
 
 async function defaultConfirmDependencyInstall(_plan, options = {}) {
@@ -275,6 +307,7 @@ function resolveDependencies(overrides = {}) {
     output: overrides.output ?? createOutput(),
     fetch: overrides.fetch ?? globalThis.fetch,
     models: overrides.models,
+    modelPolicyPrompt: overrides.modelPolicyPrompt,
     support: overrides.support,
     confirmModelDelegation: overrides.confirmModelDelegation ?? defaultConfirmModelDelegation,
     selectTrackerDestination: overrides.selectTrackerDestination ?? defaultSelectTrackerDestination,
@@ -282,6 +315,8 @@ function resolveDependencies(overrides = {}) {
     delivery: overrides.delivery,
     confirmOverwrite: overrides.confirmOverwrite ?? defaultConfirmOverwrite,
     confirmFeatureActivation: overrides.confirmFeatureActivation ?? defaultConfirmFeatureActivation,
+    confirmWorktreeRetention: overrides.confirmWorktreeRetention ?? defaultConfirmWorktreeRetention,
+    confirmWorktreeCleanup: overrides.confirmWorktreeCleanup ?? defaultConfirmWorktreeCleanup,
     confirmDependencyInstall: overrides.confirmDependencyInstall ?? defaultConfirmDependencyInstall,
     setupRemotePrompt: overrides.setupRemotePrompt,
     projectChecksPrompt: overrides.projectChecksPrompt,
@@ -296,6 +331,7 @@ function resolveDependencies(overrides = {}) {
     maxUpdateResponseBytes: overrides.maxUpdateResponseBytes,
     updateCheckTimeoutMs: overrides.updateCheckTimeoutMs,
     orchestration: overrides.orchestration,
+    machine: overrides.machine,
     evidence: overrides.evidence,
     quality: overrides.quality,
     feature: overrides.feature,

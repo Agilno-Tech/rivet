@@ -123,13 +123,14 @@ test('only canonical internal release bot PR events skip duplicate jobs', async 
       base: { ref: 'main', repo: { full_name: 'Agilno-Tech/rivet' } },
     } },
   };
-  for (const [path, job] of [['ci.yml', 'check'], ['docs.yml', 'build']]) {
+  for (const [path, job] of [['ci.yml', 'test'], ['ci.yml', 'check'], ['docs.yml', 'build']]) {
     const parsed = parse(await readFile(new URL(`../../.github/workflows/${path}`, import.meta.url), 'utf8'));
     const expression = parsed.jobs[job].if;
-    assert.match(expression, /^\$\{\{ !\(/);
+    assert.match(expression, job === 'check' ? /^\$\{\{ always\(\) && !\(/ : /^\$\{\{ !\(/);
     // Execute the repository-owned, JavaScript-compatible boolean expression,
     // so changing any trust predicate changes the behavior exercised here.
-    const evaluate = new Function('github', `return (${expression.slice(3, -2)});`);
+    const expressionFunction = new Function('github', 'always', `return (${expression.slice(3, -2)});`);
+    const evaluate = github => expressionFunction(github, () => true);
     assert.equal(evaluate(trusted), false, path);
     for (const change of [
       value => { value.event_name = 'workflow_dispatch'; delete value.event.pull_request; },

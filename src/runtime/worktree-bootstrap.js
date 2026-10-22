@@ -6,6 +6,7 @@ import { assertGitClient } from '../git/client.js';
 import { createApprovalReceipt, createApprovalRegistry } from '../policy/approvals.js';
 import { createAuthorityEnvelope } from '../policy/authority.js';
 import { runCommand, isCommandBootstrapFailure } from '../policy/commands.js';
+import { abandonLegacyDependencyInstall, beginLegacyDependencyInstall, finishLegacyDependencyInstall } from './legacy-dependency-directory.js';
 import { inspectPortableDependencies, bootstrapPortableDependencies } from './portable-dependencies.js';
 
 const LOCKFILES = Object.freeze({
@@ -146,32 +147,44 @@ export async function bootstrapWorktreeDependencies(input, options = {}) {
   if (approved !== true) return Object.freeze({ status: 'declined' });
   const current = await inspectWorktreeDependencies(input, options);
   if (current.lockfile !== plan.lockfile || current.manager !== plan.manager) fail('unsafe-checkout');
-  const nowMs = Date.now();
-  const registry = createApprovalRegistry({ approvers: [{ id: 'human-owner', principal: 'human' }] });
-  const approval = createApprovalReceipt({
-    id: `approval-${randomUUID()}`,
-    approverId: 'human-owner', approverPrincipal: 'human', subjectId: 'rivet-bootstrap',
-    action: 'dependency.install', resource: `command:install:${plan.worktreePath}`,
-    policyId: 'dependency.install', decision: 'approved',
-    expiresAt: new Date(nowMs + 60_000).toISOString(), singleUse: true,
-  });
-  const result = await runCommand({
-    worktree: plan.worktreePath,
-    authority: createAuthorityEnvelope({
-      actorId: 'rivet-bootstrap', principal: 'agent', actions: ['dependency.install'],
-      ownedPaths: [], providers: [], commands: ['install'],
-    }),
-    commands: { install: {
-      executable, args: plan.args, action: 'dependency.install', elevated: true,
-      approvalPolicyId: 'dependency.install', approverId: 'human-owner',
-    } },
-    environment: { PATH: `${dirname(process.execPath)}:/usr/bin:/bin` },
-    timeoutMs: 10 * 60_000,
-    maxOutputBytes: 16 * 1024,
-    maxStreamOutputBytes: 16 * 1024,
-  }, { actorId: 'rivet-bootstrap', commandId: 'install', cwd: '.', approval, approvalRegistry: registry, nowMs },
-  { signal: options.signal });
-  const after = await options.gitClient.inspectRepository(plan.worktreePath).catch(() => fail('checkout-changed'));
-  if (after.dirty || after.headSha !== plan.expectedCommit || after.branch !== plan.expectedBranch) fail('checkout-changed');
-  return Object.freeze({ status: result.status === 'success' ? 'ready' : 'failed', result });
+  let dependencyOwner;
+  try { dependencyOwner = await beginLegacyDependencyInstall(plan.worktreePath); } catch { fail('unsafe-checkout'); }
+  let successful = false;
+  let executionStatus = null;
+  try {
+    const nowMs = Date.now();
+    const registry = createApprovalRegistry({ approvers: [{ id: 'human-owner', principal: 'human' }] });
+    const approval = createApprovalReceipt({
+      id: `approval-${randomUUID()}`,
+      approverId: 'human-owner', approverPrincipal: 'human', subjectId: 'rivet-bootstrap',
+      action: 'dependency.install', resource: `command:install:${plan.worktreePath}`,
+      policyId: 'dependency.install', decision: 'approved',
+      expiresAt: new Date(nowMs + 60_000).toISOString(), singleUse: true,
+    });
+    const result = await runCommand({
+      worktree: plan.worktreePath,
+      authority: createAuthorityEnvelope({
+        actorId: 'rivet-bootstrap', principal: 'agent', actions: ['dependency.install'],
+        ownedPaths: [], providers: [], commands: ['install'],
+      }),
+      commands: { install: {
+        executable, args: plan.args, action: 'dependency.install', elevated: true,
+        approvalPolicyId: 'dependency.install', approverId: 'human-owner',
+      } },
+      environment: { PATH: `${dirname(process.execPath)}:/usr/bin:/bin` },
+      timeoutMs: 10 * 60_000,
+      maxOutputBytes: 16 * 1024,
+      maxStreamOutputBytes: 16 * 1024,
+    }, { actorId: 'rivet-bootstrap', commandId: 'install', cwd: '.', approval, approvalRegistry: registry, nowMs },
+    { signal: options.signal, onExecution: receipt => { executionStatus = receipt.status; } });
+    const after = await options.gitClient.inspectRepository(plan.worktreePath).catch(() => fail('checkout-changed'));
+    if (after.dirty || after.headSha !== plan.expectedCommit || after.branch !== plan.expectedBranch) fail('checkout-changed');
+    successful = result.status === 'success' && executionStatus === 'stopped';
+    return Object.freeze({ status: successful ? 'ready' : 'failed', result });
+  } finally {
+    try {
+      if (executionStatus === 'stopped') await finishLegacyDependencyInstall(dependencyOwner, successful);
+      else await abandonLegacyDependencyInstall(dependencyOwner);
+    } catch { fail('unsafe-checkout'); }
+  }
 }

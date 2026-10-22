@@ -1,3 +1,5 @@
+import { executionForNode } from '../feature/client-profile.js';
+import {taskAllowance,requireManagedAllowance} from '../runtime/task-orchestration.js';
 import { taskState } from '../cli/task-presentation.js';
 import { finishTask } from './task-completion.js';
 import { createHash } from 'node:crypto';
@@ -50,18 +52,23 @@ function reviewLines(project, task, harness, proposal, details = false) {
     || typeof proposal.proposalDigest !== 'string' || !Number.isSafeInteger(proposal.version)) {
     fail('Rivet returned an invalid proposal.', 'INTERNAL_ERROR');
   }
+  const coordination = plan.nodes.find(node => node.role === 'manager')?.executionSelection;
+  const planning = coordination && !coordination.recommendationOnly ? coordination : null;
+  const planningHarness = planning?.harness ?? plan.client ?? harness.kind;
   const lines = [
     'Review this exact Rivet plan before activation:',
     ...(details ? [`Summary: ${proposal.summary ?? 'Ready for review.'}`] : []),
     `Project: ${project.root}`,
-    `Harness: ${harness.kind} (${harness.version})`,
-    ...(details ? [`Executable: ${harness.executable}`] : []),
+    `Planning harness: ${planningHarness}${planning ? `; model: ${planning.model}; reasoning: ${planning.effort}` : ''}${planningHarness === harness.kind ? ` (${harness.version})` : ' (saved proposal)'}`,
+    ...(details && planningHarness === harness.kind ? [`Planning executable: ${harness.executable}`] : []),
     `Base commit: ${plan.baselineCommit}`,
     ...(plan.branchNaming ? [`Branch: ${plan.branchNaming.pattern.replace('{slug}',`${plan.id}-<run-id>`)} (${plan.branchNaming.workType})`] : []),
     `Providers: ${(plan.providerRefs ?? []).join(', ') || 'none'}`,
-    ...(plan.clientProfile ? [`Client limits: ${JSON.stringify(plan.clientProfile)}`] : []),
+    ...(planning?.harness === 'claude' && plan.managedClaudeProfile ? [`Planning spending cap: $${plan.managedClaudeProfile.planning.maxCostUsd}`] : []),
+    ...(!planning && plan.clientProfile ? [`Planning client limits: ${JSON.stringify(plan.clientProfile)}`] : []),
     'Request:', task,
     'Acceptance criteria:', ...request.acceptanceCriteria.map((item,index) => `  ${index+1}. ${item}`),
+    ...(plan.maxParallelWorkers === undefined ? [] : [`Worker concurrency ceiling: ${plan.maxParallelWorkers}; role, parent and machine capacity may lower it.`]),
     'Work and scope:',
   ];
   const labels = new Map();
@@ -70,15 +77,23 @@ function reviewLines(project, task, harness, proposal, details = false) {
   for (const node of plan.nodes) {
     lines.push(details ? `  ${node.role} (${node.id}): ${node.objective}` : `  ${labels.get(node.id)}${node.role==='worker' ? `: ${node.objective}` : ''}`);
     for (const path of node.ownedPaths ?? []) lines.push(`    path: ${path}`);
+    if (node.sharedResources?.length) lines.push(`    shared resources: ${node.sharedResources.join(', ')}`);
     if (node.dependencies?.length) lines.push(`    after: ${node.dependencies.map(id=>details?id:labels.get(id)??id).join(', ')}`);
     if (node.acceptanceCriteria?.length) lines.push(`    accepts: ${node.acceptanceCriteria.map(criterion=>!details && request.acceptanceCriteria.includes(criterion) ? `criterion ${request.acceptanceCriteria.indexOf(criterion)+1}` : criterion).join('; ')}`);
     if (node.authorityScopes?.length) lines.push(`    authority: ${node.authorityScopes.join(', ')}`);
     if (node.commandIds?.length) lines.push(`    commands: ${node.commandIds.join(', ')}`);
     if (node.requiredEvidenceTypes?.length) lines.push(`    evidence: ${node.requiredEvidenceTypes.join(', ')}`);
+    const execution = executionForNode(plan, node);
+    const selection = node.executionSelection;
     if (node.role === 'worker') {
-      lines.push(`    executor: ${node.execution?.client ?? plan.client ?? harness.kind}`);
-      const profile = node.execution ? node.execution.clientProfile : plan.clientProfile;
-      if (profile) lines.push(`    executor limits: ${JSON.stringify(profile)}`);
+      lines.push(`    executor: ${execution.client ?? harness.kind}`);
+      if (execution.executionSelection && execution.clientProfile) lines.push(`    executor spending cap: $${execution.clientProfile.execution.maxCostUsd}`);
+      if (!execution.executionSelection && execution.clientProfile) lines.push(`    executor limits: ${JSON.stringify(execution.clientProfile)}`);
+    }
+    if (selection) {
+      const label = selection.recommendationOnly ? 'recommended routing (host-owned; not dispatched)' : node.role === 'worker' ? 'execution routing' : 'coordination routing';
+      lines.push(`    ${label}: ${selection.harness}; model: ${selection.model}; reasoning: ${selection.effort}`);
+      lines.push(`    selection reason: ${selection.reason}`);
     }
     if (node.budget) lines.push(details ? `    budget: ${JSON.stringify(node.budget)}` : `    limits: ${Object.entries(node.budget).map(([key,value])=>key==='timeMinutes'?`${value} min`:key==='tokenLimit'?`${value} tokens`:key==='costUsd'?`$${value}`:key==='taskLimit'?`${value} tasks`:`${key}: ${JSON.stringify(value)}`).join('; ')}`);
     if (node.approvalGate) lines.push(`    human gate: ${node.approvalGate}`);
@@ -106,9 +121,10 @@ function resultCode(result) {
 
 export async function humanRunCommand(parsed, dependencies) {
   if (parsed.command !== 'run' || parsed.subcommand !== null || parsed.operands.length !== 1
-    || Object.keys(parsed.flags).some(key => !['project', 'harness', 'details'].includes(key))) {
+    || Object.keys(parsed.flags).some(key => !['project', 'harness', 'details', 'for'].includes(key))) {
     fail('Use rivet run "task" [--harness=claude|codex] [--project=<path>].');
   }
+  taskAllowance(parsed.flags.for);
   if (dependencies.terminalIsInteractive?.() !== true) {
     fail('rivet run needs an interactive terminal for plan review and approval. Use feature/work JSON commands for automation.');
   }
@@ -117,11 +133,16 @@ export async function humanRunCommand(parsed, dependencies) {
 
 async function runInteractive(parsed, dependencies, signal) {
   const project = await resolveConfiguredProject(dependencies.cwd(), parsed.flags.project, { env: dependencies.env });
+  requireManagedAllowance({featurePlan:{executionPolicy:project.config.orchestration.executionPolicy}},taskAllowance(parsed.flags.for));
   const harnesses = dependencies.harnesses;
   if (!harnesses || typeof harnesses.discover !== 'function' || typeof harnesses.select !== 'function') {
     fail('Harness discovery is unavailable.', 'MISSING_CONFIGURATION');
   }
-  const requested = parsed.flags.harness;
+  const policy = project.config.orchestration.executionPolicy;
+  const savedHarness = policy?.profiles[policy.routing.coordination]?.harness;
+  if (savedHarness && parsed.flags.harness !== undefined && parsed.flags.harness !== savedHarness)
+    fail('The requested harness conflicts with saved coordination routing. Use rivet models configure to review a routing change before starting.');
+  const requested = parsed.flags.harness ?? savedHarness;
   if (requested !== undefined && !KINDS.has(requested)) fail('Use --harness=claude or --harness=codex.');
   const discovered = await harnesses.discover(project.root, { signal });
   const eligible = discovered.filter(item => item.executable);
@@ -163,15 +184,16 @@ async function runInteractive(parsed, dependencies, signal) {
     return existing.status === 'awaiting-final-approval' ? EXIT_CODES.SUCCESS : EXIT_CODES.REPOSITORY_CONFLICT;
   }
   for (const kind of new Set(proposal.featurePlan.nodes.filter(node => node.role === 'worker')
-    .map(node => node.execution?.client).filter(Boolean))) {
+    .map(node => executionForNode(proposal.featurePlan, node).client).filter(Boolean))) {
     if (!KINDS.has(kind)) fail('The worker harness is unsupported.', 'PROVIDER_UNAVAILABLE');
     try { await harnesses.select(kind, project.root, { signal }); }
     catch { fail(`The selected worker harness ${kind} is unavailable or incompatible. Install and authenticate it before activation.`, 'PROVIDER_UNAVAILABLE'); }
   }
-  return activateProposal(project, parsed.operands[0], selected, proposal, dependencies, signal, {details:parsed.flags.details});
+  return activateProposal(project, parsed.operands[0], selected, proposal, dependencies, signal, {details:parsed.flags.details,allowanceMs:taskAllowance(parsed.flags.for)});
 }
 
-export async function activateProposal(project, task, selected, proposal, dependencies, signal, {details = false} = {}) {
+export async function activateProposal(project, task, selected, proposal, dependencies, signal, {details = false, allowanceMs} = {}) {
+  requireManagedAllowance(proposal, allowanceMs);
   const reviewedConfig = createHash('sha256').update(JSON.stringify(project.config)).digest('hex');
   const feature = dependencies.feature;
   if (!feature || typeof feature.start !== 'function' || typeof feature.watch !== 'function'
@@ -202,7 +224,7 @@ export async function activateProposal(project, task, selected, proposal, depend
   });
   const result = await invokeFeature(feature, 'watch', {
     project: project.root, runId: proposal.runId, expectedVersion: started.version,
-  }, { signal, confirmDependencyInstall: confirmIsolatedDependencyInstall(dependencies, signal) });
+  }, { signal, ...(allowanceMs===undefined?{}:{allowanceMs}), confirmDependencyInstall: confirmIsolatedDependencyInstall(dependencies, signal) });
   dependencies.output.log(`Rivet task: ${taskState(result.status)}.`);
   if (result.summary) dependencies.output.log(visible(result.summary));
   dependencies.output.log('Use rivet task status to inspect the checkout and verification evidence.');

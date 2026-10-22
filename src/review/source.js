@@ -24,12 +24,25 @@ export function createReviewSource({target,transport,headers,signal}) {
  const {repository,number}=target, provider=repository.provider;
  const http=createProviderHttpClient({provider,transport,headers,baseUrl:endpoints[provider],allowEncodedSlash:true,maxResponseBytes:512*1024});
  const root=provider==='github'?`/repos/${repository.fullName}/pulls/${number}`:provider==='bitbucket'?`/repositories/${repository.fullName}/pullrequests/${number}`:`/projects/${encodeURIComponent(repository.fullName)}/merge_requests/${number}`;
+ async function bitbucketCommit(ref, destination=false) {
+  const hash=ref?.commit?.hash;
+  if(typeof hash==='string'&&SHA.test(hash))return hash;
+  if(typeof hash!=='string'||!/^[a-f0-9]{4,39}$/.test(hash))fail('Review commit identity is unavailable or invalid.');
+  const name=ref?.repository?.full_name;
+  let commitRepository;
+  try {commitRepository=parseRepositoryRemote(`https://bitbucket.org/${name}`);}catch{fail('Review commit repository is unavailable or invalid.');}
+  if(commitRepository.fullName!==name||(destination&&name!==repository.fullName))fail('Review commit repository does not match the pull request.');
+  const {data}=await http.request({method:'GET',path:`/repositories/${name}/commit/${hash}`,signal});
+  if(typeof data?.hash!=='string'||!SHA.test(data.hash)||!data.hash.startsWith(hash))fail('Review commit could not be resolved to an exact matching identity.');
+  return data.hash;
+ }
  async function identity() {
   const {data:v}=await http.request({method:'GET',path:root,signal});
   const id=provider==='github'?v.number:provider==='bitbucket'?v.id:v.iid;
-  const headSha=provider==='github'?v.head?.sha:provider==='bitbucket'?v.source?.commit?.hash:v.diff_refs?.head_sha;
-  const baseSha=provider==='github'?v.base?.sha:provider==='bitbucket'?v.destination?.commit?.hash:v.diff_refs?.base_sha;
-  if(id!==number||!SHA.test(headSha)||!SHA.test(baseSha)||!['open','OPEN','opened'].includes(v.state))fail('Review is closed or its exact commit identities are unavailable.');
+  if(id!==number||!['open','OPEN','opened'].includes(v.state))fail('Review is closed or its identity is unavailable.');
+  const headSha=provider==='github'?v.head?.sha:provider==='bitbucket'?await bitbucketCommit(v.source):v.diff_refs?.head_sha;
+  const baseSha=provider==='github'?v.base?.sha:provider==='bitbucket'?await bitbucketCommit(v.destination,true):v.diff_refs?.base_sha;
+  if(!SHA.test(headSha)||!SHA.test(baseSha))fail('Review exact commit identities are unavailable.');
   if(provider==='gitlab'&&v.sha!==headSha)fail('Review head changed while preparing its diff. Retry.');
   const title=v.title,description=(provider==='github'?v.body:v.description)??'';
   if(typeof title!=='string'||title.length>4096||typeof description!=='string'||description.length>64000)fail('Review description is invalid or too large.');

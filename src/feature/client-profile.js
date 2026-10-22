@@ -84,5 +84,6 @@ export function matchesWorkerExecution(role, execution, caps) {
 }
 
 export function executionForNode(plan, node) {
+  if (node.executionSelection && !node.executionSelection.recommendationOnly) return { client: node.executionSelection.harness, clientProfile: node.executionSelection.harness === 'claude' ? plan.managedClaudeProfile ?? plan.clientProfile ?? clientProfileFor('claude') : undefined, executionSelection: node.executionSelection };
   return node.execution ?? { client: plan.client, clientProfile: plan.clientProfile };
 }

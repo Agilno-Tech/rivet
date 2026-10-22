@@ -1,3 +1,4 @@
+import { fixtureGit } from '../helpers/git-executable.js';
 import assert from 'node:assert/strict';
 import { execFile as callback } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
@@ -16,7 +17,7 @@ import { readSnapshotWithoutLock } from '../../src/state/snapshot-store.js';
 import { createWorkRequest } from '../../src/work-request/contract.js';
 
 const execFile = promisify(callback);
-const git = async (root, ...args) => (await execFile('/usr/bin/git', ['-C', root, ...args])).stdout.trim();
+const git = async (root, ...args) => (await execFile(fixtureGit, ['-C', root, ...args])).stdout.trim();
 const configFixture = new URL('../fixtures/config/valid/.rivet/', import.meta.url);
 const decision = (id = 'health-response', tier = 1) => ({ id, tier, title: 'Health response format',
   options: [{ id: 'json', description: 'Return JSON' }, { id: 'text', description: 'Return plain text' }],
@@ -29,7 +30,7 @@ async function fixture(t) {
   await mkdir(join(root, 'src')); await mkdir(join(root, '.rivet-inputs'));
   await writeFile(join(root, '.gitignore'), '.rivet-inputs/\n');
   await writeFile(join(root, 'README.md'), '# CLI fixture\n');
-  await execFile('/usr/bin/git', ['init', '-q', '--initial-branch=main', root]);
+  await execFile(fixtureGit, ['init', '-q', '--initial-branch=main', root]);
   await git(root, 'add', '.');
   await git(root, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', 'fixture');
   const baselineCommit = await git(root, 'rev-parse', 'HEAD');
@@ -45,7 +46,7 @@ async function fixture(t) {
   const call = async (args, overrides = {}) => {
     const messages = [];
     const code = await main(['task', ...args], { cwd: () => root, env: {}, reportFailure: false,
-      terminalIsInteractive: () => false, resolveCommandExecutable: async () => realpath('/usr/bin/git'),
+      terminalIsInteractive: () => false, resolveCommandExecutable: async () => realpath(fixtureGit),
       output: { log: value => messages.push(value), error: value => messages.push(value), json: value => messages.push(JSON.stringify(value)) }, ...overrides });
     return { code, messages, text: messages.join('\n') };
   };

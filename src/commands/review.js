@@ -1,3 +1,6 @@
+import {withOperationAdmission} from '../runtime/task-orchestration.js';
+import {admitted,admissionKey} from '../runtime/machine-admission.js';
+import { resolveExecutionSelection } from '../models/execution-policy.js';
 import {redactSecrets} from '../state/redact.js';
 import {loadProjectConfig} from '../config/load.js';
 import {discoverHarnesses} from '../runtime/harness-discovery.js';
@@ -60,11 +63,15 @@ async function executeReview(parsed,dependencies,signal) {
   if(!flags.context){
    const harnesses=dependencies.harnesses??{discover:root=>discoverHarnesses({env:dependencies.env,projectRoot:root,signal}),select:async(kind,root)=>(await discoverHarnesses({env:dependencies.env,projectRoot:root,signal})).find(item=>item.kind===kind&&item.executable)};
    const available=(await harnesses.discover(project.root,{signal})).filter(item=>item.executable);
-   const chosen=flags.harness?available.find(item=>item.kind===flags.harness):available.find(item=>item.kind==='claude')??available[0];
+   const executionSelection=resolveExecutionSelection(project.config.orchestration.executionPolicy,'independent-review');
+   if(executionSelection&&flags.harness&&flags.harness!==executionSelection.harness)fail('Review harness conflicts with the approved execution profile.','MISSING_CONFIGURATION');
+   const requestedHarness=executionSelection?.harness??flags.harness;
+   const chosen=requestedHarness?available.find(item=>item.kind===requestedHarness):available.find(item=>item.kind==='claude')??available[0];
    if(!chosen)fail('No compatible review CLI is installed. Install/authenticate Claude or Codex, or use --context --json in your existing harness.','PROVIDER_UNAVAILABLE');
    const selected=await harnesses.select(chosen.kind,project.root,{signal});
    if(!flags.json)dependencies.output.log(`Reviewing with ${selected.kind}. The supplied diff is sent to this harness; project checks are not run.`);
-   report=await (dependencies.review?.run??runReviewClient)({selected,snapshot,environment:dependencies.env,signal});
+   const execute=executionOptions=>(dependencies.review?.run??runReviewClient)({selected,snapshot,environment:dependencies.env,...executionOptions,...(executionSelection===undefined?{}:{executionSelection})});
+   report=dependencies.machine?await withOperationAdmission(dependencies.machine,project.root,managedSignal=>admitted('agentExecutions',`review-${admissionKey([snapshot.url,snapshot.headSha])}`,{signal:managedSignal},execute),{signal}):await execute({signal});
    report=validateReport(report,snapshot);
    await source.assertCurrent(snapshot);
   }

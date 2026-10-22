@@ -1,3 +1,5 @@
+import { observeExecutionAttempt } from '../clients/execution-proof.js';
+import {admitted,admissionKey,currentMachineContext} from '../runtime/machine-admission.js';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { lstat, realpath } from 'node:fs/promises';
@@ -337,6 +339,7 @@ export async function prepareCommand(contractInput, requestInput) {
     });
     preparedData.set(prepared, Object.freeze({
       worktree: verifiedWorktree.path,
+      action:input.action, approvalExpiresAt:input.elevated?input.approval.expiresAt:null, approvalNowMs:input.nowMs, preparedAtMs:performance.now(),
       environment: input.environment,
       // Approved installs may emit large cold-cache logs. Keep capture bounded,
       // but let the actual exit status decide whether installation succeeded.
@@ -351,6 +354,7 @@ export async function prepareCommand(contractInput, requestInput) {
     }));
     return prepared;
   } catch (error) {
+    if(error?.queued)throw error;
     throw sanitizedFailure(error);
   }
 }
@@ -442,8 +446,9 @@ function rawCaptureLimit(prepared, environment) {
   return prepared.maxOutputBytes + (2 * Math.max(REDACTION_LOOKAHEAD_BYTES, environmentBytes));
 }
 
-function executeAnchored(prepared, data, abortHandle) {
-  return new Promise(resolvePromise => {
+function executeAnchored(prepared, data, abortHandle, onExecution) {
+  const beginChild = observeExecutionAttempt();
+  return new Promise((resolvePromise) => {
     const nonce = randomBytes(16).toString('hex');
     const rawLimit = rawCaptureLimit(prepared, data.environment);
     const chunks = { stdout: [], stderr: [] };
@@ -451,6 +456,7 @@ function executeAnchored(prepared, data, abortHandle) {
     let rawOverflow = false;
     let overflowStream;
     let child;
+    let proveNoChild;
     let resultMessage;
     let timedOut = false;
     let aborted = abortHandle.aborted();
@@ -465,6 +471,44 @@ function executeAnchored(prepared, data, abortHandle) {
     let hardTimer;
     let anchorTimer;
     let anchorCheckRunning = false;
+    let executionPid = null;
+    let receiptChain = Promise.resolve();
+    function receipt(status) {
+      if (!onExecution || !executionPid) return Promise.resolve();
+      const value = {
+        version: 1,
+        executionId: nonce,
+        processId: executionPid,
+        processGroupId: executionPid,
+        ownerProcessId: process.pid,
+        processBirth: null,
+        observedAtMs: Date.now(),
+        source: 'owned-process',
+        assurance: 'observed',
+        status,
+      };
+      receiptChain = receiptChain.then(async () => {
+        let timer;
+        try {
+          await Promise.race([
+            Promise.resolve().then(() => onExecution(value)),
+            new Promise((_, reject) => {
+              timer = setTimeout(
+                () => reject(new Error('Receipt timeout')),
+                1000,
+              );
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+      });
+      receiptChain.catch(() => {
+        bootstrapError = true;
+        stop();
+      });
+      return receiptChain;
+    }
 
     const finish = () => {
       if (settled) return;
@@ -475,29 +519,48 @@ function executeAnchored(prepared, data, abortHandle) {
       clearTimeout(termTimer);
       clearInterval(anchorTimer);
       abortHandle.cleanup();
-      resolvePromise({
-        code: resultMessage?.code ?? null,
-        signal: resultMessage?.signal ?? null,
-        timedOut,
-        aborted,
-        rawOverflow,
-        overflowStream,
-        bootstrapError,
-        bootstrapFailure: bootstrapError ? bootstrapFailure ?? 'bootstrap-process-failed' : undefined,
-        stdout: Buffer.concat(chunks.stdout),
-        stderr: Buffer.concat(chunks.stderr),
-      });
+      receipt(resultMessage?.stopped ? 'stopped' : 'unknown')
+        .catch(() => {
+          bootstrapError = true;
+        })
+        .then(() =>
+          resolvePromise({
+            code: resultMessage?.code ?? null,
+            signal: resultMessage?.signal ?? null,
+            timedOut,
+            aborted,
+            rawOverflow,
+            overflowStream,
+            bootstrapError,
+            bootstrapFailure: bootstrapError ? bootstrapFailure ?? 'bootstrap-process-failed' : undefined,
+            stdout: Buffer.concat(chunks.stdout),
+            stderr: Buffer.concat(chunks.stderr),
+          }),
+        );
     };
     const stop = () => {
       if (stopping) return;
       stopping = true;
-      try { child?.send({ version: BOOTSTRAP_VERSION, type: 'cancel', nonce }, () => {}); } catch {}
-      termTimer = setTimeout(() => { try { child?.kill('SIGTERM'); } catch {} }, KILL_GRACE_MS);
+      try {
+        child?.send(
+          { version: BOOTSTRAP_VERSION, type: 'cancel', nonce },
+          () => {},
+        );
+      } catch {}
+      termTimer = setTimeout(() => {
+        try {
+          child?.kill('SIGTERM');
+        } catch {}
+      }, KILL_GRACE_MS);
       termTimer.unref?.();
-      killTimer = setTimeout(() => { try { child?.kill('SIGKILL'); } catch {} }, BOOTSTRAP_KILL_GRACE_MS);
+      killTimer = setTimeout(() => {
+        try {
+          child?.kill('SIGKILL');
+        } catch {}
+      }, BOOTSTRAP_KILL_GRACE_MS);
       killTimer.unref?.();
     };
-    const collect = stream => chunk => {
+    const collect = (stream) => (chunk) => {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       const available = Math.max(0, rawLimit - rawBytes);
       const accepted = buffer.subarray(0, available);
@@ -513,16 +576,63 @@ function executeAnchored(prepared, data, abortHandle) {
     const onMessage = async message => {
       if (!message || message.version !== BOOTSTRAP_VERSION || message.nonce !== nonce) return malformed();
       if (message.type === 'ready') {
-        if (!exactMessage(message, ['version', 'type', 'nonce']) || launched) return malformed();
+        if (!exactMessage(message, ['version', 'type', 'nonce']) || launched)
+          return malformed();
         launched = true;
-        if (!await anchorsStillValid(prepared, data)) { bootstrapFailure = 'anchor-invalid'; return malformed(); }
-        try { child.send({ version: BOOTSTRAP_VERSION, type: 'launch', nonce }, error => { if (error) malformed(); }); } catch { malformed(); }
+        if (!(await anchorsStillValid(prepared, data))) { bootstrapFailure = 'anchor-invalid'; return malformed(); }
+        try {
+          child.send(
+            { version: BOOTSTRAP_VERSION, type: 'launch', nonce },
+            (error) => {
+              if (error) malformed();
+            },
+          );
+        } catch {
+          malformed();
+        }
+        return;
+      }
+      if (message.type === 'started') {
+        if (
+          !exactMessage(message, ['version', 'type', 'nonce', 'processId']) ||
+          executionPid !== null ||
+          !Number.isSafeInteger(message.processId) ||
+          message.processId < 1
+        )
+          return malformed();
+        executionPid = message.processId;
+        receipt('started');
         return;
       }
       if (message.type === 'result') {
-        if (!exactMessage(message, ['version', 'type', 'nonce', 'code', 'signal']) || resultMessage) return malformed();
-        if (!(message.code === null || Number.isInteger(message.code)) || !(message.signal === null || typeof message.signal === 'string')) return malformed();
-        resultMessage = Object.freeze({ code: message.code, signal: message.signal });
+        if (
+          !exactMessage(message, [
+            'version',
+            'type',
+            'nonce',
+            'code',
+            'signal',
+            'processId',
+            'stopped',
+          ]) ||
+          resultMessage
+        )
+          return malformed();
+        if (
+          !(message.code === null || Number.isInteger(message.code)) ||
+          !(message.signal === null || typeof message.signal === 'string')
+        )
+          return malformed();
+        if (
+          message.processId !== executionPid ||
+          typeof message.stopped !== 'boolean'
+        )
+          return malformed();
+        resultMessage = Object.freeze({
+          code: message.code,
+          signal: message.signal,
+          stopped: message.stopped,
+        });
         return;
       }
       if (message.type === 'failed') {
@@ -540,6 +650,7 @@ function executeAnchored(prepared, data, abortHandle) {
       return;
     }
     try {
+      proveNoChild = beginChild();
       child = spawn(process.execPath, [BOOTSTRAP_PATH, BOOTSTRAP_FLAG], {
         cwd: prepared.cwd,
         env: Object.create(null),
@@ -548,6 +659,7 @@ function executeAnchored(prepared, data, abortHandle) {
         windowsHide: true,
       });
     } catch {
+      proveNoChild?.();
       bootstrapError = true;
       finish();
       return;
@@ -555,8 +667,12 @@ function executeAnchored(prepared, data, abortHandle) {
     child.stdout?.on('data', collect('stdout'));
     child.stderr?.on('data', collect('stderr'));
     child.on('message', onMessage);
-    child.once('error', () => { bootstrapError = true; finish(); });
-    child.once('close', code => {
+    child.once('error', () => {
+      if (!child.pid) proveNoChild?.();
+      bootstrapError = true;
+      finish();
+    });
+    child.once('close', (code) => {
       if (code !== 0 || !resultMessage) bootstrapError = true;
       finish();
     });
@@ -574,22 +690,39 @@ function executeAnchored(prepared, data, abortHandle) {
       }
     }, 5);
     anchorTimer.unref?.();
-    abortHandle.onAbort(() => { aborted = true; stop(); });
-    child.send({
-      version: BOOTSTRAP_VERSION,
-      type: 'init',
-      nonce,
-      worktree: data.worktree,
-      cwd: prepared.cwd,
-      executable: prepared.executable,
-      args: prepared.args,
-      environment: data.environment,
-      identities: data.identities,
-      ...(data.execution === 'argv' ? { execution: 'argv', invocation: data.invocation } : {}),
-    }, error => { if (error) malformed(); });
-    timeoutTimer = setTimeout(() => { timedOut = true; stop(); }, prepared.timeoutMs);
+    abortHandle.onAbort(() => {
+      aborted = true;
+      stop();
+    });
+    child.send(
+      {
+        version: BOOTSTRAP_VERSION,
+        type: 'init',
+        nonce,
+        worktree: data.worktree,
+        cwd: prepared.cwd,
+        executable: prepared.executable,
+        args: prepared.args,
+        environment: data.environment,
+        identities: data.identities,
+        ...(data.execution === 'argv'
+          ? { execution: 'argv', invocation: data.invocation }
+          : {}),
+      },
+      (error) => {
+        if (error) malformed();
+      },
+    );
+    timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      stop();
+    }, prepared.timeoutMs);
     timeoutTimer.unref?.();
-    hardTimer = setTimeout(() => { bootstrapError = true; stop(); finish(); }, prepared.timeoutMs + HARD_STOP_MS);
+    hardTimer = setTimeout(() => {
+      bootstrapError = true;
+      stop();
+      finish();
+    }, prepared.timeoutMs + HARD_STOP_MS);
     hardTimer.unref?.();
   });
 }
@@ -791,15 +924,51 @@ function commandStatus(raw, truncated, allowOutputOverflow) {
   return 'success';
 }
 
-export async function runCommand(contractInput, requestInput, optionsInput = {}) {
+export async function runCommand(
+  contractInput,
+  requestInput,
+  optionsInput = {},
+) {
   let abortHandle;
   try {
-    const options = capture(optionsInput, new Set(['signal']), [], 'invalid-options');
-    abortHandle = captureAbortSignal(options.signal);
+    const options = capture(
+      optionsInput,
+      new Set(['signal', 'onExecution']),
+      [],
+      'invalid-options',
+    );
+    abortHandle = captureAbortSignal(
+      options.signal ?? currentMachineContext()?.signal,
+    );
     const prepared = await prepareCommand(contractInput, requestInput);
     const data = preparedData.get(prepared);
     if (!data) fail('invalid-prepared-command');
-    const raw = await executeAnchored(prepared, data, abortHandle);
+    if (
+      options.onExecution !== undefined &&
+      typeof options.onExecution !== 'function'
+    )
+      fail('invalid-options');
+    const resource =
+      data.action === 'dependency.install'
+        ? 'dependencyInstalls'
+        : 'heavyVerification';
+    const raw = await admitted(
+      resource,
+      `command-${admissionKey([prepared.cwd, requestInput.commandId, prepared.args])}`,
+      {
+        ...options,
+        beforeDispatch: () => {
+          if (
+            data.approvalExpiresAt !== null &&
+            Date.parse(data.approvalExpiresAt) <=
+              data.approvalNowMs + (performance.now() - data.preparedAtMs)
+          )
+            fail('approval-required');
+        },
+      },
+      (admission) =>
+        executeAnchored(prepared, data, abortHandle, admission.onExecution),
+    );
     const output = sanitizeAndLimit(raw, prepared, data.environment);
     return Object.freeze({
       status: commandStatus(raw, output.truncated, data.allowOutputOverflow),
@@ -816,6 +985,7 @@ export async function runCommand(contractInput, requestInput, optionsInput = {})
     });
   } catch (error) {
     abortHandle?.cleanup();
+    if (error?.queued) throw error;
     throw sanitizedFailure(error);
   }
 }

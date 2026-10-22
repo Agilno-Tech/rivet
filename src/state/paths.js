@@ -127,6 +127,35 @@ export async function resolveStatePaths(projectRoot, instance, options = {}) {
   return registerPaths(paths);
 }
 
+// Dependency ownership lives outside executable checkout contents. Read-only
+// inspection must never create directories or adopt a self-asserted marker.
+export async function resolveCleanupRetentionPaths(projectRoot, {existing=false, ...options}={}) {
+  const gitCommonDir=await resolveGitCommonDirectory(projectRoot,options,'Unable to resolve the Git common directory');
+  const stateRoot=join(gitCommonDir,'rivet'),instanceDir=join(stateRoot,'cleanup-retention');
+  for(const path of [stateRoot,instanceDir]) {
+    if(existing){if(!(await existingPrivateDirectory(path,gitCommonDir)))return null;}
+    else await createPrivateDirectory(path,gitCommonDir);
+  }
+  return registerPaths(Object.freeze({gitCommonDir,stateRoot,instanceDir,
+    snapshotPath:join(instanceDir,'policy.json'),lockPath:join(instanceDir,'state.lock'),
+    runtimeLockPath:join(instanceDir,'operation.lock')}));
+}
+
+export async function resolveLegacyDependencyPaths(projectRoot, checkoutKey, { existing = false, ...options } = {}) {
+  if (!/^[a-f0-9]{64}$/.test(checkoutKey)) throw new TypeError('Invalid dependency checkout key');
+  const gitCommonDir = await resolveGitCommonDirectory(projectRoot, options, 'Unable to resolve the Git common directory');
+  const parent = join(gitCommonDir, 'rivet');
+  const stateRoot = join(parent, 'dependencies');
+  const instanceDir = join(stateRoot, checkoutKey);
+  for (const path of [parent, stateRoot, instanceDir]) {
+    if (existing) { if (!(await existingPrivateDirectory(path, gitCommonDir))) return null; }
+    else await createPrivateDirectory(path, gitCommonDir);
+  }
+  return registerPaths(Object.freeze({ gitCommonDir, stateRoot, instanceDir,
+    snapshotPath: join(instanceDir, 'ownership.json'), lockPath: join(instanceDir, 'state.lock'),
+    runtimeLockPath: join(instanceDir, 'install.lock') }));
+}
+
 export async function resolveFeatureRunPaths(projectRoot, runId, options = {}) {
   if (typeof runId !== 'string' || runId.length > 64 || !INSTANCE_ID.test(runId)) {
     throw new TypeError('Invalid feature run identifier');
@@ -244,6 +273,35 @@ export function acceptedIntegrationPaths(featurePaths) {
     ...featurePaths,
     snapshotPath: join(featurePaths.runDir, 'accepted-integration.json'),
     lockPath: join(featurePaths.runDir, 'accepted-integration.lock'),
+  }));
+}
+
+export function hostReconciliationPaths(paths, nodeId) {
+  assertResolvedStatePaths(paths);
+  if (typeof nodeId !== 'string' || nodeId.length > 64 || !INSTANCE_ID.test(nodeId)) throw new TypeError('Invalid host node identifier');
+  return registerPaths(Object.freeze({...paths,
+    snapshotPath: join(paths.instanceDir, `host-reconciliation-${nodeId}.json`),
+    lockPath: join(paths.instanceDir, `host-reconciliation-${nodeId}.lock`),
+  }));
+}
+
+export function worktreeCleanupPaths(paths) {
+  assertResolvedStatePaths(paths);
+  return registerPaths(Object.freeze({...paths,
+    snapshotPath: join(paths.instanceDir, 'worktree-cleanup.json'),
+    lockPath: join(paths.instanceDir, 'worktree-cleanup.state.lock'),
+  }));
+}
+
+export function integrationCandidatePaths(paths, candidateId) {
+  assertResolvedStatePaths(paths);
+  if (typeof candidateId !== 'string' || candidateId.length > 64 || !INSTANCE_ID.test(candidateId)) {
+    throw new TypeError('Invalid integration candidate identifier');
+  }
+  return registerPaths(Object.freeze({
+    ...paths,
+    snapshotPath: join(paths.instanceDir, `candidate-${candidateId}.json`),
+    lockPath: join(paths.instanceDir, `candidate-${candidateId}.state.lock`),
   }));
 }
 

@@ -1,3 +1,4 @@
+import { selectionArguments } from './session-capabilities.js';
 import { lstat } from 'node:fs/promises';
 
 import { checkCompatibility, validVersion } from './compatibility.js';
@@ -21,8 +22,8 @@ export const CODEX_ADAPTER_SYNTAX = Object.freeze({
   optionalArgs: Object.freeze(['--model <id>', '--sandbox <read-only|workspace-write>', '--strict-config']),
 });
 
-const CONFIG_KEYS = new Set(['executable', 'interpreter', 'expectedVersion', 'args', 'environment', 'timeoutMs', 'maxOutputBytes']);
-const PLANNING_CONFIG_KEYS = new Set(['executable', 'interpreter', 'expectedVersion', 'worktree', 'environment', 'timeoutMs', 'maxOutputBytes']);
+const CONFIG_KEYS = new Set(['executable', 'interpreter', 'expectedVersion', 'args', 'environment', 'timeoutMs', 'maxOutputBytes', 'executionSelection', 'onTelemetry']);
+const PLANNING_CONFIG_KEYS = new Set(['executable', 'interpreter', 'expectedVersion', 'worktree', 'environment', 'timeoutMs', 'maxOutputBytes', 'executionSelection', 'onTelemetry']);
 
 function stable(operation) {
   try { return operation(); } catch { failAgent('template-invalid'); }
@@ -50,7 +51,7 @@ function captureArgs(input) {
     const prototype = Object.getPrototypeOf(input);
     const length = input.length;
     if (prototype !== Array.prototype || !Number.isSafeInteger(length)
-      || length < ARGS.length || length > ARGS.length + 6) failAgent('template-invalid');
+      || length < ARGS.length || length > ARGS.length + 8) failAgent('template-invalid');
     const result = [];
     for (let index = 0; index < length; index += 1) {
       const descriptor = Object.getOwnPropertyDescriptor(input, String(index));
@@ -70,7 +71,8 @@ function captureArgs(input) {
       if (option === '--strict-config') continue;
       const value = result[index + 1];
       index += 1;
-      if (option === '--model' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(value)) continue;
+      if (option === '--model' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(value)) continue;
+      if (option === '--config' && /^model_reasoning_effort="(?:none|minimal|low|medium|high|xhigh|max|ultra)"$/.test(value)) continue;
       if (option === '--sandbox' && ['read-only', 'workspace-write'].includes(value)) continue;
       failAgent('template-invalid');
     }
@@ -101,7 +103,8 @@ export function createCodexClient(input) {
   if (typeof config.executable !== 'string' || !config.executable.startsWith('/') || config.executable.length > 1024
     || (config.interpreter !== undefined && (typeof config.interpreter !== 'string' || !config.interpreter.startsWith('/') || config.interpreter.length > 1024))
     || (config.expectedVersion !== undefined && !validVersion(config.expectedVersion))) failAgent('template-invalid');
-  const args = captureArgs(config.args);
+  const selectedArgs = selectionArguments('codex', config.executionSelection);
+  const args = captureArgs(selectedArgs.length ? [...config.args.slice(0,-1), ...selectedArgs, '{stdin}'] : config.args);
   const environment = captureEnvironment(config.environment);
   const executable = config.executable;
   const interpreter = config.interpreter;
@@ -110,7 +113,7 @@ export function createCodexClient(input) {
   const maxOutputBytes = config.maxOutputBytes;
 
   async function launch(contractInput, optionInput = {}) {
-    const options = capture(optionInput, new Set(['signal','protocolContext']), []);
+    const options = capture(optionInput, new Set(['signal','protocolContext','onTelemetry','onExecution']), []);
     const signalState = stable(() => {
       const value = options.signal;
       if (value !== undefined && (!(value instanceof AbortSignal) || Object.getPrototypeOf(value) !== AbortSignal.prototype)) failAgent('template-invalid');
@@ -124,7 +127,7 @@ export function createCodexClient(input) {
       worktreeIdentity: { dev: contract.worktree.dev, ino: contract.worktree.ino },
       environment, signal: signalState.value,
       timeoutMs: Math.min(timeoutMs ?? contract.budget.maxRuntimeMs, contract.budget.maxRuntimeMs, 10 * 60_000),
-      maxOutputBytes, allowOptionArgs: true,
+      maxOutputBytes, onExecution:options.onExecution, onTelemetry: options.onTelemetry ?? config.onTelemetry, telemetryProvider: 'codex', allowOptionArgs: true,
     });
     await checkCompatibility(runner, 'codex', args, expectedVersion);
     return runner.run({ args, cwd: '.', payload: serializeLaunchContract(contract), protocolContext: options.protocolContext, signal: signalState.value });
@@ -141,7 +144,7 @@ export function createCodexPlanningClient(input) {
     || typeof config.worktree !== 'string' || !config.worktree.startsWith('/') || config.worktree.length > 1024) {
     failAgent('template-invalid');
   }
-  const args = captureArgs([...ARGS.slice(0, -1), '--sandbox', 'read-only', '{stdin}']);
+  const args = captureArgs([...ARGS.slice(0, -1), ...selectionArguments('codex', config.executionSelection), '--sandbox', 'read-only', '{stdin}']);
   const environment = captureEnvironment(config.environment);
   const executable = config.executable;
   const interpreter = config.interpreter;
@@ -149,7 +152,7 @@ export function createCodexPlanningClient(input) {
   const worktree = config.worktree;
 
   async function propose(contract, optionInput = {}) {
-    const options = capture(optionInput, new Set(['signal']), []);
+    const options = capture(optionInput, new Set(['signal','onExecution']), []);
     const signal = options.signal;
     if (signal !== undefined && (!(signal instanceof AbortSignal) || Object.getPrototypeOf(signal) !== AbortSignal.prototype)) {
       failAgent('template-invalid');
@@ -161,8 +164,8 @@ export function createCodexPlanningClient(input) {
     const identity = Object.freeze({ dev: metadata.dev.toString(), ino: metadata.ino.toString() });
     const runner = await createProcessRunner({
       executable, interpreter, worktree, worktreeIdentity: identity, environment, signal,
-      timeoutMs: config.timeoutMs, maxInputBytes: 512 * 1024,
-      maxOutputBytes: config.maxOutputBytes ?? 512 * 1024, allowOptionArgs: true,
+      timeoutMs: config.timeoutMs, maxInputBytes: 512 * 1024, onExecution:options.onExecution,
+      maxOutputBytes: config.maxOutputBytes ?? 512 * 1024, onTelemetry: config.onTelemetry, telemetryProvider: 'codex', allowOptionArgs: true,
     });
     await checkCompatibility(runner, 'codex', args, expectedVersion);
     return runner.runPlanning({

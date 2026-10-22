@@ -67,7 +67,7 @@ function checkResult(value) {
 
 function valid(report) {
   if (!report || typeof report !== 'object' || Array.isArray(report)
-    || report.schemaVersion !== 1 || !['pass', 'fail'].includes(report.status)
+    || report.scope !== undefined || report.schemaVersion !== 1 || !['pass', 'fail'].includes(report.status)
     || !SHA.test(report.baselineCommit) || !SHA.test(report.commitSha)
     || typeof report.runId !== 'string' || report.runId.length > 64 || !ID.test(report.runId)
     || !Number.isSafeInteger(report.runVersion) || report.runVersion < 1
@@ -82,6 +82,8 @@ function valid(report) {
     || !Array.isArray(report.workerClaims) || report.workerClaims.length > 64
     || report.workerClaims.some(ref => typeof ref !== 'string' || ref.length > 256)
     || !Array.isArray(report.checks) || report.checks.length > 64
+    || (report.verificationReuse !== undefined && (typeof report.verificationReuse !== 'string'
+      || !/^[a-z][a-z-]{0,63}$/.test(report.verificationReuse)))
     || (report.failure !== null && (typeof report.failure !== 'string' || report.failure.length > 300))
     || typeof report.checkedAt !== 'string' || !Number.isFinite(Date.parse(report.checkedAt))
     || new Date(report.checkedAt).toISOString() !== report.checkedAt) {
@@ -100,6 +102,7 @@ function valid(report) {
     changedPathCount: report.changedPathCount,
     workerClaims: report.workerClaims,
     checks: report.checks.map(checkResult),
+    ...(report.verificationReuse === undefined ? {} : {verificationReuse:report.verificationReuse}),
     failure: report.failure,
     nextAction: nextAction(report.status),
     checkedAt: report.checkedAt,
@@ -139,6 +142,7 @@ export function verificationReport(input) {
     changedPathCount: input.changedPaths.length,
     workerClaims,
     checks,
+    ...(input.quality?.verificationReuse ? {verificationReuse:input.quality.verificationReuse.status} : {}),
     failure: input.failure === undefined ? null : bounded(input.failure, 300),
     nextAction: nextAction(input.quality?.status === 'pass' ? 'pass' : 'fail'),
     checkedAt: input.checkedAt,

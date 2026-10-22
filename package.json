@@ -33,6 +33,7 @@
   "dependencies": {
     "@inquirer/checkbox": "^3.0.0",
     "ajv": "^8.20.0",
+    "smol-toml": "^1.9.1",
     "yaml": "^2.9.0"
   },
   "devDependencies": {

@@ -21,6 +21,8 @@ GitLab.com merge requests and Bitbucket Cloud pull requests use their normal URL
 
 Configure a scoped `git-ci` provider with `repository-read`, its normal provider API endpoint and a token environment reference. See [repository inspection](./repositories.md) and [integration setup](./integrations.md). Your coding CLI must also be installed and authenticated. Rivet checks required command capabilities, without requiring a specific CLI version.
 
+Bitbucket may return abbreviated commit hashes. Rivet resolves these through the appropriate source or destination repository’s commit API, including fork sources, and checks the full hashes again before accepting or publishing a review. If a commit cannot be resolved or changes during capture, review stops.
+
 Findings are saved privately in the Git directory and printed with paths and line numbers. The command does not change your checkout, run project commands, approve or merge the PR, or publish findings automatically.
 
 ## From Claude Code, Codex or another coding harness

@@ -158,6 +158,7 @@ test('the packed archive contains and executes the complete modular CLI offline'
     'src/commands/doctor.js',
     'src/commands/preflight.js',
     'src/commands/uninstall.js',
+    'src/models/codex-config-model.js',
     'src/discovery/project.js',
     'src/discovery/git.js',
     'src/discovery/tools.js',
@@ -200,7 +201,7 @@ test('the packed archive contains and executes the complete modular CLI offline'
     join(dependencyScope, 'checkbox'),
     process.platform === 'win32' ? 'junction' : 'dir',
   );
-  for (const dependency of ['ajv', 'yaml']) {
+  for (const dependency of ['ajv', 'smol-toml', 'yaml']) {
     await symlink(
       join(PACKAGE_ROOT, 'node_modules', dependency),
       join(isolatedProject, 'node_modules', dependency),
@@ -220,7 +221,7 @@ test('the packed archive contains and executes the complete modular CLI offline'
   });
 
   assert.equal(executed.signal, null);
-  assert.equal(executed.code, EXIT_CODES.MISSING_CONFIGURATION);
+  assert.equal(executed.code, EXIT_CODES.MISSING_CONFIGURATION, executed.stderr);
   assert.equal(executed.stdout, '');
   assert.equal(executed.stderr.split('\n').filter(Boolean).length, 1);
   assert.equal(JSON.parse(executed.stderr).error.code, 'MISSING_CONFIGURATION');

@@ -43,6 +43,7 @@ const LEGACY_OPTIONS = {
   },
 };
 const STRICT_OPTIONS = {
+  orchestrate:{boolean:new Set(['json']),valued:new Set(['project','run','deadline-ms','max-ticks','interval-ms','expected-version','max-active-nodes','limits-json','machine-limits-json'])},
   update: { boolean: new Set(['global', 'project', 'check', 'json']), valued: new Set() },
   review: { boolean: new Set(['json', 'context', 'publish']), valued: new Set(['project', 'remote', 'provider', 'harness', 'input']) },
   delivery: { boolean: new Set(['json']), valued: new Set(['project', 'run', 'remote', 'provider', 'method', 'title', 'body']) },
@@ -55,17 +56,17 @@ const STRICT_OPTIONS = {
   work: {
     boolean: new Set(['json']),
     valued: new Set([
-      'action', 'action-json', 'decomposition', 'decomposition-json', 'result-json', 'expected-runtime-version', 'expected-version', 'project', 'result',
+      'input', 'input-json', 'action', 'action-json', 'decomposition', 'decomposition-json', 'result-json', 'expected-runtime-version', 'expected-version', 'project', 'result',
       'request', 'request-text', 'ticket', 'tracker', 'host-context-json', 'acceptance-criteria', 'run',
     ]),
   },
   run: {
     boolean: new Set(['details']),
-    valued: new Set(['project', 'harness']),
+    valued: new Set(['project', 'harness', 'for']),
   },
   task: {
-    boolean: new Set(['details']),
-    valued: new Set(['project', 'run', 'input', 'input-json', 'phase', 'decision']),
+    boolean: new Set(['details', 'preview', 'batch']),
+    valued: new Set(['project', 'run', 'for', 'input', 'input-json', 'phase', 'decision', 'retention']),
   },
   setup: {
     boolean: new Set(['global', 'write', 'json']),
@@ -73,7 +74,7 @@ const STRICT_OPTIONS = {
   },
   models: {
     boolean: new Set(['json']),
-    valued: new Set(['profile', 'roles', 'role', 'project']),
+    valued: new Set(['profile', 'roles', 'role', 'project', 'harness']),
   },
   support: {
     boolean: new Set(['json', 'probe-harnesses', 'save']),
@@ -241,10 +242,10 @@ export function parseArgs(argv) {
   if (command === 'protocols' && !['add', 'import', 'validate', 'find', 'show', 'update', 'retire'].includes(positionals[0])) {
     throw new ArgumentError('Unsupported protocol subcommand');
   }
-  if (command === 'work' && !['propose', 'prepare', 'next', 'status', 'submit', 'verify', 'recover'].includes(positionals[0])) {
+  if (command === 'work' && !['propose', 'prepare', 'next', 'status', 'submit', 'verify', 'recover', 'checkpoint', 'handoff'].includes(positionals[0])) {
     throw new ArgumentError('Unsupported work subcommand');
   }
-  if (command === 'task' && !['status', 'start', 'approve', 'resume', 'deps', 'recover', 'decisions', 'decide', 'approve-decision', 'review'].includes(positionals[0])) {
+  if (command === 'task' && !['status', 'start', 'approve', 'pause', 'resume', 'deps', 'verify', 'cleanup', 'recover', 'decisions', 'decide', 'approve-decision', 'review', 'checkpoint', 'handoff'].includes(positionals[0])) {
     throw new ArgumentError('Unsupported task subcommand');
   }
 

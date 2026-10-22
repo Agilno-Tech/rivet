@@ -106,3 +106,53 @@ test('escaped descendants holding pipes cannot extend failure finalization indef
     }
   }
 });
+
+test('fixture shards share the full-suite ownership and reject invalid or live combinations',()=>{
+ assert.deepEqual(parseArguments(['--mode=fixture','--shard=2/4']).shard,{index:2,count:4});
+ for(const args of [['--shard=0/4'],['--shard=1/4','--scenario=intake'],['--mode=live','--shard=1/4']])assert.throws(()=>parseArguments(args));
+});
+
+test('fixture scenarios share one isolated invocation per file without losing criteria',async()=>{
+ const m=await manifest();const calls=[];
+ const result=await runEvaluations({mode:'fixture'},{execute:async(command,args,options)=>{
+  if(command==='git')return {exitCode:0,stdout:'a'.repeat(40)};
+  calls.push({args,options});const file=args.at(-1);
+  const names=new Set(m.scenarios.filter(s=>s.file===file).flatMap(s=>s.criteria.map(c=>c.test)));
+  return {exitCode:0,durationMs:1,stdout:[...names].map(name=>JSON.stringify({name,status:'passed'})).join('\n')};
+ }});
+ assert.equal(result.exitCode,0);assert.equal(result.report.scenarios.length,m.scenarios.length);
+ assert.equal(calls.length,new Set(m.scenarios.map(s=>s.file)).size);
+ assert.equal(result.report.executionGroups.length,calls.length);
+ for(const group of result.report.executionGroups.filter(g=>g.scenarioIds.length>1)){
+  assert.equal(group.durationMs,1);
+  assert.ok(result.report.scenarios.filter(s=>group.scenarioIds.includes(s.id)).every(s=>s.durationMs===null));
+ }
+ assert.ok(calls.every(c=>c.options.env.NODE_OPTIONS===undefined&&c.options.env.GIT_CONFIG_NOSYSTEM==='1'));
+ assert.ok(calls.some(c=>c.options.timeoutMs>120000));
+});
+
+test('grouped evaluation refuses unexpected and duplicate evidence before scenario filtering',async()=>{
+ const m=await manifest();
+ for(const extra of ['unexpected','duplicate']){
+ const result=await runEvaluations({mode:'fixture'},{execute:async(command,args)=>{
+  if(command==='git')return {exitCode:0,stdout:'a'.repeat(40)};
+  const names=[...new Set(m.scenarios.filter(s=>s.file===args.at(-1)).flatMap(s=>s.criteria.map(c=>c.test)))];
+  return {exitCode:0,stdout:[...names,extra==='unexpected'?'not-in-catalog':names[0]].map(name=>JSON.stringify({name,status:'passed'})).join('\n')};
+ }});
+ assert.equal(result.exitCode,1);
+ }
+});
+
+test('evaluation shards cover each scenario once and invalid programmatic shards never dispatch',async()=>{
+ const m=await manifest();const ids=[];
+ for(let index=1;index<=4;index++){
+ const result=await runEvaluations({mode:'fixture',shard:{index,count:4}},{execute:async(command,args)=>{
+  if(command==='git')return {exitCode:0,stdout:'a'.repeat(40)};
+  const names=new Set(m.scenarios.filter(s=>s.file===args.at(-1)).flatMap(s=>s.criteria.map(c=>c.test)));
+  return {exitCode:0,stdout:[...names].map(name=>JSON.stringify({name,status:'passed'})).join('\n')};
+ }});
+ assert.equal(result.exitCode,0);ids.push(...result.report.scenarios.map(s=>s.id));
+ }
+ assert.deepEqual(ids.sort(),m.scenarios.map(s=>s.id).sort());
+ await assert.rejects(runEvaluations({mode:'fixture',shard:{index:0,count:4}},{execute(){throw Error('must not dispatch');}}));
+});

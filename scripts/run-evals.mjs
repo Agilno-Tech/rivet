@@ -9,12 +9,13 @@ import { liveScenarioIds } from '../evals/live-catalog.mjs';
 import { resolveLiveProfile } from '../src/evaluations/profile.js';
 import { runLiveEvaluation } from '../src/evaluations/live-runner.js';
 import { createInterface } from 'node:readline/promises';
+import { parseShard, selectedTests } from './test-shards.cjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const IDS = new Set(catalog.scenarios.map(s => s.id));
 const TIMEOUT_MS = 120_000;
 const MAX_OUTPUT = 1024 * 1024;
-function invalid() { throw new Error('Invalid evaluation arguments or manifest. Use --mode=fixture [--scenario=<known-id>] [--json].'); }
+function invalid() { throw new Error('Invalid evaluation arguments or manifest. Use --mode=fixture [--scenario=<known-id> | --shard=<index>/<count>] [--json].'); }
 export function parseArguments(args) {
   const result = { mode: 'fixture', json: false };
   const live = {};
@@ -27,9 +28,11 @@ export function parseArguments(args) {
     if (key === '--json' && parts.length === 0) result.json = true;
     else if (key === '--mode' && parts.length === 1 && ['fixture', 'live'].includes(parts[0])) result.mode = parts[0];
     else if (key === '--scenario' && parts.length === 1) result.scenario = parts[0];
+    else if (key === '--shard' && parts.length === 1) result.shard = parseShard([arg]);
     else if (Object.hasOwn(fields,key) && parts.length===1 && parts[0]) live[fields[key]]=parts[0];
     else invalid();
   }
+  if (result.shard && (result.mode !== 'fixture' || result.scenario)) invalid();
   if(result.mode==='fixture') { if(Object.keys(live).length || (result.scenario!==undefined&&!IDS.has(result.scenario))) invalid(); }
   else {
     if(result.scenario!==undefined&&!liveScenarioIds.includes(result.scenario)) invalid();
@@ -115,15 +118,23 @@ export function summarizeScenario(scenario, observation) {
   };
 }
 
-async function loadManifest() {
+export async function loadManifest() {
   const path = join(ROOT, 'evals', 'scenarios.json');
   const stat = await lstat(path);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024) invalid();
   return validateManifest(JSON.parse(await readFile(path, 'utf8')));
 }
+export function fixtureEnvironment(scratch) {
+  return { PATH: process.env.PATH, HOME: scratch, USERPROFILE: scratch,
+    TMPDIR: scratch, TMP: scratch, TEMP: scratch, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: join(scratch, 'gitconfig'),
+    GIT_TERMINAL_PROMPT: '0', npm_config_cache: join(scratch, 'npm-cache'), npm_config_userconfig: join(scratch, 'npmrc'),
+    npm_config_globalconfig: join(scratch, 'global-npmrc'), npm_config_update_notifier: 'false' };
+}
 export async function runEvaluations(options, { execute = runBounded, signal, liveDependencies = {} } = {}) {
   // Revalidate programmatic options too; no caller-controlled argv or suite paths.
   if (!options || !['fixture', 'live'].includes(options.mode) || (options.scenario !== undefined && !(options.mode==='live'?liveScenarioIds.includes(options.scenario):IDS.has(options.scenario)))) invalid();
+  if (options.shard && (options.mode !== 'fixture' || options.scenario !== undefined)) invalid();
+  const ownedFiles = options.shard ? new Set(selectedTests(options.shard)) : null;
   const base = { schemaVersion: 1, mode: options.mode, liveModelQualityEvaluated: false, pilotEvaluated: false };
   if (options.mode === 'live') {
     if(!options.profile||!options.scenario) return {exitCode:2,report:{...base,outcome:'blocked',reason:'explicit-live-selection-required',requirements:['Select --scenario=feature|bugfix|text-review and a built-in --profile.', 'Declare --account-policy=<id> and review the interactive cost and execution approval.'],scenarios:[],deferred:catalog.deferred}};
@@ -132,31 +143,45 @@ export async function runEvaluations(options, { execute = runBounded, signal, li
   }
   const manifest = await loadManifest();
   const scratch = await mkdtemp(join(tmpdir(), 'rivet-evals-'));
-  const environment = { PATH: process.env.PATH, HOME: scratch, USERPROFILE: scratch,
-    TMPDIR: scratch, TMP: scratch, TEMP: scratch, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: join(scratch, 'gitconfig'),
-    GIT_TERMINAL_PROMPT: '0', npm_config_cache: join(scratch, 'npm-cache'), npm_config_userconfig: join(scratch, 'npmrc'),
-    npm_config_globalconfig: join(scratch, 'global-npmrc'), npm_config_update_notifier: 'false' };
+  const environment = fixtureEnvironment(scratch);
   try {
     const revision = await execute('git', ['rev-parse', 'HEAD'], { cwd: ROOT, env: environment, timeoutMs: 3000, signal });
     const sourceCommit = /^[a-f0-9]{40,64}\s*$/.test(revision.stdout ?? '') ? revision.stdout.trim() : null;
-    const scenarios = [];
-    for (const scenario of manifest.scenarios.filter(s => !options.scenario || s.id === options.scenario)) {
-      const pattern = `^(?:${scenario.criteria.map(c => c.test.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})$`;
+    const selected = manifest.scenarios.filter(s => (!options.scenario || s.id === options.scenario) && (!ownedFiles || ownedFiles.has(s.file)));
+    const groups = new Map();
+    for (const scenario of selected) {
+      if (!groups.has(scenario.file)) groups.set(scenario.file, []);
+      groups.get(scenario.file).push(scenario);
+    }
+    const byId = new Map(), executionGroups = [];
+    for (const [file, group] of groups) {
+      if (signal?.aborted) break;
+      const names = new Set(group.flatMap(s => s.criteria.map(c => c.test)));
+      const pattern = `^(?:${[...names].map(name => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})$`;
       const observed = await execute(process.execPath, ['--test', '--test-concurrency=1',
-        `--test-reporter=${join(ROOT, 'evals', 'reporter.mjs')}`, `--test-name-pattern=${pattern}`, scenario.file],
-      { cwd: ROOT, env: environment, timeoutMs: TIMEOUT_MS, signal });
+        `--test-reporter=${join(ROOT, 'evals', 'reporter.mjs')}`, `--test-name-pattern=${pattern}`, file],
+      { cwd: ROOT, env: environment, timeoutMs: TIMEOUT_MS * group.length, signal });
       let records = [];
       try {
         records = (observed.stdout ?? '').split('\n').filter(Boolean).map(line => JSON.parse(line));
         if (records.some(r => !r || typeof r.name !== 'string' || !['passed', 'failed', 'skipped', 'todo'].includes(r.status))) throw new Error();
       } catch { observed.reason = 'invalid-test-report'; records = []; }
-      scenarios.push(summarizeScenario(scenario, { ...observed, records }));
-      if (signal?.aborted) break;
+      // Reject unrelated evidence before filtering: grouping must not hide it.
+      if (records.some(record => !names.has(record.name))) observed.reason ??= 'unexpected-test-evidence';
+      executionGroups.push({ file, scenarioIds: group.map(s => s.id), durationMs: observed.durationMs ?? null });
+      for (const scenario of group) {
+        const ownNames = new Set(scenario.criteria.map(c => c.test));
+        byId.set(scenario.id, summarizeScenario(scenario, { ...observed,
+          // Shared process time cannot be attributed to an individual scenario.
+          durationMs: group.length === 1 ? observed.durationMs : null,
+          records: records.filter(record => ownNames.has(record.name)) }));
+      }
     }
+    const scenarios = selected.map(s => byId.get(s.id) ?? summarizeScenario(s, { exitCode: null, reason: 'cancelled', records: [] }));
     const passed = !signal?.aborted && scenarios.every(s => s.outcome === 'passed');
     return { exitCode: passed ? 0 : 1, report: { ...base, sourceCommit, sourceScope: 'current-working-tree',
       outcome: passed ? 'passed' : 'failed', coverage: 'selected named mechanics assertions only',
-      scenarios, deferred: manifest.deferred } };
+      ...(options.shard ? { shard: options.shard } : {}), executionGroups, scenarios, deferred: manifest.deferred } };
   } finally { await rm(scratch, { recursive: true, force: true }); }
 }
 

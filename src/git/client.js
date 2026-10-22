@@ -1,6 +1,8 @@
+import { constants } from 'node:fs';
+import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstat, realpath } from 'node:fs/promises';
+import { lstat, realpath, open } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import { inspectDependencyDirectory } from '../runtime/dependency-directory.js';
 
@@ -227,7 +229,7 @@ function diffPaths(output) {
   return Object.freeze([...new Set(paths)].sort());
 }
 
-function parseStatusPaths(output, managedDependencies = false) {
+function parseStatusPaths(output, managedDependencies = false, includeIgnoredDirectories = false) {
   if (output === '') return Object.freeze([]);
   if (!output.endsWith('\0')) fail('git-output-invalid');
   const records = output.slice(0, -1).split('\0');
@@ -240,8 +242,8 @@ function parseStatusPaths(output, managedDependencies = false) {
     // slash (for example, `!! node_modules/`). It is a directory marker, not
     // an evidence path; ignored files inside it are still reported separately.
     if (!(record[0] === '!' && record[1] === '!'
-      && (path.endsWith('/') || (managedDependencies && path.startsWith('.rivet-deps/'))))) {
-      paths.push(repositoryPath(path));
+      && ((!includeIgnoredDirectories && path.endsWith('/')) || (managedDependencies && path.startsWith('.rivet-deps/'))))) {
+      paths.push(repositoryPath(record.startsWith('!! ') && path.endsWith('/') ? path.slice(0, -1) : path));
     }
     if (record[0] === 'R' || record[0] === 'C' || record[1] === 'R' || record[1] === 'C') {
       index += 1;
@@ -379,6 +381,25 @@ export async function createGitClient(options = {}) {
       await run(absoluteInput(repoRoot), ['worktree', 'add', '--quiet', '-b', value.branch, value.path, value.baseSha]);
     },
 
+    async removePreservedWorktree(repoRoot, input) {
+      const value = captureRecord(input, new Set(['path', 'branch', 'commit', 'dev', 'ino']), ['path', 'branch', 'commit', 'dev', 'ino']);
+      if (!validPath(value.path) || !validBranch(value.branch) || !validSha(value.commit)) fail('invalid-input');
+      const root = absoluteInput(repoRoot);
+      const topology = await client.listWorktrees(root);
+      const worker = await client.inspectRepository(value.path);
+      const primary = await client.inspectRepository(root);
+      if (value.path === root || topology[0]?.path === value.path
+        || topology.filter(item => item.path === value.path || item.branch === value.branch).length !== 1
+        || !topology.some(item => item.path === value.path && item.branch === value.branch && item.head === value.commit)
+        || worker.rootIdentity.dev !== value.dev || worker.rootIdentity.ino !== value.ino
+        || worker.gitCommonDir !== primary.gitCommonDir || worker.branch !== value.branch || worker.headSha !== value.commit
+        || worker.dirty || await client.branchTip(root, value.branch) !== value.commit
+        || (await client.statusPaths(value.path, {includeIgnoredDirectories:true,includeManagedDependencies:true})).length) fail('repository-changed');
+      // Never force removal: Git must reject dirt/submodules that appeared since inspection.
+      await run(root, ['worktree', 'remove', value.path]);
+      if (await client.branchTip(root, value.branch) !== value.commit) fail('repository-changed');
+    },
+
     async rollbackWorktreeCreation(repoRoot, input) {
       const value = captureRecord(input, new Set(['path', 'branch', 'baseSha']), ['path', 'branch', 'baseSha']);
       if (!validPath(value.path) || !validBranch(value.branch) || !validSha(value.baseSha)) fail('invalid-input');
@@ -437,6 +458,12 @@ export async function createGitClient(options = {}) {
       return Object.freeze({path, blob:match[2], content:result.output});
     },
 
+    async hasTrackedPaths(cwd, path) {
+      repositoryPath(path);
+      const result=await run(absoluteInput(cwd),['ls-files','-z','--',path]);
+      return result.output.length>0;
+    },
+
     async inspectTrackedFile(cwd, commit, path) {
       if (!validSha(commit)) fail('invalid-input');
       repositoryPath(path);
@@ -446,7 +473,59 @@ export async function createGitClient(options = {}) {
       return Object.freeze({ path, blob: match[2] });
     },
 
-    async statusPaths(cwd) {
+    async checkpointManifest(cwdInput) {
+      const cwd = absoluteInput(cwdInput);
+      const observe = async () => {
+        const repository = await client.inspectRepository(cwd);
+        if (repository.root !== cwd || repository.detached) fail('repository-unsafe');
+        const paths = await client.statusPaths(cwd);
+        if (paths.length > 256) fail('git-output-invalid');
+        const index = await run(cwd, ['ls-files','--stage','-z']);
+        const entries = []; const ancestors={}; let total = 0;
+        for (const path of [...paths].sort()) {
+          let cursor = cwd;
+          for (const part of path.split('/').slice(0,-1)) {
+            cursor = join(cursor,part);
+            const meta = await lstat(cursor).catch(error => error.code === 'ENOENT' ? null : Promise.reject(error));
+            if(meta) ancestors[cursor]={dev:String(meta.dev),ino:String(meta.ino)};
+            if (meta && (!meta.isDirectory() || meta.isSymbolicLink() || await realpath(cursor) !== cursor)) fail('repository-path-unsafe');
+          }
+          const target = join(cwd,path);
+          let before; try { before = await lstat(target); } catch(error) { if(error.code !== 'ENOENT') throw error; }
+          if (!before) { entries.push({path,deleted:true}); continue; }
+          if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > 8*1024*1024) fail('repository-path-unsafe');
+          total += before.size; if(total > 16*1024*1024) fail('git-output-invalid');
+          const handle = await open(target,constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+          try {
+            const opened = await handle.stat();
+            if (!sameIdentity(before,opened) || opened.size !== before.size || !opened.isFile()) fail('repository-changed');
+            const bytes = Buffer.alloc(opened.size + 1); let offset=0;
+            while(offset < bytes.length) { const {bytesRead}=await handle.read(bytes,offset,bytes.length-offset,null); if(!bytesRead) break;offset+=bytesRead; }
+            const after=await handle.stat();const current=await lstat(target);
+            if(offset !== opened.size || !sameIdentity(after,current) || !sameIdentity(opened,after)
+              || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs) fail('repository-changed');
+            entries.push({path,dev:String(after.dev),ino:String(after.ino),mode:after.mode & 0o777,digest:createHash('sha256').update(bytes.subarray(0,offset)).digest('hex')});
+          } finally { await handle.close(); }
+        }
+        const data={repositoryId:repository.repositoryId,root:repository.root,rootIdentity:repository.rootIdentity,
+          branch:repository.branch,headSha:repository.headSha,ancestors:Object.entries(ancestors).map(([path,identity])=>({path,...identity})),indexDigest:createHash('sha256').update(index.output).digest('hex'),entries};
+        return {...data,digest:createHash('sha256').update(JSON.stringify(data)).digest('hex')};
+      };
+      const first=await observe();const second=await observe();
+      if(first.digest !== second.digest) fail('repository-changed');
+      return Object.freeze(second);
+    },
+
+    async isIgnoredPath(cwd, path) {
+      repositoryPath(path);
+      const result = await run(absoluteInput(cwd), ['check-ignore', '--quiet', '--', path], [0, 1]);
+      return result.code === 0;
+    },
+
+    async statusPaths(cwd, options = {}) {
+      const value = captureRecord(options, new Set(['includeIgnoredDirectories', 'includeManagedDependencies']));
+      if (value.includeIgnoredDirectories !== undefined && typeof value.includeIgnoredDirectories !== 'boolean') fail('invalid-input');
+      if (value.includeManagedDependencies !== undefined && typeof value.includeManagedDependencies !== 'boolean') fail('invalid-input');
       const result = await run(absoluteInput(cwd), [
         'status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching',
       ]);
@@ -454,7 +533,7 @@ export async function createGitClient(options = {}) {
       // validated owned directory. Foreign or damaged metadata remains evidence.
       let managedDependencies = false;
       try { managedDependencies = (await inspectDependencyDirectory(absoluteInput(cwd))) !== null; } catch {}
-      return parseStatusPaths(result.output, managedDependencies);
+      return parseStatusPaths(result.output, managedDependencies && value.includeManagedDependencies !== true, value.includeIgnoredDirectories === true);
     },
 
     async commitPaths(cwdInput, input) {
@@ -492,6 +571,26 @@ export async function createGitClient(options = {}) {
       if (!validSha(ancestorSha) || !validSha(descendantSha)) fail('invalid-input');
       const result = await run(absoluteInput(cwd), ['merge-base', '--is-ancestor', ancestorSha, descendantSha], [0, 1]);
       return result.code === 0;
+    },
+
+    async mergeCommit(cwdInput, input) {
+      const value = captureRecord(input, new Set(['branch', 'expectedTip', 'sourceSha']), ['branch', 'expectedTip', 'sourceSha']);
+      if (!validBranch(value.branch) || !validSha(value.expectedTip) || !validSha(value.sourceSha)) fail('invalid-input');
+      const cwd = absoluteInput(cwdInput);
+      const before = await client.inspectRepository(cwd);
+      if (before.root !== cwd || before.dirty || before.branch !== value.branch || before.headSha !== value.expectedTip) fail('repository-changed');
+      await run(cwd, [
+        '-c', 'user.name=Rivet Integration', '-c', 'user.email=rivet-integration@invalid',
+        '-c', 'commit.gpgsign=false', '-c', 'rerere.enabled=false',
+        'merge', '--no-ff', '--no-edit', '--no-verify', '--no-gpg-sign', '--no-overwrite-ignore',
+        '-m', 'Integrate verified Rivet participant', value.sourceSha,
+      ]);
+      const after = await client.inspectRepository(cwd);
+      if (after.repositoryId !== before.repositoryId || after.rootIdentity.dev !== before.rootIdentity.dev
+        || after.rootIdentity.ino !== before.rootIdentity.ino || after.branch !== value.branch || after.dirty
+        || !(await client.isAncestor(cwd, value.expectedTip, after.headSha))
+        || !(await client.isAncestor(cwd, value.sourceSha, after.headSha))) fail('repository-changed');
+      return after;
     },
 
     async fastForward(cwd, input) {

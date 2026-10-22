@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile as execFileCallback } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile, rename, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -111,6 +111,18 @@ test('refuses a checkout changed after the prompt and rejects installer source e
   }), error => error instanceof WorktreeBootstrapError && error.details.reason === 'checkout-changed');
 });
 
+test('enrolled dependency setup queues without an agent lease and resumes the actual installer',async t=>{
+ const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+ const {withMachineContext}=await import('../../src/runtime/machine-admission.js');
+ const value=await fixture(t,{'package-lock.json':'{"lockfileVersion":3}\n'});
+ const coordinator=createResourceCoordinator({root:join(value.parent,'machine')});const r=await coordinator.register({projectRoot:value.input.projectRoot,runId:'install-run',deadlineMs:Date.now()+30000});
+ const held=await coordinator.request({registrationId:r.id,resource:'dependencyInstalls',idempotencyKey:'another-installer',generation:1});
+ let done=false;const pending=withMachineContext(coordinator,value.input.projectRoot,r.runId,()=>bootstrapWorktreeDependencies(value.input,{gitClient:value.gitClient,resolveCommandExecutable:async()=>value.installer,confirm:async()=>true})).then(result=>{done=true;return result;});
+ for(let i=0;i<100;i++){if((await coordinator.inspect()).claims.some(c=>c.status==='queued'))break;await new Promise(resolve=>setTimeout(resolve,10));}
+ assert.equal(done,false);const waiting=await coordinator.inspect();assert.equal(waiting.claims.filter(c=>c.resource==='agentExecutions'&&c.status==='held').length,0);assert.equal(waiting.claims.filter(c=>c.status==='queued').length,1);
+ await coordinator.release({claimId:held.id,generation:1,completed:true});assert.equal((await pending).status,'ready');assert.equal(await readFile(join(value.input.worktreePath,'node_modules','installed'),'utf8'),'ready');
+});
+
 test('install errors expose only recognized bootstrap failure reasons', () => {
   const error = new WorktreeBootstrapError('install-failed', {
     status: 'bootstrap-error', code: null, bootstrapFailure: 'target-spawn-failed',
@@ -138,4 +150,88 @@ fs.writeFileSync('node_modules/installed', 'ready');
   assert.equal(result.result.suppressed, true);
   assert.equal(result.result.truncated.combined, true);
   assert.equal(await readFile(join(value.input.worktreePath, 'node_modules/installed'), 'utf8'), 'ready');
+});
+
+
+test('legacy ownership survives approved npm ci replacement but rejects foreign roots and symlinks', async t => {
+  const { inspectLegacyDependencyDirectory } = await import('../../src/runtime/legacy-dependency-directory.js');
+  const value = await fixture(t, { 'package-lock.json': '{"lockfileVersion":3}\n' });
+  const options = { gitClient: value.gitClient, resolveCommandExecutable: async () => value.installer, confirm: async () => true };
+  const dependencies = join(value.input.worktreePath, 'node_modules');
+  await bootstrapWorktreeDependencies(value.input, options);
+  const first = await inspectLegacyDependencyDirectory(value.input.worktreePath);
+  await writeFile(value.installer, '#!/bin/sh\nmv node_modules "$PWD/../old-dependencies"\nmkdir node_modules\nprintf ready > node_modules/installed\n');
+  await bootstrapWorktreeDependencies(value.input, options);
+  const second = await inspectLegacyDependencyDirectory(value.input.worktreePath);
+  assert.notEqual(first.directoryIdentity, second.directoryIdentity);
+  await rename(dependencies, join(value.parent, 'saved-dependencies'));
+  await mkdir(dependencies);
+  await writeFile(join(dependencies, '.rivet-owner.json'), '{}');
+  await assert.rejects(inspectLegacyDependencyDirectory(value.input.worktreePath), /unsafe/);
+  await assert.rejects(bootstrapWorktreeDependencies(value.input, options), /unsafe/);
+  await rm(dependencies, { recursive: true });
+  await symlink(join(value.parent, 'saved-dependencies'), dependencies);
+  await assert.rejects(bootstrapWorktreeDependencies(value.input, options), /unsafe/);
+});
+
+test('failed approved legacy install blocks acceptance but permits an explicitly approved retry', async t => {
+  const { inspectLegacyDependencyDirectory } = await import('../../src/runtime/legacy-dependency-directory.js');
+  const value = await fixture(t, { 'package-lock.json': '{"lockfileVersion":3}\n' });
+  const options = { gitClient: value.gitClient, resolveCommandExecutable: async () => value.installer, confirm: async () => true };
+  await bootstrapWorktreeDependencies(value.input, options);
+  await writeFile(value.installer, '#!/bin/sh\nexit 1\n');
+  assert.equal((await bootstrapWorktreeDependencies(value.input, options)).status, 'failed');
+  await assert.rejects(inspectLegacyDependencyDirectory(value.input.worktreePath));
+  await writeFile(value.installer, '#!/bin/sh\nprintf retried > node_modules/installed\n');
+  assert.equal((await bootstrapWorktreeDependencies(value.input, options)).status, 'ready');
+  assert.ok(await inspectLegacyDependencyDirectory(value.input.worktreePath));
+  assert.equal(await readFile(join(value.input.worktreePath, 'node_modules', 'installed'), 'utf8'), 'retried');
+});
+
+
+test('failed legacy install retains private intent for first-install retry and rejects replaced failed roots', async t => {
+  const value = await fixture(t, { 'package-lock.json': '{"lockfileVersion":3}\n' });
+  const options = {gitClient: value.gitClient, resolveCommandExecutable: async () => value.installer, confirm: async () => true};
+  await writeFile(value.installer, '#!/bin/sh\nmkdir node_modules\nprintf partial > node_modules/installed\nexit 1\n');
+  assert.equal((await bootstrapWorktreeDependencies(value.input, options)).status, 'failed');
+  await rename(join(value.input.worktreePath, 'node_modules'), join(value.parent, 'retained-failed'));
+  await mkdir(join(value.input.worktreePath, 'node_modules'));
+  await assert.rejects(bootstrapWorktreeDependencies(value.input, options), /unsafe/);
+  await rm(join(value.input.worktreePath, 'node_modules'), {recursive: true});
+  await rename(join(value.parent, 'retained-failed'), join(value.input.worktreePath, 'node_modules'));
+  await writeFile(value.installer, '#!/bin/sh\nprintf ready > node_modules/installed\n');
+  assert.equal((await bootstrapWorktreeDependencies(value.input, options)).status, 'ready');
+});
+
+test('pending legacy install blocks candidate inspection before dependencies appear', async t => {
+  const {beginLegacyDependencyInstall, finishLegacyDependencyInstall, inspectLegacyDependencyDirectory} =
+    await import('../../src/runtime/legacy-dependency-directory.js');
+  const value = await fixture(t, {'package-lock.json': '{"lockfileVersion":3}\n'});
+  const owner = await beginLegacyDependencyInstall(value.input.worktreePath);
+  try {
+    await assert.rejects(inspectLegacyDependencyDirectory(value.input.worktreePath), /unsafe/);
+    await assert.rejects(beginLegacyDependencyInstall(value.input.worktreePath));
+  } finally { await finishLegacyDependencyInstall(owner, false); }
+  assert.equal(await inspectLegacyDependencyDirectory(value.input.worktreePath), null);
+});
+
+
+test('unknown installer stop retains pending ownership and blocks inspection and retry', async t => {
+  const {inspectLegacyDependencyDirectory} = await import('../../src/runtime/legacy-dependency-directory.js');
+  const value = await fixture(t, {'package-lock.json': '{"lockfileVersion":3}\n'});
+  // This fixture kills only its own command-bootstrap parent. The target exits
+  // immediately afterward, without giving the runner a stopped-tree receipt.
+  await writeFile(value.installer, `#!/usr/bin/env node
+const fs = require('node:fs');
+fs.mkdirSync('node_modules');
+fs.writeFileSync('node_modules/installed', 'partial');
+process.kill(process.ppid, 'SIGKILL');
+setTimeout(() => process.exit(1), 25);
+`);
+  const options = {gitClient: value.gitClient, resolveCommandExecutable: async () => value.installer, confirm: async () => true};
+  const result = await bootstrapWorktreeDependencies(value.input, options);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.result.status, 'bootstrap-error');
+  await assert.rejects(inspectLegacyDependencyDirectory(value.input.worktreePath), /unsafe/);
+  await assert.rejects(bootstrapWorktreeDependencies(value.input, options), /unsafe/);
 });

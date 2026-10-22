@@ -69,3 +69,46 @@ test('publish with harness selection is rejected before any external work',async
  assert.notEqual(await main(['review',url,'--publish','--harness=codex'],f.deps),0);
  assert.equal(f.calls(),before.calls);assert.equal(f.launches(),before.launches);assert.equal(f.posts(),0);
 });
+
+import {createResourceCoordinator} from '../../src/runtime/resource-coordinator.js';
+import {managedPolicy} from '../fixtures/execution-policy.js';
+import {observeExecutionAttempt} from '../../src/clients/execution-proof.js';
+async function managedReview(t) {
+ const f=await fixture(t);
+ const path=join(f.root,'.rivet/orchestration.yaml'),config=parse(await readFile(path,'utf8'));
+ config.executionPolicy=managedPolicy();config.executionPolicy.profiles.review.harness='codex';config.executionPolicy.profiles.review.model='configured-model';config.executionPolicy.limits.agentExecutions=1;
+ await writeFile(path,stringify(config));
+ const machineRoot=await realpath(await mkdtemp(join(tmpdir(),'rivet-review-machine-')));t.after(()=>rm(machineRoot,{recursive:true,force:true}));
+ f.deps.machine=createResourceCoordinator({root:join(machineRoot,'machine')});
+ const occupied=await f.deps.machine.register({projectRoot:f.root,runId:'existing-task',deadlineMs:Date.now()+30000,limits:config.executionPolicy.limits,projectLimits:config.executionPolicy.limits});
+ const claim=await f.deps.machine.request({registrationId:occupied.id,resource:'agentExecutions',idempotencyKey:'occupied',generation:1});
+ const run=f.deps.review.run;f.deps.review.run=async args=>{observeExecutionAttempt();return run(args);};
+ return {...f,claim};
+}
+async function reviewWaiting(f) {
+ for(let n=0;n<100;n++) {
+  const state=await f.deps.machine.inspect();
+  if(f.launches()||state.claims.some(c=>c.status==='queued')) return state;
+  await new Promise(resolve=>setTimeout(resolve,10));
+ }
+ throw new Error('Review never reached admission');
+}
+test('managed standalone review waits for project capacity without a parent registration and releases on completion',async t=>{
+ const f=await managedReview(t);const pending=main(['review',url,'--json'],f.deps);
+ const state=await reviewWaiting(f);
+ assert.equal(f.launches(),0);assert.equal(state.claims.find(c=>c.status==='queued')?.reason,'project-agentExecutions');
+ await f.deps.machine.release({claimId:f.claim.id,generation:1,completed:true});
+ assert.equal(await pending,0);assert.equal(f.launches(),1);
+ assert.equal((await f.deps.machine.inspect()).claims.some(c=>['held','queued'].includes(c.status)),false);
+});
+test('interrupting a queued managed standalone review prevents launch and frees its claim',async t=>{
+ const f=await managedReview(t);const pending=main(['review',url,'--json'],f.deps);
+ await reviewWaiting(f);process.emit('SIGINT');
+ assert.notEqual(await pending,0);assert.equal(f.launches(),0);
+ assert.equal((await f.deps.machine.inspect()).claims.filter(c=>['held','queued'].includes(c.status)).length,1);
+});
+test('legacy standalone review remains unenrolled when a machine is configured',async t=>{
+ const f=await fixture(t);const parent=await realpath(await mkdtemp(join(tmpdir(),'rivet-legacy-review-machine-')));t.after(()=>rm(parent,{recursive:true,force:true}));
+ f.deps.machine=createResourceCoordinator({root:join(parent,'machine')});
+ assert.equal(await main(['review',url,'--json'],f.deps),0);assert.equal(f.launches(),1);assert.equal((await f.deps.machine.inspect()).configured,false);
+});

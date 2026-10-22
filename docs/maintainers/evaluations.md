@@ -11,19 +11,27 @@ yarn run evals --mode=fixture
 yarn run evals --mode=fixture --scenario=host --json > fixture-evaluation.json
 ```
 
-Available scenarios: `intake`, `host`, `repository-adapter`, `authority`, `recovery`, and `model`.
+The complete fixed scenario catalog is in `evals/catalog.mjs`; `evals/scenarios.json` must match it exactly. Use `--scenario=<id>` to select one scenario, or `--shard=2/4` to run the evaluation criteria belonging to a CI shard independently. These selectors cannot be combined, and sharding is available only in fixture mode.
 
-Each scenario runs exact named assertions from an existing fixture suite. The runner uses a fixed command selection, isolated temporary home, no inherited credentials, one test file at a time, and a two-minute deadline per scenario. Timeout, cancellation, missing assertions, skipped assertions, duplicate results and failed child processes fail the evaluation. Temporary fixture files are removed after collection. After a forced stop, the runner allows a 100-millisecond finalization grace, then releases its own output streams instead of waiting indefinitely for inherited pipes. A detached descendant can escape the process group; forced-stop reports therefore mark cleanup as `uncertain`. They do not confirm that every descendant has stopped. Run fixtures only from trusted source, and inspect remaining processes after an interrupted run before reusing its environment.
+Each scenario runs exact named assertions from an existing fixture suite. The runner uses a fixed command selection, isolated temporary home, no inherited credentials, one test file at a time, and a bounded deadline of two minutes per selected scenario in that file. Scenarios from the same file share one process and each retain their exact named criteria. Timeout, cancellation, missing assertions, skipped assertions, duplicate results and failed child processes fail the evaluation. Temporary fixture files are removed after collection. After a forced stop, the runner allows a 100-millisecond finalization grace, then releases its own output streams instead of waiting indefinitely for inherited pipes. A detached descendant can escape the process group; forced-stop reports therefore mark cleanup as `uncertain`. They do not confirm that every descendant has stopped. Run fixtures only from trusted source, and inspect remaining processes after an interrupted run before reusing its environment.
 
 The host scenario exercises real disposable Git worktrees and local fixture gate execution. Its worker edits are deterministic test code. Repository and model scenarios use injected responses; they do not contact provider APIs or launch models.
 
+## CI verification
+
+CI uses `node scripts/verify-tests.mjs --shard=2/4` to run every test in that shard once, with two files at a time in the same isolated environment used for fixture evaluations. It scores the fixed catalog from native test results using both the file and exact assertion name. A failed suite or missing, duplicate, skipped or failed criterion fails the shard. No model calls are enabled. The standalone evaluation command above remains useful for focused investigations.
+
 ## Interpret the report
 
-JSON reports record scenario outcomes, named criterion evidence, observed test counts, duration and the checkout's Git commit. `sourceScope: current-working-tree` means local edits may be included; use a clean candidate checkout for reproducible release evidence.
+JSON reports record scenario outcomes, named criterion evidence, observed test counts and the checkout's Git commit. `executionGroups` records each file's process duration once; individual scenario `durationMs` is `null` when several scenarios share that process. Sharded reports include the selected partition and qualify only its scenarios. `sourceScope: current-working-tree` means local edits may be included; use a clean candidate checkout for reproducible release evidence.
 
 A passing criterion means its named mechanics assertion passed. It is not an acceptance score for a generated feature. Acceptance coverage, actual project gate results, unsupported model claims, human interventions and retries remain `null` because this runner does not measure them. Model dispatches and model cost are zero for these fixed fixtures.
 
 Memory continuity is reported as `not-implemented`, never as passed. Live model quality and pilot readiness are explicitly unevaluated. Scenario selection limits the report to the requested scenario; it does not qualify the remaining scenarios.
+
+## Recorded live trial
+
+The [2026-10-21 CLI trial](./live-cli-trial-2026-10-21.md) records two real Codex tasks from setup through cleanup, the defects found, and what remains unverified.
 
 ## Opt-in live evaluations
 

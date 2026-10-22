@@ -1,3 +1,8 @@
+import {sweepWorktreeRetention} from './worktree-retention.js';
+import {activateTaskAdmission,withOperationAdmission} from './task-orchestration.js';
+import {homedir} from 'node:os';
+import {createManagedOrchestration} from './managed-orchestration.js';
+import {withMachineContext,admitted,admissionKey,taskAdmission,findRegistration} from './machine-admission.js';
 import { isExecutionCompatibleCwd, isProjectExecutable } from '../config/commands.js';
 import { createTrackerProviderFactory } from '../adapters/factory.js';
 import { createNodeProviderTransport } from '../adapters/node-transport.js';
@@ -25,9 +30,9 @@ import {
 import { collectEvidenceBundle } from '../evidence/collect.js';
 import { createFeatureRunStore } from '../feature/run-store.js';
 import { createFeatureExecutor } from '../feature/runtime-bridge.js';
-import { createHostExecution } from '../feature/host-execution.js';
+import { createHostExecution, captureHostExecutionRequest } from '../feature/host-execution.js';
 import { discoverHarnesses } from './harness-discovery.js';
-import { createFeatureWorkflow } from '../feature/workflow.js';
+import { createFeatureWorkflow, captureFeatureWorkflowInput, FeatureWorkflowError } from '../feature/workflow.js';
 import { createGitClient } from '../git/client.js';
 import { createReservedWorktree } from '../git/worktrees.js';
 import { buildLaunchContract } from '../prompts/launch-contract.js';
@@ -35,7 +40,7 @@ import { runQualityGates } from '../quality/runner.js';
 import { resolveFeatureRunPaths } from '../state/paths.js';
 import { createOrchestrator } from './orchestrator.js';
 
-const INPUT_KEYS = new Set(['cwd', 'env', 'fs', 'fetch', 'spawn', 'now', 'featureWorkflow', 'providerTransport']);
+const INPUT_KEYS = new Set(['cwd', 'env', 'fs', 'fetch', 'spawn', 'now', 'featureWorkflow', 'providerTransport', 'planningClientFor']);
 const FEATURE_WORKFLOW_METHODS = Object.freeze(['propose', 'start', 'watch', 'status', 'resume', 'cancel']);
 
 export class ApplicationConfigurationError extends Error {
@@ -151,6 +156,13 @@ export function createRivetApplication(input = {}) {
     })();
     return gitClientPromise;
   };
+  async function foregroundCleanup(project,signal) {
+    let result;
+    try {result=await sweepWorktreeRetention(project,{gitClient:await gitClient(),now:()=>Date.parse(now()),signal});}
+    catch(error){result={removed:[],diagnostics:[`Cleanup retention unavailable: ${error.message}`]};}
+    for(const message of [...result.removed.map(path=>`Cleanup removed eligible Worker checkout: ${path}. Branch and evidence preserved.`),...result.diagnostics])
+      process.stderr.write(String(message).replace(/[\u0000-\u001f\u007f]/g,' ')+'\n');
+  }
   let workflowPromise;
   let executorPromise;
   let hostExecutionPromise;
@@ -186,15 +198,18 @@ export function createRivetApplication(input = {}) {
     const value = env[`RIVET_${kind.toUpperCase()}_INTERPRETER`];
     return value === undefined ? {} : { interpreter: executable(value) };
   };
-  const planningClientFor = async request => {
+  if (configured.planningClientFor !== undefined && typeof configured.planningClientFor !== 'function') fail();
+  const rawPlanningClientFor = configured.planningClientFor ?? (async request => {
     if (!request || typeof request !== 'object' || Array.isArray(request)
-      || Reflect.ownKeys(request).length !== 2
+      || Reflect.ownKeys(request).some(key => !['client','project','executionSelection'].includes(key))
       || !Object.hasOwn(request, 'client') || !Object.hasOwn(request, 'project')) fail();
+    if (request.executionSelection !== undefined) await harnesses.select(request.client, request.project);
     if (request.client === 'claude') {
       return createClaudePlanningClient({
         ...harnessSettings('claude'),
         expectedVersion: selectedVersion('claude'),
         worktree: executable(request.project),
+        executionSelection: request.executionSelection,
         environment: clientEnvironment,
         timeoutMs: FEATURE_PLANNING_TIMEOUT_MS,
       });
@@ -204,21 +219,42 @@ export function createRivetApplication(input = {}) {
         ...harnessSettings('codex'),
         expectedVersion: selectedVersion('codex'),
         worktree: executable(request.project),
+        executionSelection: request.executionSelection,
         environment: clientEnvironment,
         timeoutMs: FEATURE_PLANNING_TIMEOUT_MS,
       });
     }
     fail();
+  });
+  const planningClientFor = async (request) => {
+    const client = await rawPlanningClientFor(request);
+    return {
+      ...client,
+      propose: (contract, options = {}) =>
+        withOperationAdmission(
+          managed.coordinator,
+          request.project,
+          (signal) =>
+            admitted(
+              'agentExecutions',
+              `planning-${admissionKey(contract)}`,
+              { ...options, signal },
+              (admittedOptions) => client.propose(contract, admittedOptions),
+            ),
+          options,
+        ),
+    };
   };
-  const agentClientFor = (kind, clientProfile) => {
+  const agentClientFor = (kind, clientProfile, options = {}) => {
+    const executionSelection = options.executionSelection;
     if (!isClientProfile(kind, clientProfile)) fail();
     if (kind === 'claude') return createClaudeClient({
       ...harnessSettings('claude'),
       expectedVersion: selectedVersion('claude'),
+      executionSelection,
       args: [
         ...CLAUDE_ADAPTER_SYNTAX.args.slice(0, -1),
-        '--model', CLAUDE_FEATURE_PROFILE.model,
-        '--effort', 'low',
+        ...(executionSelection === undefined ? ['--model', CLAUDE_FEATURE_PROFILE.model, '--effort', 'low'] : []),
         '--permission-mode', 'acceptEdits',
         '{stdin}',
       ],
@@ -227,6 +263,7 @@ export function createRivetApplication(input = {}) {
     if (kind === 'codex') return createCodexClient({
       ...harnessSettings('codex'),
       expectedVersion: selectedVersion('codex'),
+      executionSelection,
       args: [...CODEX_ADAPTER_SYNTAX.args.slice(0, -1), '--sandbox', 'workspace-write', '{stdin}'],
       environment: clientEnvironment,
     });
@@ -278,9 +315,9 @@ export function createRivetApplication(input = {}) {
   const executeFeature = async (request, options) => {
     executorPromise ??= gitClient().then(client => createFeatureExecutor({
       gitClient: client,
-      clientFor: async (kind, profile, { project, signal }) => {
+      clientFor: async (kind, profile, { project, signal, executionSelection }) => {
         await harnesses.select(kind, project, { signal });
-        return agentClientFor(kind, profile);
+        return agentClientFor(kind, profile, {executionSelection});
       },
       resolveCommandExecutable,
       now,
@@ -304,28 +341,155 @@ export function createRivetApplication(input = {}) {
     }));
     return workflowPromise;
   };
-  const workflow = configured.featureWorkflow !== undefined
+  const rawWorkflow = configured.featureWorkflow !== undefined
     ? captureFeatureWorkflow(configured.featureWorkflow)
     : Object.freeze(Object.fromEntries(FEATURE_WORKFLOW_METHODS.map(method => [
       method, async (...args) => (await resolvedWorkflow())[method](...args),
     ])));
 
-  const hostExecution = Object.freeze(Object.fromEntries(
-    ['prepare', 'nextAction', 'status', 'submitResult', 'verify', 'recover'].map(method => [
-      method,
-      async (...args) => {
-        hostExecutionPromise ??= gitClient().then(client => createHostExecution({
-          gitClient: client,
-          now,
-          resolveCommandExecutable,
-          environment: clientEnvironment,
-        }));
-        const service = await hostExecutionPromise;
-        if (typeof service[method] !== 'function') fail();
-        return service[method](...args);
-      },
-    ]),
-  ));
+  const workflow = Object.freeze(
+    Object.fromEntries(
+      FEATURE_WORKFLOW_METHODS.map((method) => [
+        method,
+        !['resume', 'watch','cancel'].includes(method)
+          ? rawWorkflow[method]
+          : async (request, options = {}) => {
+              if(method==='cancel'){
+                const result=await rawWorkflow.cancel(request,options);
+                const registration=await findRegistration(managed.coordinator,request.project,request.runId);
+                if(registration&&result.status==='cancelled')await managed.coordinator.cancelRegistration(registration.id);
+                return result;
+              }
+              request = captureFeatureWorkflowInput(request,new Set(['project','runId','expectedVersion']),new Set(['project','runId']));
+              options = captureFeatureWorkflowInput(options,new Set(['signal','confirmDependencyInstall','allowanceMs']),new Set());
+              if (options.signal!==undefined && !(options.signal instanceof AbortSignal)
+                  || options.confirmDependencyInstall!==undefined && typeof options.confirmDependencyInstall!=='function')
+                throw Object.assign(new Error('Invalid execution request.'),{code:'ERR_FEATURE_WORKFLOW_INVALID_INPUT',safeMessage:'Invalid execution request.'});
+              options.signal?.throwIfAborted();
+              const record = await rawWorkflow.status({project:request.project,runId:request.runId});
+              if (record.featurePlan?.client === 'host')
+                throw new FeatureWorkflowError('host-use-work');
+              if (record.featurePlan?.executionPolicy) {
+                if (!['approved','blocked'].includes(record.status) || record.version !== request.expectedVersion)
+                  throw Object.assign(new Error('Task state changed; inspect task status.'), {code:'ERR_FEATURE_WORKFLOW_STATE_CONFLICT',safeMessage:'Task state changed; inspect task status.'});
+                await activateTaskAdmission(managed.coordinator,record,request.project,{allowanceMs:options.allowanceMs,resume:method==='resume'});
+              } else if(options.allowanceMs!==undefined) await activateTaskAdmission(managed.coordinator,record,request.project,options);
+              await foregroundCleanup(request.project,options.signal);
+              const {allowanceMs,...executionOptions}=options;
+              return withMachineContext(
+                managed.coordinator,
+                request.project,
+                request.runId,
+                (signal) =>
+                  taskAdmission(() =>
+                    rawWorkflow[method](request, { ...executionOptions, signal }),
+                  ),
+                options,
+              );
+            },
+      ]),
+    ),
+  );
+
+  const hostExecution = Object.freeze(
+    Object.fromEntries(
+      [
+        'prepare',
+        'nextAction',
+        'status',
+        'submitResult',
+        'verify',
+        'recover',
+        'checkpoint',
+        'handoff',
+      ].map((method) => [
+        method,
+        async (...args) => {
+          hostExecutionPromise ??= gitClient().then((client) =>
+            createHostExecution({
+              gitClient: client,
+              now,
+              resolveCommandExecutable,
+              environment: clientEnvironment,
+              machine: managed.coordinator,
+            }),
+          );
+          const service = await hostExecutionPromise;
+          if (typeof service[method] !== 'function') fail();
+          args[1]?.signal?.throwIfAborted();
+          if (['prepare','nextAction'].includes(method))
+            args[0]=captureHostExecutionRequest(args[0],method==='prepare'?'expectedRunVersion':'expectedRuntimeVersion');
+          if(['prepare','nextAction'].includes(method))await foregroundCleanup(args[0].project,args[1]?.signal);
+          if (method === 'prepare') {
+            const record = await rawWorkflow.status({project:args[0].project,runId:args[0].runId});
+            if (record.featurePlan?.executionPolicy && record.featurePlan.client === 'host'
+                && record.version === args[0].expectedRunVersion && ['approved','running'].includes(record.status))
+              await activateTaskAdmission(managed.coordinator,record,args[0].project);
+          }
+
+          if (method === 'nextAction'
+              && !await findRegistration(managed.coordinator,args[0].project,args[0].runId)) {
+            const view=await service.status({project:args[0].project,runId:args[0].runId});
+            if(view.runtime?.version===args[0].expectedRuntimeVersion && view.run?.featurePlan?.client==='host')
+              await activateTaskAdmission(managed.coordinator,view.run,args[0].project);
+          }
+          if (
+            [
+              'prepare',
+              'nextAction',
+              'verify',
+              'handoff',
+              'submitResult',
+              'checkpoint',
+            ].includes(method)
+          )
+            return withMachineContext(
+              managed.coordinator,
+              args[0].project,
+              args[0].runId,
+              async () => {
+                let result;
+                let failed = false;
+                try {
+                  result = await service[method](...args);
+                  return result;
+                } catch (error) {
+                  failed = true;
+                  throw error;
+                } finally {
+                  if (
+                    failed || Date.now()>=(await findRegistration(managed.coordinator,args[0].project,args[0].runId))?.deadlineMs ||
+                    [
+                      'blocked',
+                      'awaiting-final-approval',
+                      'cancelled',
+                    ].includes(result?.status)
+                  ) {
+                    const state = await managed.coordinator.inspect();
+                    const registration = await findRegistration(managed.coordinator,args[0].project,args[0].runId);
+                    for (const claim of state.claims.filter(
+                      (c) =>
+                        c.registrationId === registration?.id &&
+                        c.resource === 'activeTasks' &&
+                        c.status === 'held',
+                    ))
+                      await managed.coordinator
+                        .release({
+                          claimId: claim.id,
+                          generation: claim.generation,
+                          completed: true,
+                        })
+                        .catch(() => {});
+                  }
+                }
+              },
+              { signal:args[1]?.signal, deadlineMs:args[1]?.deadlineMs, nonblocking: true,cleanup:['nextAction','checkpoint','submitResult'].includes(method)||method==='handoff'&&['observe','fence','stop','release'].includes(args[0]?.input?.operation) },
+            );
+          return service[method](...args);
+        },
+      ]),
+    ),
+  );
 
   const feature = Object.freeze({
     ...workflow,
@@ -349,5 +513,6 @@ export function createRivetApplication(input = {}) {
     },
   });
 
-  return Object.freeze({ cwd, env, fs, fetch, feature, work: hostExecution, harnesses, resolveCommandExecutable });
+  const managed=createManagedOrchestration({root:env.RIVET_MACHINE_STATE_ROOT??join(env.HOME??homedir(),'.rivet-machine'),gitClient,workflow,work:hostExecution,now:()=>Date.parse(now())});
+  return Object.freeze({ cwd, env, fs, fetch, feature, work: hostExecution, harnesses, resolveCommandExecutable,orchestration:{managed},machine:managed.coordinator });
 }

@@ -813,8 +813,15 @@ async function prepareConfigFileUpdate(root, filename, transform, options = {}) 
       try {
         verify();
         withPinnedTargetDirectory(directory, directoryIdentity, fs, () => {
-          fs.writeFileSync(temporary, proposed, { encoding: 'utf8', flag: 'wx', mode: snapshots[filename].mode });
-          const metadata = fs.lstatSync(temporary);
+          // Apply the approved mode to the opened inode: creation mode is filtered
+          // by umask, and path-based chmod could follow a replacement.
+          const descriptor = fs.openSync(temporary, 'wx', 0o600);
+          let metadata;
+          try {
+            fs.writeFileSync(descriptor, proposed, { encoding: 'utf8' });
+            fs.fchmodSync(descriptor, snapshots[filename].mode);
+            metadata = fs.fstatSync(descriptor);
+          } finally { fs.closeSync(descriptor); }
           staged = { dev: metadata.dev, ino: metadata.ino, size: metadata.size, mode: metadata.mode & 0o7777, digest: contentDigest(proposed) };
           verifyTopology(temporary);
           for (const name of FILES) if (!fileMatchesSnapshot(name, fs.lstatSync(name, { throwIfNoEntry: false }), snapshots[name], fs)) throw new Error('Configuration changed');
@@ -849,5 +856,34 @@ export async function prepareRepositoryRemoteUpdate(root, options = {}) {
   return prepareConfigFileUpdate(root, 'project.yaml', (config, document, remote) => {
     config.project.repository.remote = snapshot(remote, MAX_TEMPLATE_BYTES);
     document.setIn(['repository', 'remote'], config.project.repository.remote);
+  }, options);
+}
+
+export async function prepareExecutionPolicyUpdate(root, options = {}) {
+  const fs = options.fs ?? filesystem;
+  const target = fs.lstatSync(join(root, '.rivet', 'orchestration.yaml'));
+  if (!target.isFile() || target.isSymbolicLink() || target.nlink !== 1 || (target.mode & 0o222) === 0) throw new Error('Execution policy file is not a writable private regular file');
+  return prepareConfigFileUpdate(root, 'orchestration.yaml', (config, document, value) => {
+    const policy=value.policy??value;
+    if(value.workerConcurrency!==undefined){
+      const capacity=value.workerConcurrency;
+      if(!Number.isSafeInteger(capacity)||capacity<1||capacity>64||policy.limits.workersPerTask!==capacity)throw new Error('Invalid worker concurrency');
+      const index=config.orchestration.roles.findIndex(role=>role.kind==='worker');
+      if(index<0)throw new Error('Worker role missing');
+      config.orchestration.roles[index].capacity=capacity;
+      document.setIn(['roles',index,'capacity'],capacity);
+    }
+    config.orchestration.executionPolicy = snapshot(policy, MAX_TEMPLATE_BYTES);
+    document.setIn(['executionPolicy'], config.orchestration.executionPolicy);
+  }, options);
+}
+
+export async function prepareVerificationBatchUpdate(root, options = {}) {
+  const fs = options.fs ?? filesystem;
+  const target = fs.lstatSync(join(root, '.rivet', 'quality.yaml'));
+  if (!target.isFile() || target.isSymbolicLink() || target.nlink !== 1 || (target.mode & 0o222) === 0) throw new Error('Quality policy file is not a writable private regular file');
+  return prepareConfigFileUpdate(root, 'quality.yaml', (config, document, value) => {
+    config.quality.verificationBatch = snapshot(value, MAX_TEMPLATE_BYTES);
+    document.setIn(['verificationBatch'], config.quality.verificationBatch);
   }, options);
 }

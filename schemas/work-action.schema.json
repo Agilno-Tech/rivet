@@ -17,21 +17,55 @@
     "payload"
   ],
   "properties": {
-    "schemaVersion": { "type": "integer", "const": 1 },
-    "kind": { "type": "string", "const": "agilno.work-action" },
-    "runId": { "$ref": "#/$defs/id" },
-    "runtimeVersion": { "type": "integer", "minimum": 0, "maximum": 9007199254740990 },
-    "nodeId": { "$ref": "#/$defs/id" },
-    "intentId": { "$ref": "#/$defs/id" },
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "kind": {
+      "type": "string",
+      "const": "agilno.work-action"
+    },
+    "runId": {
+      "$ref": "#/$defs/id"
+    },
+    "runtimeVersion": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740990
+    },
+    "nodeId": {
+      "$ref": "#/$defs/id"
+    },
+    "intentId": {
+      "$ref": "#/$defs/id"
+    },
     "idempotencyKey": {
       "type": "string",
       "minLength": 1,
       "maxLength": 256,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9:._-]*$"
     },
-    "reservationId": { "$ref": "#/$defs/id" },
-    "attempt": { "type": "integer", "minimum": 1, "maximum": 10000 },
-    "payload": { "type": "string", "minLength": 1, "maxLength": 131072 }
+    "reservationId": {
+      "$ref": "#/$defs/id"
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000
+    },
+    "payload": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 131072
+    },
+    "sessionId": {
+      "$ref": "#/$defs/id"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 101
+    }
   },
   "$defs": {
     "id": {
@@ -40,5 +74,13 @@
       "maxLength": 64,
       "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
     }
+  },
+  "dependencies": {
+    "sessionId": [
+      "generation"
+    ],
+    "generation": [
+      "sessionId"
+    ]
   }
 }

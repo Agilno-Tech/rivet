@@ -1,3 +1,4 @@
+import { fixtureGit } from '../helpers/git-executable.js';
 import assert from 'node:assert/strict';
 import * as nodeFs from 'node:fs';
 import {
@@ -97,6 +98,7 @@ function makeDependencies(root, capture, options = {}) {
       gitDiscovery: async () => ({ repository: false, defaultBranch: 'main' }),
       toolDiscovery: async () => tools,
       setup,
+      setupBatchPrompt: async () => false,
     },
   };
 }
@@ -291,12 +293,17 @@ test('rerunning setup preserves an edited valid configuration and skips init rep
   const projectPath = join(root, '.rivet', 'project.yaml');
   const edited = (await readFile(projectPath, 'utf8')).replace('name: setup-fixture', 'name: user-owned-config');
   await writeFile(projectPath, edited);
+  const budgetPath = join(root, '.rivet', 'orchestration.yaml');
+  const savedBudget = (await readFile(budgetPath, 'utf8')).replace('tokenLimit: 500000', 'tokenLimit: 175000');
+  await writeFile(budgetPath, savedBudget);
 
   const second = await runSetup(t, root, { write: true });
   assert.equal(second.code, EXIT_CODES.SUCCESS);
   assert.equal(second.result.status, 'configured');
   assert.equal(second.result.configuration.status, 'preserved');
   assert.equal(await readFile(projectPath, 'utf8'), edited);
+  assert.equal(await readFile(budgetPath, 'utf8'), savedBudget);
+  assert.equal((await loadProjectConfig(root)).orchestration.roles.find(role => role.kind === 'worker').budget.tokenLimit, 175000);
   assert.equal(second.calls.init.length, 0);
   await loadProjectConfig(root);
 });
@@ -488,4 +495,99 @@ test('setup preserves written policy and exposes a safe skill permission diagnos
       assert.match(result.error.message, /protected skill directory/);
     } else assert.match(capture.writes.map(item => item.value).join('\n'), /protected skill directory/);
   }
+});
+
+test('interactive project setup offers routing after installation while preview JSON global and noninteractive stay unchanged',async t=>{
+ for(const mode of ['interactive','preview','json','global','noninteractive']) {
+  const root=await createProject(t),capture=captureOutput(),{dependencies,calls}=makeDependencies(root,capture);let models=0;
+  dependencies.terminalIsInteractive=()=>mode!=='noninteractive';
+  let batches=0;dependencies.setupBatchPrompt=async()=>{batches++;return false;};
+  dependencies.setup.configureModels=async(parsed,options)=>{models++;assert.equal(calls.install.length,1);assert.equal(parsed.flags.project,root);assert.equal(options.modelPolicyFreshSetup,true);assert.equal(options.modelPolicyAllowSkip,true);return 0;};
+  const parsed=parsedSetup(root,{write:mode!=='preview',json:mode==='json'});if(mode==='global'){delete parsed.flags.project;parsed.flags.global=true;}
+  assert.equal(await setupCommand(parsed,dependencies),0);
+  assert.equal(models,mode==='interactive'?1:0);
+  assert.equal(batches,mode==='interactive'?1:0);
+ }
+});
+test('setup reports model configuration failure separately from successful harness installation',async t=>{
+ const root=await createProject(t),capture=captureOutput(),{dependencies,calls}=makeDependencies(root,capture);
+ dependencies.terminalIsInteractive=()=>true;dependencies.setup.configureModels=async()=>{throw new CliError('Model selection cancelled.','INVALID_INPUT');};
+ assert.equal(await setupCommand(parsedSetup(root,{write:true,json:false}),dependencies),EXIT_CODES.INVALID_INPUT);
+ assert.equal(calls.install.length,1);await loadProjectConfig(root);
+ assert.match(capture.writes.map(x=>x.value).join('\n'),/harness instructions are ready, but model routing/);
+});
+
+test('fresh interactive setup saves the approved model routes and matching worker concurrency in one wizard',async t=>{
+ const root=await createProject(t),capture=captureOutput(),{dependencies}=makeDependencies(root,capture);
+ const {execFileSync}=await import('node:child_process');execFileSync(fixtureGit,['init','-q',root]);
+ dependencies.terminalIsInteractive=()=>true;dependencies.env={RIVET_CODEX_MODEL:'setup-model'};
+ dependencies.harnesses={discover:async()=>[{kind:'codex',executable:'/opt/codex'}]};
+ dependencies.setupBatchPrompt=async()=>true;
+ const questions=[];dependencies.modelPolicyPrompt=async question=>{questions.push(question.id);return question.id==='default-action'?'keep':question.id==='approve-policy'?true:null;};
+ assert.equal(await setupCommand(parsedSetup(root,{write:true,json:false}),dependencies),0,capture.writes.map(x=>x.value).join('\n'));
+ assert.deepEqual(questions,['default-action','approve-policy']);
+ const config=await loadProjectConfig(root),policy=config.orchestration.executionPolicy;
+ assert.equal(config.quality.verificationBatch.enabled,true);
+ assert.equal(policy.profiles[policy.routing.coordination].model,'setup-model');assert.equal(policy.limits.workersPerTask,2);assert.equal(config.orchestration.roles.find(r=>r.kind==='worker').capacity,2);
+});
+
+test('interactive setup explicitly enables batches and preserves existing custom limits', async t => {
+  for (const custom of [false,true]) {
+    const root=await createProject(t),capture=captureOutput(),{dependencies}=makeDependencies(root,capture);
+    await runSetup(t,root,{write:true});
+    const quality=join(root,'.rivet','quality.yaml');
+    if(custom)await nodeFs.promises.appendFile(quality,'\nverificationBatch:\n  enabled: false\n  maxTasks: 4\n  waitMs: 750\n  maxIsolationTasks: 0\n');
+    let modelsDone=false,questions=0;
+    dependencies.terminalIsInteractive=()=>true;
+    dependencies.setup.configureModels=async()=>{modelsDone=true;return 0;};
+    dependencies.setupBatchPrompt=async question=>{assert.equal(modelsDone,true);assert.equal(question.id,'enable-batching');questions++;return true;};
+    assert.equal(await setupCommand(parsedSetup(root,{write:true,json:false}),dependencies),0);
+    assert.equal(questions,1);
+    assert.deepEqual((await loadProjectConfig(root)).quality.verificationBatch,custom?{enabled:true,maxTasks:4,waitMs:750,maxIsolationTasks:0}:{enabled:true,maxTasks:3,waitMs:2000,maxIsolationTasks:2});
+    assert.match(capture.writes.map(x=>x.value).join('\n'),/advisory/);
+    const saved=await readFile(quality,'utf8');
+    assert.equal(await setupCommand(parsedSetup(root,{write:true,json:false}),dependencies),0);
+    assert.equal(questions,1);assert.equal(await readFile(quality,'utf8'),saved);
+  }
+});
+
+test('setup batch approval decline cancellation failure and drift never enable policy', async t => {
+  for(const mode of ['decline','cancel','throw','abort','drift','output','readonly','hardlink']) {
+    const root=await createProject(t),capture=captureOutput(),{dependencies}=makeDependencies(root,capture);
+    await runSetup(t,root,{write:true});
+    const quality=join(root,'.rivet','quality.yaml'),before=await readFile(quality,'utf8');
+    const controller=new AbortController();dependencies.setup.signal=controller.signal;
+    dependencies.terminalIsInteractive=()=>true;dependencies.setup.configureModels=async()=>0;
+    if(mode==='readonly')await nodeFs.promises.chmod(quality,0o444);
+    if(mode==='hardlink')await nodeFs.promises.link(quality,join(root,'quality-link'));
+    if(mode==='output')dependencies.output.log=message=>{if(message.startsWith('Optional batch'))throw new Error('output closed');};
+    let questions=0;
+    dependencies.setupBatchPrompt=async()=>{
+      questions++;
+      if(mode==='throw')throw new Error('prompt failed');
+      if(mode==='abort')controller.abort();
+      if(mode==='drift')await nodeFs.promises.appendFile(quality,'\n# concurrent edit\n');
+      return mode==='cancel'?null:mode==='decline'?false:true;
+    };
+    const code=await setupCommand(parsedSetup(root,{write:true,json:false}),dependencies);
+    assert.equal(code===0,mode==='decline',mode);
+    assert.equal(await readFile(quality,'utf8'),before+(mode==='drift'?'\n# concurrent edit\n':''),mode);
+    if(['readonly','hardlink','output'].includes(mode))assert.equal(questions,0);
+  }
+});
+
+test('fresh setup budgets support Claude cumulative tokens and two parallel workers without raising its spending cap',async t=>{
+ const root=await createProject(t),capture=captureOutput(),{dependencies}=makeDependencies(root,capture);
+ assert.equal(await setupCommand(parsedSetup(root,{write:true,json:false}),dependencies),0);
+ const config=await loadProjectConfig(root);
+ const budgets=Object.fromEntries(config.orchestration.roles.map(role=>[role.kind,role.budget]));
+ assert.equal(budgets.worker.tokenLimit,500000);
+ assert.equal(budgets.manager.tokenLimit,1250000);
+ assert.equal(budgets.boss.tokenLimit,2500000);
+ assert.ok(budgets.manager.tokenLimit>=2*budgets.worker.tokenLimit);
+ const {clientProfileFor}=await import('../../src/feature/client-profile.js');
+ assert.equal(clientProfileFor('claude',config.project.claude).execution.maxCostUsd,2);
+ assert.equal(clientProfileFor('claude',config.project.claude).planning.maxCostUsd,1);
+ assert.equal(budgets.worker.timeMinutes,120);
+ assert.equal(budgets.worker.costUsd,20);
 });

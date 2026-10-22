@@ -1,3 +1,4 @@
+import { fixtureGit } from '../helpers/git-executable.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { execFile as execute } from 'node:child_process';
@@ -164,14 +165,14 @@ for(const side of ['source','integration']) test(`moved ${side} tip during appro
  const f=await verified(t);if(!f)return;
  await assert.rejects(f.apply(async()=>{
   const cwd=side==='source'?f.root:f.status.checkout.path;
-  await execFile('/usr/bin/git',['-C',cwd,'-c','user.name=Test','-c','user.email=test@example.invalid','commit','--allow-empty','-m','Moved']);
+  await execFile(fixtureGit,['-C',cwd,'-c','user.name=Test','-c','user.email=test@example.invalid','commit','--allow-empty','-m','Moved']);
   return true;
  }),{code:'ERR_LOCAL_APPROVAL_CONFLICT'});
 });
 
 test('assume-unchanged configuration drift is rejected before requesting approval',async t=>{
  const f=await verified(t);if(!f)return;
- await execFile('/usr/bin/git',['-C',f.root,'update-index','--assume-unchanged','.rivet/project.yaml']);
+ await execFile(fixtureGit,['-C',f.root,'update-index','--assume-unchanged','.rivet/project.yaml']);
  const path=join(f.root,'.rivet/project.yaml');
  await writeFile(path,(await readFile(path,'utf8')).replace('Conference Planner','Changed project'));
  await assert.rejects(f.apply(()=>{throw Error('must not confirm');}),error=>error.code==='ERR_LOCAL_APPROVAL_CONFIGURATION' && /Commit intended configuration changes/.test(error.safeMessage));
@@ -195,7 +196,7 @@ for(const point of ['before-git','after-git','after-receipt']) test(`interruptio
  // authentic intent emitted by the successful operation.
  await writeFile(paths.snapshotPath,before);
  if(point!=='after-receipt')await unlink(join(paths.runDir,'local-approval-receipt.json'));
- if(point==='before-git')await execFile('/usr/bin/git',['-C',f.root,'reset','--hard',f.approved.featurePlan.baselineCommit]);
+ if(point==='before-git')await execFile(fixtureGit,['-C',f.root,'reset','--hard',f.approved.featurePlan.baselineCommit]);
  if(point==='before-git'){
   await assert.rejects(f.apply(()=>{throw Error('old approval cannot authorize another merge');}),{code:'ERR_LOCAL_APPROVAL_INTERRUPTED'});
   assert.equal((await f.gitClient.inspectRepository(f.root)).headSha,f.approved.featurePlan.baselineCommit);
@@ -244,7 +245,7 @@ test('actual task approve CLI applies verified work after local choice and confi
  const lines=[];let confirmations=0;
  const code=await main(['task','approve'],{cwd:()=>f.root,work:f.execution,terminalIsInteractive:()=>true,
   taskApprovalPrompt:async()=> 'local',confirmTaskApplication:async()=>{confirmations++;return true;},
-  resolveCommandExecutable:async()=>'/usr/bin/git',
+  resolveCommandExecutable:async()=>fixtureGit,
   output:{log:value=>lines.push(value),error:value=>lines.push(value)}});
  assert.equal(code,0,lines.join('\n'));
  assert.equal(confirmations,1);
@@ -293,10 +294,10 @@ for(const [live,active] of [[false,false],[true,false],[false,true]]) test(`fina
 
 test('actual task approve pull-request choice prepares delivery without moving source or writing remotely',async t=>{
  const f=await verified(t);if(!f)return;
- await execFile('/usr/bin/git',['-C',f.root,'remote','add','origin','https://github.com/example/project.git']);
+ await execFile(fixtureGit,['-C',f.root,'remote','add','origin','https://github.com/example/project.git']);
  const lines=[];
  const code=await main(['task','approve'],{cwd:()=>f.root,work:f.execution,terminalIsInteractive:()=>true,
-  taskApprovalPrompt:async()=> 'pull-request',resolveCommandExecutable:async()=>'/usr/bin/git',
+  taskApprovalPrompt:async()=> 'pull-request',resolveCommandExecutable:async()=>fixtureGit,
   fetch:async()=>{throw Error('remote calls forbidden');},
   output:{log:value=>lines.push(value),error:value=>lines.push(value)}});
  assert.equal(code,0,lines.join('\n'));
@@ -314,7 +315,7 @@ test('guided final review shows the exact diff and leaving preserves the source 
  const code=await main(['task','resume'],{cwd:()=>f.root,work:f.execution,terminalIsInteractive:()=>true,
   taskApprovalPrompt:async()=>++choices===1?'review':'leave',
   confirmTaskApplication:async()=>assert.fail('review is not approval'),
-  resolveCommandExecutable:async()=>'/usr/bin/git',
+  resolveCommandExecutable:async()=>fixtureGit,
   output:{log:value=>lines.push(value),error:value=>lines.push(value)}});
  assert.equal(code,0,lines.join('\n'));assert.equal(choices,2);
  assert.match(lines.join('\n'),/\+    return left \+ right/);

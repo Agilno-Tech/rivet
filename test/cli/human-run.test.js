@@ -1,3 +1,4 @@
+import { fixtureGit } from '../helpers/git-executable.js';
 import assert from 'node:assert/strict';
 import { execFile as execFileCallback } from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -13,10 +14,21 @@ import { createOutput, EXIT_CODES } from '../../src/cli/output.js';
 const execFile = promisify(execFileCallback);
 const CONFIG = new URL('../fixtures/config/valid/.rivet/', import.meta.url);
 
+test('activation preview exposes approved concurrency and shared resources', async t => {
+  const { root } = await fixture(t);
+  const s = services(root, { approve: false });
+  s.proposal.featurePlan.maxParallelWorkers = 2;
+  s.proposal.featurePlan.nodes[0].sharedResources = ['database'];
+  const code = await main(['run', 'Add a greeting module'], s.overrides);
+  assert.equal(code, EXIT_CODES.SUCCESS);
+  assert.match(s.messages.join('\n'), /Worker concurrency ceiling: 2; role, parent and machine capacity may lower it/);
+  assert.match(s.messages.join('\n'), /shared resources: database/);
+});
+
 async function fixture(t) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'rivet-human-run-')));
   t.after(() => rm(root, { recursive: true, force: true }));
-  await execFile('/usr/bin/git', ['-C', root, 'init', '-q']);
+  await execFile(fixtureGit, ['-C', root, 'init', '-q']);
   await cp(CONFIG, join(root, '.rivet'), { recursive: true });
   const nested = join(root, 'src');
   await mkdir(nested);
@@ -263,4 +275,57 @@ test('compact plan preserves scope, checks and limits while details exposes grap
   s.messages.length=0;
   assert.equal(await main(['run','Add a greeting module','--details'],s.overrides),0);
   assert.match(s.messages.join('\n'),/internal-worker-node/);
+});
+
+for (const details of [false, true]) {
+  test(`managed proposal shows effective worker and coordination routing (details=${details})`, async t => {
+    const {root}=await fixture(t); const s=services(root,{approve:false});
+    s.proposal.featurePlan.client='codex';
+    s.proposal.featurePlan.managedClaudeProfile={planning:{maxCostUsd:0.25},execution:{maxCostUsd:0.5}};
+    const worker=s.proposal.featurePlan.nodes[0];
+    worker.execution={client:'claude',clientProfile:{model:'legacy-sonnet'}};
+    worker.executionSelection={harness:'codex',model:'implementation-model',effort:'high',reason:'Approved implementation route.',recommendationOnly:false};
+    s.proposal.featurePlan.nodes.push({id:'management',role:'manager',objective:'Coordinate',executionSelection:{harness:'claude',model:'coordination-model',effort:'high',reason:'Approved coordination route.',recommendationOnly:false}});
+    assert.equal(await main(['run','Add greeting',...(details?['--details']:[])],s.overrides),EXIT_CODES.SUCCESS);
+    const shown=s.messages.join('\n');
+    assert.match(shown,/Planning harness: claude; model: coordination-model; reasoning: high/);
+    assert.match(shown,/Planning spending cap: \$0.25/);
+    assert.match(shown,/executor: codex/); assert.match(shown,/model: implementation-model; reasoning: high/);
+    assert.match(shown,/coordination routing: claude; model: coordination-model; reasoning: high/);
+    assert.match(shown,/Approved implementation route/);assert.match(shown,/Approved coordination route/);
+    assert.doesNotMatch(shown,/legacy-sonnet|executor: claude/);
+    assert.deepEqual(s.calls.filter(call=>call[0]==='select').map(call=>call[1]),['codex','codex']);
+  });
+}
+
+test('managed run checks selected worker before approval and ignores unused legacy override',async t=>{
+  const {root}=await fixture(t);
+  for(const unavailable of [false,true]){
+    const s=services(root);s.proposal.featurePlan.client='codex';
+    s.proposal.featurePlan.nodes[0].execution={client:'claude'};
+    s.proposal.featurePlan.nodes[0].executionSelection={harness:'codex',model:'worker-model',effort:'high',reason:'Approved route.',recommendationOnly:false};
+    let selects=0,approved=false;
+    s.overrides.harnesses.select=async kind=>{assert.equal(kind,'codex');if(++selects>1&&unavailable)throw new Error('missing');return {kind,version:'test'};};
+    s.overrides.confirmFeatureActivation=async()=>{approved=true;return false;};
+    assert.equal(await main(['run','Add greeting'],s.overrides),unavailable?EXIT_CODES.PROVIDER_UNAVAILABLE:EXIT_CODES.SUCCESS,s.messages.join('\n'));
+    assert.equal(approved,!unavailable);assert.equal(s.calls.some(call=>call[0]==='start'),false);
+  }
+});
+
+
+test('managed Claude worker preview shows its captured spending cap', async t => {
+  const {root}=await fixture(t); const s=services(root,{approve:false});
+  s.proposal.featurePlan.managedClaudeProfile={planning:{maxCostUsd:0.25},execution:{maxCostUsd:0.5}};
+  s.proposal.featurePlan.nodes[0].executionSelection={harness:'claude',model:'opus',effort:'high',reason:'Approved route.',recommendationOnly:false};
+  assert.equal(await main(['run','Add greeting'],s.overrides),EXIT_CODES.SUCCESS);
+  assert.match(s.messages.join('\n'),/executor spending cap: \$0.5/);
+});
+
+test('saved coordination routing selects its harness without a chooser and rejects conflicting flags',async t=>{
+ const {readFile}=await import('node:fs/promises');const {default:YAML}=await import('yaml');const {compileModelPolicy,POLICY_ROUTES}=await import('../../src/models/policy-contract.js');
+ const {root}=await fixture(t),path=join(root,'.rivet/orchestration.yaml');const doc=YAML.parseDocument(await readFile(path,'utf8'));
+ doc.set('executionPolicy',compileModelPolicy(Object.fromEntries(POLICY_ROUTES.map(r=>[r,{harness:'codex',model:'saved-model',effort:'high'}]))));await writeFile(path,String(doc));
+ const s=services(root,{selected:['claude','codex'],approve:false});s.overrides.harnessChoicePrompt=()=>{throw Error('redundant chooser');};
+ assert.equal(await main(['run','Add a greeting'],s.overrides),0,s.messages.join('\n'));
+ const other=services(root,{selected:['claude','codex'],approve:false});assert.notEqual(await main(['run','Add a greeting','--harness=claude'],other.overrides),0);assert.match(other.messages.join('\n'),/saved.*routing|routing.*saved/i);
 });

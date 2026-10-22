@@ -38,6 +38,23 @@ Add focused behavioral tests for new functionality, run the existing relevant re
 
 Use the existing workflow service and validation boundaries. Prefer native harness tools or existing project scripts when they already solve the problem. New model descriptors must distinguish registration, implemented execution, and live qualification.
 
+## CI and reproducing a shard
+
+CI runs every test on Linux and macOS with Node 22 and 24. Each combination uses four balanced shards, with two test files running at a time inside a shard. Package installation checks run once per combination. The dedicated documentation workflow builds the site once for a PR or main push.
+
+To reproduce one shard with the matching Node version:
+
+```sh
+npm run build
+node scripts/verify-tests.mjs --shard=2/4
+```
+
+Without `--shard`, this command verifies the complete suite and evaluation catalog. `npm test` and `npm run evals -- --mode=fixture` remain available for separate local runs. Test files and their evaluation scenarios always belong to the same shard. New test files are discovered automatically; they do not need a manifest entry.
+
+`scripts/test-durations.json` contains approximate scheduling weights from observed macOS Node 22 test durations, used as scheduling hints. These hints affect balance only, never coverage. Refresh them when the slowest shard consistently dominates; do not remove expensive tests to improve the timing. CI executes each test once in a temporary home with credentials and user configuration stripped. It scores evaluation criteria from the native test events, matching both the source file and exact test name. Missing, duplicate, skipped or failed criteria fail the shard, as does any suite failure. The standalone evaluation command still runs selected scenarios independently. macOS fixtures resolve the native Apple Git executable once to avoid repeatedly launching its system shim; executable-discovery tests retain their explicit paths.
+
+The existing `check (OS, Node)` statuses aggregate all shards and fail if any shard fails, is cancelled, or is unexpectedly skipped.
+
 The public repository is [Agilno-Tech/rivet](https://github.com/Agilno-Tech/rivet). Rivet uses Apache License 2.0 and the package name `@agilno-tech/rivet`. Registry publication is a separate maintainer step. Never include client code, credentials, or private work history in contributions.
 
 ## Maintainer guides

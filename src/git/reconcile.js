@@ -111,9 +111,10 @@ async function acquireIntegrationLock(path) {
 
 export async function reconcileWorktree(input, options = {}) {
   const value = validateInput(input);
-  const capturedOptions = capture(options, new Set(['gitClient', 'nowMs']), ['gitClient']);
+  const capturedOptions = capture(options, new Set(['gitClient', 'nowMs', 'candidate']), ['gitClient']);
   if (capturedOptions.nowMs !== undefined
     && (!Number.isSafeInteger(capturedOptions.nowMs) || capturedOptions.nowMs < 0)) fail('invalid-input');
+  if (capturedOptions.candidate !== undefined && typeof capturedOptions.candidate !== 'function') fail('invalid-input');
   const client = capturedOptions.gitClient;
   assertGitClient(client);
   const verified = await verifyReservedWorktree({
@@ -155,6 +156,10 @@ export async function reconcileWorktree(input, options = {}) {
     return report('blocked', 'scope-mismatch', {
       ...values, changedPaths, missingIntendedPaths, unexpectedPaths,
     });
+  }
+
+  if (capturedOptions.candidate && value.integrate) {
+    return capturedOptions.candidate(Object.freeze({ verified, report: report('ready', null, { ...values, changedPaths }) }));
   }
 
   const fastForward = await client.isAncestor(verified.repository.root, values.integrationTip, values.workerTip);

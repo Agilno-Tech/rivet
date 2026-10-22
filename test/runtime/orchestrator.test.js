@@ -11,6 +11,7 @@ import { createOrchestrator, RuntimeError, runtimeTransaction } from '../../src/
 import { createHeartbeat, heartbeatStatus } from '../../src/runtime/heartbeat.js';
 import { createRetryPolicy, retryDecision, retryPolicySchedule } from '../../src/runtime/retry.js';
 import { SupervisorError, watchOrchestration } from '../../src/runtime/supervisor.js';
+import { newSession } from '../../src/feature/sessions.js';
 
 const NOW = Date.parse('2029-01-01T00:00:00.000Z');
 
@@ -2203,4 +2204,240 @@ test('review new reconciliation starts from stale snapshot after recorded exhaus
  const submit=(id,status,tokens)=>runtime.submitAction(instance,{expectedVersion:backing.inspect().version,nodeId:id,intentId:`launch-${id}-1`,idempotencyKey:`demo-instance:${id}:1`,reservationId:`${id}-lease`,result:{version:1,status,output:{summary:'result',evidence:[`${id}-commit`,`${id}-test`]},usage:{tokens,costUsd:0}}});
  const sibling=submit('design','success',5);await released;await submit('api','budget-exhausted',187231);assert.equal(backing.inspect().terminal,'budget-exhausted');resumeFirst();await sibling;
  assert.equal(terminalAtStart,'not-started','No new reconciliation may start after recorded exhaustion');
+});
+
+test('managed successful stopped workers have completed sessions', async () => {
+ const sessionPolicy={maxReplacements:2,maxActions:3,maxMinutes:2,contextThresholdPercent:75};
+ const instance=memoryInstance({activated:true,sessionPolicy,sessions:{}});
+ const runtime=createOrchestrator({now:()=>NOW,launchFor,sessionPolicy,client:{async launch(contract,options){
+  const receipt={version:1,executionId:'execution-one',processId:111,processGroupId:111,ownerProcessId:process.pid,processBirth:null,observedAtMs:NOW,source:'owned-process',assurance:'observed',status:'started'};
+  await options.onExecution(receipt);await options.onExecution({...receipt,status:'stopped'});
+  return {version:1,status:'success',output:{summary:'Complete.',evidence:contract.evidence},usage:{tokens:10,costUsd:0}};
+ }},reconcile:async()=>({status:'integrated'})});
+ await runtime.tick(instance,{expectedVersion:0,maxActiveNodes:1});
+ const state=instance.inspect();
+ for(const [id,session] of Object.entries(state.sessions)) {
+  assert.equal(state.graph.nodes.find(node=>node.id===id).status,'completed');
+  assert.equal(session.phase,'completed');
+  assert.equal(session.stopReceipt.status,'stopped');
+ }
+ assert.ok(Object.keys(state.sessions).length>0);
+});
+
+test('managed success with an unknown writer never reconciles or retries the checkout',async()=>{
+ const sessionPolicy={maxReplacements:2,maxActions:3,maxMinutes:2,contextThresholdPercent:75};
+ const instance=memoryInstance({activated:true,sessionPolicy,sessions:{}});let reconciles=0;let calls=0;
+ const runtime=createOrchestrator({now:()=>NOW,launchFor,sessionPolicy,client:{async launch(contract,options){calls++;
+  const receipt={version:1,executionId:'execution-one',processId:111,processGroupId:111,ownerProcessId:process.pid,processBirth:null,observedAtMs:NOW,source:'owned-process',assurance:'observed',status:'started'};
+  await options.onExecution(receipt);await options.onExecution({...receipt,status:'unknown'});
+  return {version:1,status:'success',output:{summary:'Complete.',evidence:contract.evidence},usage:{tokens:10,costUsd:0}};
+ }},reconcile:async()=>{reconciles++;return {status:'integrated'};}});
+ const result=await runtime.tick(instance,{expectedVersion:0,maxActiveNodes:1});
+ assert.equal(result.terminal,'blocked');assert.equal(reconciles,0);assert.equal(calls,1);
+ assert.equal(instance.inspect().usage.retries,0);assert.equal(instance.inspect().usage.tokens,10);assert.equal(Object.values(instance.inspect().sessions)[0].phase,'blocked');
+});
+
+for(const elapsed of [2,11])test(`managed host final result cannot erase ${elapsed} minutes of observed elapsed time`,async()=>{
+ const sessionPolicy={maxReplacements:2,maxActions:3,maxMinutes:2,contextThresholdPercent:75};
+ const initial=memoryInstance({activated:true,sessionPolicy,sessions:{}}).inspect();
+ initial.graph.nodes.find(n=>n.id==='api').status='running';initial.attempts.api=1;
+ const intent=durableApiIntent('started',{startedAtMs:NOW,worktree:{path:'/tmp/api',dev:'1',ino:'1',reservationId:'api-lease'}});
+ const session=newSession('demo-instance',intent,sessionPolicy,NOW);intent.session={id:session.id,generation:1,maxActions:3,maxMinutes:2,checkpoint:null};
+ initial.launchIntents.api=intent;initial.sessions.api=session;
+ const instance=memoryInstance(initial);let reconciles=0;
+ const runtime=createOrchestrator({client:{launch:async()=>{throw Error('Host only');}},now:()=>NOW+elapsed*60000,launchFor,sessionPolicy,reconcile:async()=>{reconciles++;return {status:'integrated'};}});
+ await runtime.submitAction(instance,{expectedVersion:0,nodeId:'api',intentId:intent.id,idempotencyKey:intent.idempotencyKey,reservationId:'api-lease',sessionId:session.id,generation:1,result:{version:1,status:'success',output:{summary:'Complete',evidence:['api-commit','api-test']},usage:{tokens:5,costUsd:0,timeMinutes:0}}});
+ assert.equal(reconciles,elapsed>10?0:1);
+ assert.equal(instance.inspect().usage.timeMinutes,elapsed);assert.equal(instance.inspect().usage.tokens,5);
+ if(elapsed>10){assert.deepEqual(instance.inspect().evidence,[]);assert.equal(instance.inspect().terminal,'budget-exhausted');}
+});
+
+test('completion-driven advance starts a dependent while an unrelated worker remains active', async () => {
+  const initial = memoryInstance({activated:true}).inspect();
+  initial.graph.nodes.find(n => n.id === 'integration').dependencies = ['api'];
+  const instance = memoryInstance(initial);
+  let finishSlow;
+  const slow = new Promise(resolve => {finishSlow=resolve;});
+  const started=[];
+  const runtime=createOrchestrator({now:()=>NOW,launchFor,reservationId:id=>`${id}-lease`,client:{launch:async contract=>{
+    started.push(contract.nodeId);
+    if(contract.nodeId==='design')await slow;
+    return {version:1,status:'success',output:{summary:'Done',evidence:contract.nodeId==='integration'?['integration-commit','integration-test','integration-journey']:[`${contract.nodeId}-commit`,`${contract.nodeId}-test`]},usage:{tokens:1,costUsd:0}};
+  }}});
+  try {
+    const first=await runtime.advance(instance,{expectedVersion:0,maxActiveNodes:2});
+    assert.equal(first.pending,1);
+    assert.equal(instance.inspect().graph.nodes.find(n=>n.id==='design').status,'running');
+    const second=await runtime.advance(instance,{expectedVersion:first.version,maxActiveNodes:2});
+    assert.ok(started.includes('integration'));
+    assert.equal(second.pending,1);
+    finishSlow();
+    const final=await runtime.advance(instance,{expectedVersion:second.version,maxActiveNodes:2});
+    assert.equal(final.pending,0);
+  } finally {finishSlow();}
+});
+
+test('completion-driven advance aborts and drains its remaining workers on a blocked result', async () => {
+  const instance=memoryInstance({activated:true});
+  let slowStarted, aborted=false;
+  const started=new Promise(resolve=>{slowStarted=resolve;});
+  const runtime=createOrchestrator({now:()=>NOW,launchFor,reservationId:id=>`${id}-lease`,client:{launch:async (contract,{signal})=>{
+    if(contract.nodeId==='api') {
+      await started;
+      return {version:1,status:'blocked',output:{summary:'Needs correction',evidence:[]},usage:{tokens:1,costUsd:0}};
+    }
+    slowStarted();
+    await new Promise(resolve=>signal.addEventListener('abort',()=>{aborted=true;resolve();},{once:true}));
+    const {AgentContractError}=await import('../../src/clients/contract.js');
+    throw new AgentContractError('aborted');
+  }}});
+  const result=await runtime.advance(instance,{expectedVersion:0,maxActiveNodes:2});
+  assert.equal(aborted,true);
+  assert.equal(result.pending,0);
+  assert.equal(result.terminal,'blocked');
+});
+
+test('runtime forwards approved owner and parent capacities to its existing scheduler', async () => {
+  const instance=memoryInstance({activated:true});
+  const runtime=createOrchestrator({now:()=>NOW,launchFor,reservationId:id=>`${id}-lease`,client:createFakeClient({scripts:await scripted('parallel-success')})});
+  const result=await runtime.tick(instance,{expectedVersion:0,maxActiveNodes:2,childCapacityByParent:{'manager-plan':1},capacityByOwner:{'api-worker':1}});
+  assert.deepEqual(result.launched,['api']);
+});
+
+test('a later advance signal cancels and drains workers started by an earlier advance', async () => {
+  const instance=memoryInstance({activated:true});
+  let releaseSlow, aborted=false;
+  const runtime=createOrchestrator({now:()=>NOW,launchFor,reservationId:id=>`${id}-lease`,client:{launch:async(contract,{signal})=>{
+    if(contract.nodeId==='design')await new Promise(resolve=>{
+      releaseSlow=resolve;
+      signal.addEventListener('abort',()=>{aborted=true;resolve();},{once:true});
+    });
+    return {version:1,status:'success',output:{summary:'Done',evidence:[`${contract.nodeId}-commit`,`${contract.nodeId}-test`]},usage:{tokens:1,costUsd:0}};
+  }}});
+  const first=await runtime.advance(instance,{expectedVersion:0,maxActiveNodes:2});
+  const controller=new AbortController();
+  const next=runtime.advance(instance,{expectedVersion:first.version,maxActiveNodes:2,childCapacityByParent:{'manager-plan':1},signal:controller.signal});
+  const timer=setTimeout(()=>controller.abort(),10);
+  let timeout;
+  try {
+    const result=await Promise.race([next,new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('Cancellation did not drain existing worker')),1000);})]);
+    assert.equal(aborted,true);
+    assert.equal(result.pending,0);
+  } finally {clearTimeout(timer);clearTimeout(timeout);releaseSlow();await next;}
+});
+
+test('advance preserves late durable worker failures for subsequent advancement', async () => {
+  const instance=memoryInstance({activated:true});
+  const originalCommit=instance.commit;
+  let inject=false;
+  instance.commit=async(version,next)=>{
+    if(inject&&next.graph.nodes.find(n=>n.id==='design').status==='completed')throw Error('durable-write-failed');
+    return originalCommit(version,next);
+  };
+  let release;
+  const wait=new Promise(resolve=>{release=resolve;});
+  const runtime=createOrchestrator({now:()=>NOW,launchFor,reservationId:id=>`${id}-lease`,client:{launch:async contract=>{
+    if(contract.nodeId==='design')await wait;
+    return {version:1,status:'success',output:{summary:'Done',evidence:[`${contract.nodeId}-commit`,`${contract.nodeId}-test`]},usage:{tokens:1,costUsd:0}};
+  }}});
+  await runtime.advance(instance,{expectedVersion:0,maxActiveNodes:2});
+  inject=true;release();
+  await new Promise(resolve=>setImmediate(resolve));
+  await assert.rejects(runtime.advance(instance,{expectedVersion:instance.inspect().version,maxActiveNodes:2}),/durable-write-failed/);
+  await assert.rejects(runtime.advance(instance,{expectedVersion:instance.inspect().version,maxActiveNodes:2}),/durable-write-failed/);
+});
+
+test('plural host preparation fills approved capacity without duplicating active work',async()=>{
+  const instance=memoryInstance({activated:true});
+  const preparations=[];
+  const runtime=createOrchestrator({now:()=>NOW,launchFor,reservationId:id=>`${id}-lease`,client:{launch:async()=>{throw Error('Host preparation cannot launch');}},
+    prepareWorktree:async(node,intent)=>{preparations.push(node.id);return {path:`/tmp/${node.id}`,dev:'1',ino:node.id==='api'?'2':'3',reservationId:intent.reservationId};}});
+  const first=await runtime.prepareActions(instance,{expectedVersion:0,maxActiveNodes:1});
+  assert.equal(first.actions.length,1);
+  const second=await runtime.prepareActions(instance,{expectedVersion:first.version,maxActiveNodes:2});
+  assert.deepEqual(second.actions.map(a=>a.node.id).sort(),['api','design']);
+  assert.equal(new Set(second.actions.map(a=>a.intent.reservationId)).size,2);
+  const again=await runtime.prepareActions(instance,{expectedVersion:second.version,maxActiveNodes:2});
+  assert.equal(again.actions.length,2);
+  assert.deepEqual(preparations.sort(),['api','design']);
+});
+
+test('plural host preparation respects parent capacity and terminal state',async()=>{
+  const instance=memoryInstance({activated:true});
+  const runtime=createOrchestrator({now:()=>NOW,launchFor,reservationId:id=>`${id}-lease`,client:{launch:async()=>{throw Error('Host preparation cannot launch');}},
+    prepareWorktree:async(node,intent)=>({path:`/tmp/${node.id}`,dev:'1',ino:node.id==='api'?'2':'3',reservationId:intent.reservationId})});
+  const prepared=await runtime.prepareActions(instance,{expectedVersion:0,maxActiveNodes:2,childCapacityByParent:{'manager-plan':1}});
+  assert.equal(prepared.actions.length,1);
+  const stopped=await runtime.cancelGoal(instance,{expectedVersion:prepared.version,authority:createAuthorityEnvelope({actorId:'human-owner',principal:'human',actions:['orchestration.cancel'],ownedPaths:[],providers:[],commands:[]}),nowMs:NOW});
+  assert.deepEqual((await runtime.prepareActions(instance,{expectedVersion:stopped.version,maxActiveNodes:2})).actions,[]);
+});
+
+test('plural host preparation returns no actions when scheduling exhausts budget',async()=>{
+  const instance=memoryInstance({activated:true,limits:{tokens:1000,costUsd:10,retries:2}});
+  const runtime=createOrchestrator({now:()=>NOW,launchFor,client:{launch:async()=>{throw Error('Host only');}}});
+  const first=await runtime.prepareActions(instance,{expectedVersion:0,maxActiveNodes:1});
+  const next=await runtime.prepareActions(instance,{expectedVersion:first.version,maxActiveNodes:2});
+  assert.equal(instance.inspect().terminal,'budget-exhausted');
+  assert.deepEqual(next.actions,[]);
+});
+
+for(const capacity of [{maxActiveNodes:1},{maxActiveNodes:2,childCapacityByParent:{'manager-plan':1}}])test(`plural preparation recovery obeys reduced capacity ${JSON.stringify(capacity)}`,async()=>{
+  const instance=memoryInstance({activated:true});let now=NOW,shouldFail=true;
+  const runtime=createOrchestrator({now:()=>now,launchFor,client:{launch:async()=>{throw Error('Host only');}},prepareWorktree:async(node,intent)=>{
+    if(shouldFail)throw Error('prepare-failed');
+    return {path:`/tmp/${node.id}`,dev:'1',ino:node.id==='api'?'2':'3',reservationId:intent.reservationId};
+  }});
+  await assert.rejects(runtime.prepareActions(instance,{expectedVersion:0,maxActiveNodes:2}),/prepare-failed/);
+  now+=6000;shouldFail=false;
+  const recovered=await runtime.prepareActions(instance,{expectedVersion:instance.inspect().version,...capacity});
+  assert.equal(recovered.actions.length,1);
+});
+
+test('plural host preparation pins capacity maps before awaiting checkout preparation',async()=>{
+  const instance=memoryInstance({activated:true});let now=NOW,shouldFail=true;
+  const capacities={'manager-plan':1};
+  const runtime=createOrchestrator({now:()=>now,launchFor,client:{launch:async()=>{throw Error('Host only');}},prepareWorktree:async(node,intent)=>{
+    if(shouldFail)throw Error('prepare-failed');
+    capacities['manager-plan']=2;
+    return {path:`/tmp/${node.id}`,dev:'1',ino:node.id==='api'?'2':'3',reservationId:intent.reservationId};
+  }});
+  await assert.rejects(runtime.prepareActions(instance,{expectedVersion:0,maxActiveNodes:2}),/prepare-failed/);
+  now+=6000;shouldFail=false;
+  const result=await runtime.prepareActions(instance,{expectedVersion:instance.inspect().version,maxActiveNodes:2,childCapacityByParent:capacities});
+  assert.equal(result.actions.length,1);
+});
+
+test('runtime drain stops existing peers without scheduling more work',async()=>{
+  const instance=memoryInstance({activated:true});let aborted=false;
+  const launches=[];
+  const runtime=createOrchestrator({now:()=>NOW,launchFor,client:{launch:async(contract,{signal})=>{
+    launches.push(contract.nodeId);
+    if(contract.nodeId==='design')await new Promise(resolve=>signal.addEventListener('abort',()=>{aborted=true;resolve();},{once:true}));
+    return {version:1,status:'success',output:{summary:'Done',evidence:[`${contract.nodeId}-commit`,`${contract.nodeId}-test`]},usage:{tokens:1,costUsd:0}};
+  }}});
+  const first=await runtime.advance(instance,{expectedVersion:0,maxActiveNodes:2});
+  assert.equal(first.pending,1);
+  await runtime.drain(instance);
+  assert.equal(aborted,true);
+  assert.deepEqual(launches.sort(),['api','design']);
+});
+
+test('runtime drain forwards worker cancellation into reconciliation',async()=>{
+  const instance=heldAcquireMemoryInstance({activated:true},Infinity);let releaseWorker,enteredReconciliation,aborted=false;
+  const workerWait=new Promise(resolve=>{releaseWorker=resolve;});
+  const entered=new Promise(resolve=>{enteredReconciliation=resolve;});
+  const runtime=createOrchestrator({now:()=>NOW,launchFor,client:{launch:async contract=>{
+    if(contract.nodeId==='design')await workerWait;
+    return {version:1,status:'success',output:{summary:'Done',evidence:[`${contract.nodeId}-commit`,`${contract.nodeId}-test`]},usage:{tokens:1,costUsd:0}};
+  }},reconcile:async(node,intent,result,{signal})=>{
+    if(node.id!=='design')return {status:'integrated'};
+    enteredReconciliation();
+    await new Promise(resolve=>signal.addEventListener('abort',()=>{aborted=true;resolve();},{once:true}));
+    return {status:'blocked'};
+  }});
+  await runtime.advance(instance,{expectedVersion:0,maxActiveNodes:2});
+  releaseWorker();await entered;
+  await runtime.drain(instance);
+  assert.equal(aborted,true);
+  assert.notEqual(instance.inspect().graph.nodes.find(n=>n.id==='design').status,'completed');
 });

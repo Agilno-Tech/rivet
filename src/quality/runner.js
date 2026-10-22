@@ -4,8 +4,10 @@ import { isAbsolute, resolve } from 'node:path';
 
 import { sha256 } from '../evidence/checksum.js';
 import { assertGitClient } from '../git/client.js';
-import { runCommand } from '../policy/commands.js';
+import { prepareCommand, runCommand } from '../policy/commands.js';
 import { redactSecrets } from '../state/redact.js';
+
+import { openVerificationQueue, VerificationBlockedError } from './verification-queue.js';
 
 const ID = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
@@ -15,6 +17,12 @@ const PACKAGE_RUNNERS = new Set(['npm', 'npm.cmd', 'pnpm', 'pnpm.cmd', 'yarn', '
 const PACKAGE_SCRIPT = /^(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const MAX_PACKAGE_MANIFEST_BYTES = 256 * 1024;
 const qualityRuns = new WeakSet();
+const verificationCompletions = new WeakMap();
+
+// Validation only: the issuer is the private fresh execution path below.
+export function assertVerificationCompletion(value, identity) {
+  if (verificationCompletions.get(value) !== identity) fail('invalid-quality-input');
+}
 
 export class QualityError extends Error {
   constructor(reason = 'invalid-quality-input') {
@@ -338,7 +346,7 @@ function immutable(value) {
 function snapshotInput(input, options) {
   const value = capture(input, new Set([
     'projectRoot', 'commitSha', 'authority', 'gates', 'environment', 'timeoutMs',
-    'maxOutputBytes', 'maxStreamOutputBytes',
+    'maxOutputBytes', 'maxStreamOutputBytes', 'reuse',
   ]), ['projectRoot', 'commitSha', 'authority', 'gates']);
   const optionValues = capture(options, new Set(['now', 'gitClient', 'signal']), ['gitClient']);
   if (!SHA.test(value.commitSha)) fail('invalid-quality-input');
@@ -351,6 +359,7 @@ function snapshotInput(input, options) {
   try { assertGitClient(optionValues.gitClient); } catch { fail('invalid-quality-input'); }
   return Object.freeze({
     ...value,
+    ...(value.reuse === undefined ? {} : {reuse: reusePolicy(value.reuse)}),
     gates: Object.freeze(gates),
     environment: environment(value.environment),
     now: optionValues.now ?? Date.now,
@@ -363,12 +372,7 @@ export function assertQualityRun(value) {
   if (!qualityRuns.has(value)) fail('invalid-quality-input');
 }
 
-export async function runQualityGates(input, options = {}) {
-  let value;
-  try { value = snapshotInput(input, options); } catch (error) {
-    if (error instanceof QualityError) throw error;
-    fail('invalid-quality-input');
-  }
+async function executeQualityGates(value) {
   const project = await canonicalDirectory(value.projectRoot).catch(error => {
     if (error instanceof QualityError) throw error;
     fail('invalid-quality-input');
@@ -421,6 +425,7 @@ export async function runQualityGates(input, options = {}) {
       timestamp(endedMs);
       if (endedMs < startedMs) fail('clock-regressed');
     } catch (error) {
+      if(error?.queued)throw error;
       if (error instanceof QualityError) throw error;
       fail('gate-failed');
     }
@@ -492,6 +497,72 @@ export async function runQualityGates(input, options = {}) {
     gates: results,
     tests: attestedTests,
   });
-  qualityRuns.add(output);
   return output;
+}
+
+function reusePolicy(value) {
+  const reuse=capture(value,new Set(['policy','configDigest']),['policy','configDigest']);
+  const policy=capture(reuse.policy,new Set(['enabled','reproducible','dependencyRoots','toolchainRoots']));
+  if(policy.enabled!==undefined && typeof policy.enabled!=='boolean')fail('invalid-quality-input');
+  if(policy.reproducible!==undefined && typeof policy.reproducible!=='boolean')fail('invalid-quality-input');
+  if(typeof reuse.configDigest!=='string')fail('invalid-quality-input');
+  return immutable({configDigest:reuse.configDigest,policy:{...policy,
+    ...(policy.dependencyRoots===undefined?{}:{dependencyRoots:strings(policy.dependencyRoots,32,500)}),
+    ...(policy.toolchainRoots===undefined?{}:{toolchainRoots:strings(policy.toolchainRoots,32,500)})}});
+}
+async function authorizeReuse(value) {
+  for(const gate of value.gates) await prepareCommand({
+    worktree:value.projectRoot,authority:value.authority,
+    commands:{[gate.id]:{executable:gate.executable,...(gate.execution?{execution:gate.execution}:{}),args:gate.args,action:'command.'+gate.id}},
+    environment:value.environment,
+    ...(value.timeoutMs===undefined?{}:{timeoutMs:value.timeoutMs}),
+    ...(value.maxOutputBytes===undefined?{}:{maxOutputBytes:value.maxOutputBytes}),
+    ...(value.maxStreamOutputBytes===undefined?{}:{maxStreamOutputBytes:value.maxStreamOutputBytes}),
+  },{actorId:value.authority.actorId,commandId:gate.id,cwd:gate.cwd,args:[]});
+}
+// Only this public execution boundary grants quality evidence provenance. Durable
+// entries contain timing only, never serialized approval objects or command output.
+export async function runQualityGates(input,options={}) {
+  let value;
+  try { value=snapshotInput(input,options); } catch(error) { if(error instanceof QualityError)throw error;fail('invalid-quality-input'); }
+  let output;
+  let reuseReason='disabled';
+  if(value.reuse?.policy.enabled) {
+    const queue=await openVerificationQueue(value.projectRoot);
+    const identity=await queue.fingerprint(value);
+    reuseReason=identity.reason;
+    if(identity.identity) {
+      const validateCurrent=async()=>{
+        if(value.signal?.aborted)throw new VerificationBlockedError('cancelled');
+        const repo=await value.gitClient.inspectRepository(value.projectRoot);
+        if(repo.root!==value.projectRoot || repo.headSha!==value.commitSha || repo.dirty || repo.dirtyPaths.length)fail('gate-failed');
+        await authorizeReuse(value);
+        if((await queue.fingerprint(value)).identity!==identity.identity)throw new VerificationBlockedError('inputs-changed');
+      };
+      await validateCurrent();
+      const shared=await queue.execute(identity.identity,async()=>{
+        output=await executeQualityGates(value);
+        await validateCurrent();
+        if(output.gates.some(g=>g.status!=='passed'))return null;
+        verificationCompletions.set(output,identity.identity);
+        return output;
+      },{signal:value.signal});
+      await validateCurrent();
+      if(shared.reused) {
+        const record=capture(shared.result,new Set(['timings']),['timings']);
+        const timings=array(record.timings,64,row=>strings(row,2,32));
+        if(timings.length!==value.gates.length || timings.some(row=>row.length!==2 || row.some(x=>!Number.isFinite(Date.parse(x)) || new Date(x).toISOString()!==x) || Date.parse(row[1])<Date.parse(row[0])))fail('gate-failed');
+        output={status:'pass',projectRoot:value.projectRoot,commitSha:value.commitSha,tests:[],gates:value.gates.map((g,i)=>({
+          id:g.id,required:g.required,status:'passed',commitSha:value.commitSha,startedAt:timings[i][0],endedAt:timings[i][1],cwd:g.cwd,
+          command:redactSecrets({executable:g.executable,args:g.args},{environment:value.environment}),exitCode:0,executionStatus:'success',
+          output:{stdout:'',stderr:'',redacted:false,suppressed:true,truncated:false},artifacts:[],
+        }))};
+      }
+      reuseReason=shared.reused?'reused':'executed';
+    }
+  }
+  output ??= await executeQualityGates(value);
+  const branded=immutable({...output,verificationReuse:{status:reuseReason}});
+  qualityRuns.add(branded);
+  return branded;
 }

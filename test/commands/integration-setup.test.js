@@ -108,8 +108,12 @@ test('provider append preserves an existing published project protocol and its d
 });
 
 test('provider publication rechecks after staging and cleans its owned temporary file without replacing concurrent edits',async t=>{
-  const f=await fixture(t);const original=fs.writeFileSync;let changed=false;
-  f.dependencies.fs={...fs,writeFileSync(path,...args){const result=original(path,...args);if(typeof path==='string'&&path.startsWith('.rivet-providers-')){changed=true;original('quality.yaml',f.before['quality.yaml']+'\n# concurrent staged change\n');}return result;}};
+  const f=await fixture(t);const original=fs.writeFileSync;const stagingDescriptors=new Set();let changed=false;
+  f.dependencies.fs={...fs,
+    openSync(path,...args){const descriptor=fs.openSync(path,...args);if(typeof path==='string'&&path.startsWith('.rivet-providers-'))stagingDescriptors.add(descriptor);return descriptor;},
+    writeFileSync(path,...args){const result=original(path,...args);if(stagingDescriptors.has(path)){changed=true;original('quality.yaml',f.before['quality.yaml']+'\n# concurrent staged change\n');}return result;},
+    closeSync(descriptor){stagingDescriptors.delete(descriptor);return fs.closeSync(descriptor);},
+  };
   await assert.rejects(f.run());assert.equal(changed,true);assert.equal(await readFile(join(f.root,'.rivet','providers.yaml'),'utf8'),f.before['providers.yaml']);
   assert.equal(await readFile(join(f.root,'.rivet','quality.yaml'),'utf8'),f.before['quality.yaml']+'\n# concurrent staged change\n');
   assert.equal(fs.readdirSync(join(f.root,'.rivet')).some(name=>name.startsWith('.rivet-providers-')),false);

@@ -17,6 +17,7 @@
     }
   },
   "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"},
     "relativePath": {
       "type": "string",
       "minLength": 1,
@@ -28,6 +29,10 @@
       "additionalProperties": false,
       "required": ["objective", "ownedPaths", "acceptanceCriterionIndexes"],
       "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "dependencies": {"type": "array", "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+        "sharedResources": {"type": "array", "maxItems": 32, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+        "executionClass": { "enum": ["bounded-fix", "implementation"] },
         "objective": { "type": "string", "minLength": 1, "maxLength": 2000 },
         "ownedPaths": {
           "type": "array",

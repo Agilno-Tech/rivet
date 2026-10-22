@@ -163,13 +163,14 @@ test('interactive setup asks for an unknown project check before writing valid c
   const calls=[];
   const code=await setupCommand(parseArgs(['setup','--write']),{
     cwd:()=>root,output:{log(){},error(){}},terminalIsInteractive:()=>true,
+    setupBatchPrompt:async()=>{calls.push('batch');return false;},
     projectChecksPrompt:async()=>{calls.push('prompt');await assert.rejects(access(join(root,'.rivet')));return 'custom-tool verify "a b"';},
     gitDiscovery:async()=>({repository:false}),
     toolDiscovery:async()=>({node:{present:true,version:'22.0.0'},git:{present:true,version:'2.0.0'}}),
-    setup:{inspectInstall:async()=>({targets:[]}),install:async(parsed,deps)=>{calls.push('install');deps.output.json({ok:true});return 0;}},
+    setup:{configureModels:async()=>{calls.push('models');return 0;},inspectInstall:async()=>({targets:[]}),install:async(parsed,deps)=>{calls.push('install');deps.output.json({ok:true});return 0;}},
   });
   assert.equal(code,0);
-  assert.deepEqual(calls,['prompt','install']);
+  assert.deepEqual(calls,['prompt','install','models','batch']);
   assert.deepEqual((await loadProjectConfig(root)).project.commands.test.steps[0].argv,['custom-tool','verify','a b']);
 });
 test('cancelled unknown-project setup writes nothing and starts no installation',async t=>{

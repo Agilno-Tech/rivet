@@ -390,6 +390,8 @@ test('trailing punctuation framing cannot expose configured secret prefixes', as
   ]) {
     for (const target of ['stdout', 'stderr']) {
       const result = await runCommand(contract(worktree, framed, {
+        // This checks output handling, not scheduler-sensitive startup deadlines.
+        timeoutMs: 5_000,
         environment: {
           DEMO_API_TOKEN: scenario.marker,
           LABEL: scenario.label,
@@ -399,6 +401,7 @@ test('trailing punctuation framing cannot expose configured secret prefixes', as
         },
         commands: { test: { executable: framed, args: [], action: 'command.test' } },
       }), { actorId: 'worker-one', commandId: 'test', cwd: '.' });
+      assert.equal(result.status, 'success', JSON.stringify({ target, label: scenario.label, frame: scenario.frame, status: result.status, code: result.code, signal: result.signal, timedOut: result.timedOut, aborted: result.aborted }));
       assert.equal(result.stdout, '', `${target} exposed ${scenario.label}${scenario.prefix}${scenario.frame}`);
       assert.equal(result.stderr, '', `${target} exposed ${scenario.label}${scenario.prefix}${scenario.frame}`);
       assert.equal(result.redacted, true);
@@ -884,6 +887,38 @@ test('command allowlist maps and argv array traps are read exactly once', async 
   });
   assert.equal(prepared.commandId, 'test');
   assert.deepEqual(accesses, { ownKeys: 1, command: 1, length: 1, zero: 1 });
+});
+
+test('command lifecycle awaits observed process-group stop before release',async t=>{
+ const {worktree,print}=await fixture(t);const receipts=[];
+ const result=await runCommand(contract(worktree,print),{actorId:'worker-one',commandId:'test',cwd:'.',args:[]},{onExecution:async receipt=>{receipts.push(receipt);}});
+ assert.equal(result.status,'success');assert.deepEqual(receipts.map(r=>r.status),['started','stopped']);assert.equal(receipts[0].executionId,receipts[1].executionId);
+});
+
+test('enrolled heavy command waits for capacity then releases only its observed owner',async t=>{
+ const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+ const {withMachineContext}=await import('../../src/runtime/machine-admission.js');
+ const {root,worktree,print}=await fixture(t);const machine=createResourceCoordinator({root:join(root,'machine')});
+ const r=await machine.register({projectRoot:worktree,runId:'heavy',deadlineMs:Date.now()+30000});
+ const held=await machine.request({registrationId:r.id,resource:'heavyVerification',idempotencyKey:'held',generation:1});
+ let settled=false;const pending=withMachineContext(machine,worktree,'heavy',()=>runCommand(contract(worktree,print),{actorId:'worker-one',commandId:'test',cwd:'.',args:[]})).then(value=>{settled=true;return value;});
+ for(let i=0;i<100;i++){if((await machine.inspect()).claims.some(c=>c.status==='queued'))break;await new Promise(resolve=>setTimeout(resolve,10));}
+ assert.equal(settled,false);assert.equal((await machine.inspect()).claims.filter(c=>c.status==='queued').length,1);
+ await machine.release({claimId:held.id,generation:1,completed:true});assert.equal((await pending).status,'success');
+ assert.equal((await machine.inspect()).claims.filter(c=>c.status==='held').length,0);
+});
+
+test('command cancellation after admission before spawn releases proven unused capacity', async t => {
+ const {createResourceCoordinator}=await import('../../src/runtime/resource-coordinator.js');
+ const {withMachineContext}=await import('../../src/runtime/machine-admission.js');
+ const {root,worktree,print}=await fixture(t);
+ const coordinator=createResourceCoordinator({root:join(root,'machine')});
+ await coordinator.register({projectRoot:worktree,runId:'cancel-before-spawn',deadlineMs:Date.now()+30000});
+ const controller=new AbortController();
+ const machine={...coordinator,dispatch:async input=>{const result=await coordinator.dispatch(input);controller.abort();return result;}};
+ const result=await withMachineContext(machine,worktree,'cancel-before-spawn',()=>runCommand(contract(worktree,print),{actorId:'worker-one',commandId:'test',cwd:'.',args:[]}),{signal:controller.signal});
+ assert.equal(result.status,'aborted');
+ assert.equal((await coordinator.inspect()).claims[0].status,'released');
 });
 
 test('pre-launch failures retain a bounded bootstrap reason without exposing process output', async t => {

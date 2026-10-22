@@ -1,3 +1,4 @@
+import { selectionArguments } from './session-capabilities.js';
 import { lstat } from 'node:fs/promises';
 
 import { checkCompatibility, validVersion } from './compatibility.js';
@@ -26,14 +27,14 @@ export const CLAUDE_ADAPTER_SYNTAX = Object.freeze({
   inputMode: 'stdin-text',
   outputMode: 'json-structured-output-envelope-v1',
   optionalArgs: Object.freeze([
-    '--model <id>', '--effort <low|medium|high|max>', '--max-budget-usd <amount>',
+    '--model <id>', '--effort <low|medium|high|xhigh|max>', '--max-budget-usd <amount>',
     '--permission-mode <acceptEdits|dontAsk|plan>', '--safe-mode',
     '--tools <Read,Glob,Grep>', '--json-schema <approved-schema>',
   ]),
 });
 
-const CONFIG_KEYS = new Set(['executable', 'interpreter', 'expectedVersion', 'args', 'environment', 'timeoutMs', 'maxOutputBytes']);
-const PLANNING_CONFIG_KEYS = new Set(['executable', 'interpreter', 'expectedVersion', 'worktree', 'environment', 'timeoutMs', 'maxOutputBytes']);
+const CONFIG_KEYS = new Set(['executable', 'interpreter', 'expectedVersion', 'args', 'environment', 'timeoutMs', 'maxOutputBytes', 'executionSelection', 'onTelemetry']);
+const PLANNING_CONFIG_KEYS = new Set(['executable', 'interpreter', 'expectedVersion', 'worktree', 'environment', 'timeoutMs', 'maxOutputBytes', 'executionSelection', 'onTelemetry']);
 
 function stable(operation) {
   try { return operation(); } catch { failAgent('template-invalid'); }
@@ -82,8 +83,8 @@ function captureArgs(input) {
       if (option === '--safe-mode') continue;
       const value = result[index + 1];
       index += 1;
-      if (option === '--model' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(value)) continue;
-      if (option === '--effort' && ['low', 'medium', 'high', 'max'].includes(value)) continue;
+      if (option === '--model' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(value)) continue;
+      if (option === '--effort' && ['low', 'medium', 'high', 'xhigh', 'max'].includes(value)) continue;
       if (option === '--max-budget-usd' && /^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(value)
         && Number(value) > 0 && Number(value) <= 10_000) continue;
       if (option === '--permission-mode' && ['acceptEdits', 'dontAsk', 'plan'].includes(value)) continue;
@@ -118,7 +119,8 @@ export function createClaudeClient(input) {
   if (typeof config.executable !== 'string' || !config.executable.startsWith('/') || config.executable.length > 1024
     || (config.interpreter !== undefined && (typeof config.interpreter !== 'string' || !config.interpreter.startsWith('/') || config.interpreter.length > 1024))
     || (config.expectedVersion !== undefined && !validVersion(config.expectedVersion))) failAgent('template-invalid');
-  const args = captureArgs(config.args);
+  const selectedArgs = selectionArguments('claude', config.executionSelection);
+  const args = captureArgs(selectedArgs.length ? [...config.args.slice(0,-1), ...selectedArgs, '{stdin}'] : config.args);
   if (['--max-budget-usd', '--tools', '--json-schema'].some(option => args.includes(option))) failAgent('template-invalid');
   const environment = captureEnvironment(config.environment);
   const executable = config.executable;
@@ -128,7 +130,7 @@ export function createClaudeClient(input) {
   const maxOutputBytes = config.maxOutputBytes;
 
   async function launch(contractInput, optionInput = {}) {
-    const options = capture(optionInput, new Set(['signal','protocolContext']), []);
+    const options = capture(optionInput, new Set(['signal','protocolContext','onTelemetry','onExecution']), []);
     const signalState = stable(() => {
       const value = options.signal;
       if (value !== undefined && (!(value instanceof AbortSignal) || Object.getPrototypeOf(value) !== AbortSignal.prototype)) failAgent('template-invalid');
@@ -142,13 +144,13 @@ export function createClaudeClient(input) {
       worktreeIdentity: { dev: contract.worktree.dev, ino: contract.worktree.ino },
       environment, signal: signalState.value,
       timeoutMs: Math.min(timeoutMs ?? contract.budget.maxRuntimeMs, contract.budget.maxRuntimeMs, 10 * 60_000),
-      maxOutputBytes, allowOptionArgs: true, resultFormat: 'claude-json',
+      maxOutputBytes, onExecution:options.onExecution, onTelemetry: options.onTelemetry ?? config.onTelemetry, telemetryProvider: 'claude', allowOptionArgs: true, resultFormat: 'claude-json',
     });
     await checkCompatibility(runner, 'claude', [...args, '--json-schema', '--max-budget-usd'], expectedVersion);
     return runner.run({
       args: Object.freeze([
         ...args,
-        '--json-schema', JSON.stringify(agentResultContract(contract.evidence).schema),
+        '--json-schema', JSON.stringify(agentResultContract(contract.evidence, contract.session).schema),
         '--max-budget-usd', String(contract.budget.maxCostUsd),
       ]),
       cwd: '.', payload: serializeLaunchContract(contract), protocolContext: options.protocolContext, signal: signalState.value,
@@ -173,7 +175,7 @@ export function createClaudePlanningClient(input) {
   const worktree = config.worktree;
 
   async function propose(contract, optionInput = {}) {
-    const options = capture(optionInput, new Set(['signal']), []);
+    const options = capture(optionInput, new Set(['signal','onExecution']), []);
     const signal = options.signal;
     if (signal !== undefined && (!(signal instanceof AbortSignal) || Object.getPrototypeOf(signal) !== AbortSignal.prototype)) {
       failAgent('template-invalid');
@@ -183,8 +185,7 @@ export function createClaudePlanningClient(input) {
     if (!isClientProfile('claude', profile)) failAgent('template-invalid');
     const args = captureArgs([
       ...ARGS.slice(0, -1),
-      '--model', profile.model,
-      '--effort', profile.planning.effort,
+      ...(config.executionSelection === undefined ? ['--model', profile.model, '--effort', profile.planning.effort] : selectionArguments('claude', config.executionSelection)),
       '--max-budget-usd', String(profile.planning.maxCostUsd),
       '--permission-mode', 'dontAsk',
       '--tools', PLANNING_TOOLS,
@@ -197,8 +198,8 @@ export function createClaudePlanningClient(input) {
     const identity = Object.freeze({ dev: metadata.dev.toString(), ino: metadata.ino.toString() });
     const runner = await createProcessRunner({
       executable, interpreter, worktree, worktreeIdentity: identity, environment, signal,
-      timeoutMs: config.timeoutMs, maxInputBytes: 512 * 1024,
-      maxOutputBytes: config.maxOutputBytes ?? 512 * 1024, allowOptionArgs: true, resultFormat: 'claude-json',
+      timeoutMs: config.timeoutMs, maxInputBytes: 512 * 1024, onExecution:options.onExecution,
+      maxOutputBytes: config.maxOutputBytes ?? 512 * 1024, onTelemetry: config.onTelemetry, telemetryProvider: 'claude', allowOptionArgs: true, resultFormat: 'claude-json',
     });
     await checkCompatibility(runner, 'claude', [...args, '--json-schema', '--max-budget-usd'], expectedVersion);
     return runner.runPlanning({

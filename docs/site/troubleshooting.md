@@ -58,6 +58,8 @@ Bootstrap failures also include a bounded reason: `target-spawn-failed` means th
 
 ## A Claude task exhausts its token budget despite a low cost
 
+Fresh setup now recommends 500,000 tokens per Worker while retaining Claude’s $2 spending cap. Projects created with the earlier 100,000-token recommendation retain their saved limits; see the [recommended allowances](./runtime-reference.md#native-usage-and-task-budgets) before updating policy.
+
 Cached context still contributes to the token count. Rivet uses Claude's native counters, including repeated cache reads, and retains an overrun as `budget-exhausted`. Inspect task status, review the token and cost allocations in project orchestration policy, then create and approve a new plan if a larger allowance is appropriate. Resuming the same approved task does not increase its budget. See [native usage and task budgets](./runtime-reference.md#native-usage-and-task-budgets).
 
 ## A branch is already checked out
@@ -133,8 +135,24 @@ Before sharing, open the file and review it. Attach it to a [GitHub issue](https
 
 Closing or declining the activation prompt leaves the plan saved. Run `rivet task start` inside the project to see the exact proposal again and approve it. `rivet task resume` also offers this review for a proposed terminal task. If several tasks are active, choose from the numbered interactive list or add `--run=<id>`. The activation prompt has no reading timeout.
 
+## Cleanup retains a checkout
+
+Use `rivet task cleanup --preview` to read the reason. A completed task alone is insufficient: Rivet needs stopped-owner evidence, the original checkout identity, preserved commits, and no unknown contents. Only exact dependency directories backed by protected completed install receipts can be removed; older `.rivet-deps` markers, tracked files and unknown build outputs do not qualify. An interrupted cleanup can be previewed and approved again, but a replacement directory cannot inherit the earlier approval.
+
+Retention is off unless separately approved. A project or configuration change suspends it; review the policy again with `rivet task cleanup --retention=7d`, or revoke it with `--retention=off`. Retention runs during foreground execution rather than on a timer, and each sweep is bounded. `task status` and cleanup preview preserve all files.
+
+## Combined verification is waiting or blocked
+
+Inspect `rivet task status` for the candidate and next action. `dependencies-needed` requires explicit installation approval. Retry `rivet task verify --batch` interactively to approve and continue inline, or use `rivet task deps` followed by the batch command. The chooser omits incomplete or stale tasks; finish their work and check their accepted integration state first. Paused or expired participants cannot borrow another task's allowance. Resume an eligible paused task before retrying; an expired approved allowance needs a new approved task.
+
+Re-enrolling a changed, ready task replaces its old queued enrollment. If the task belonged to a dependency-waiting batch, re-enrollment blocks that old batch and preserves its evidence. A running owner is never replaced based on a missing process or elapsed time. Inspect an unresolved owner rather than editing private queue state or deleting its candidate. Batch evidence does not replace ordinary final verification.
+
 ## The task is awaiting final approval
 
 After successful execution, `rivet run` opens the final-review menu automatically. Use **Review changes** to inspect the tested diff. To return later, run `rivet task resume` or the direct shortcut `rivet task approve`. Choose local application or pull-request delivery. Local application needs the original clean default branch at the task's starting commit and unchanged committed Rivet configuration. Changing policy or either checkout invalidates the old approval; do not force-reset your changes to bypass this check.
 
 The `feature` and `work` command families are lower-level harness interfaces with explicit identifiers and version checks. For normal terminal use, use `run` and `task`; `rivet run` already activates and executes after your approval.
+
+### Saved model routing or worker concurrency differs from your intent
+
+Run `rivet models configure`, choose **Customize**, and change a route or **Worker concurrency** before final approval. `rivet run` uses saved coordination routing; a conflicting `--harness` flag cannot silently override it. An unavailable saved harness must be restored or replaced through an approved policy update. The wizard shows the effective project worker ceiling, but manager, parent and shared machine capacity can still limit actual concurrency. Existing tasks keep their pinned policy.

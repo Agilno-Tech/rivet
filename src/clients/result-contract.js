@@ -45,7 +45,13 @@ const AGENT_RESULT_CONTRACT = immutableJson({
   },
 });
 
-export function agentResultContract(evidence = undefined) {
+export function agentResultContract(evidence = undefined, session = undefined) {
+  if (session !== undefined) {
+    const result = structuredClone(agentResultContract(evidence));
+    result.schema.properties.status.enum.push('checkpoint');
+    result.framing += ' For a managed session, checkpoint means a cooperative safe boundary: stop writing and summarize completed work, pending work, evidence and next action. Never report checkpoint for a provider failure.';
+    return immutableJson(result);
+  }
   if (evidence === undefined) return AGENT_RESULT_CONTRACT;
   if (!Array.isArray(evidence) || evidence.length > 64
     || evidence.some(item => typeof item !== 'string' || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(item))) {

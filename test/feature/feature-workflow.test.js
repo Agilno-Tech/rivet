@@ -1,3 +1,4 @@
+import { fixtureGit } from '../helpers/git-executable.js';
 import assert from 'node:assert/strict';
 import { execFile as execFileCallback } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
@@ -62,7 +63,7 @@ function trackerAdapter(provider, id, request) {
 }
 
 async function git(root, ...args) {
-  return (await execFile('/usr/bin/git', ['-C', root, ...args])).stdout.trim();
+  return (await execFile(fixtureGit, ['-C', root, ...args])).stdout.trim();
 }
 
 async function fixture() {
@@ -118,8 +119,8 @@ providers:
     },
   }, null, 2) + '\n');
   await writeFile(join(root, 'app', 'page.js'), "export default function Page() { return 'Conference planner'; }\n");
-  await execFile('/usr/bin/git', ['init', '--quiet', '--bare', remote]);
-  await execFile('/usr/bin/git', ['init', '--quiet', '--initial-branch=main', root]);
+  await execFile(fixtureGit, ['init', '--quiet', '--bare', remote]);
+  await execFile(fixtureGit, ['init', '--quiet', '--initial-branch=main', root]);
   await git(root, 'add', '.');
   await git(root, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--quiet', '-m', 'initial target');
   await git(root, 'remote', 'add', 'origin', remote);
@@ -156,7 +157,7 @@ test('runs equivalent Markdown/Jira/Linear requests through one resumable local-
         };
       }
       integrationWorktree = join(target.parent, 'integration');
-      await execFile('/usr/bin/git', ['-C', project, 'worktree', 'add', '--quiet', '-b', 'feature/smart-agenda', integrationWorktree, run.featurePlan.baselineCommit]);
+      await execFile(fixtureGit, ['-C', project, 'worktree', 'add', '--quiet', '-b', 'feature/smart-agenda', integrationWorktree, run.featurePlan.baselineCommit]);
       await mkdir(join(integrationWorktree, 'app', 'agenda'), { recursive: true });
       await mkdir(join(integrationWorktree, 'test'), { recursive: true });
       await writeFile(join(integrationWorktree, 'app', 'agenda', 'smart-agenda.js'),

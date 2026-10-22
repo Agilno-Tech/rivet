@@ -1,3 +1,7 @@
+import { observeExecutionAttempt } from './execution-proof.js';
+import {randomUUID} from 'node:crypto';
+import { sessionTelemetry } from './session-capabilities.js';
+import { validatePolicyPayload } from '../models/policy-contract.js';
 import { validateReviewPayload } from '../review/contract.js';
 import { serializeProtocolLaunch } from '../protocols/presentation.js';
 import { spawn } from 'node:child_process';
@@ -8,7 +12,7 @@ import { AgentContractError, containsSecretMaterial, failAgent, immutableJson } 
 import { validateLaunchPayload } from '../prompts/launch-contract.js';
 import { parsePlanningResult, validatePlanningPayload } from '../prompts/planning-contract.js';
 
-const CONFIG_KEYS = new Set(['executable', 'interpreter', 'worktree', 'worktreeIdentity', 'environment', 'signal', 'launchTimeoutMs', 'timeoutMs', 'termGraceMs', 'killGraceMs', 'maxOutputBytes', 'maxInputBytes', 'allowOptionArgs', 'resultFormat']);
+const CONFIG_KEYS = new Set(['executable', 'interpreter', 'worktree', 'worktreeIdentity', 'environment', 'signal', 'launchTimeoutMs', 'timeoutMs', 'termGraceMs', 'killGraceMs', 'maxOutputBytes', 'maxInputBytes', 'allowOptionArgs', 'resultFormat', 'onTelemetry', 'telemetryProvider', 'onExecution']);
 const REQUEST_KEYS = new Set(['args', 'cwd', 'payload', 'signal', 'protocolContext']);
 // Keep the provider environment narrow, but preserve the non-secret account
 // context required by native macOS clients to resolve their local login
@@ -349,7 +353,7 @@ function parseEnvelope(buffer, contract, resultFormat, requireBudgetStop = false
     : captured;
   const keys = Reflect.ownKeys(value);
   if (keys.length !== 4 || !['version', 'status', 'output', 'usage'].every(key => Object.hasOwn(value, key))
-    || value.version !== 1 || !['success', 'retry', 'failed', 'blocked', 'budget-exhausted'].includes(value.status)
+    || value.version !== 1 || !['success', 'retry', 'failed', 'blocked', 'budget-exhausted', ...(contract.session ? ['checkpoint'] : [])].includes(value.status)
     || !value.output || typeof value.output !== 'object' || Array.isArray(value.output)
     || !value.usage || typeof value.usage !== 'object' || Array.isArray(value.usage)) failAgent('output-invalid');
   const outputKeys = Reflect.ownKeys(value.output);
@@ -390,12 +394,17 @@ async function settleTermination(child, graceMs) {
   const deadline = performance.now() + graceMs;
   while (performance.now() < deadline) {
     try { process.kill(-child.pid, 0); }
-    catch (error) { if (error.code === 'ESRCH') return; }
+    catch (error) { if (error.code === 'ESRCH') return true; }
     await new Promise(resolve => setTimeout(resolve, 10));
   }
+  return false;
 }
 
 export async function createProcessRunner(input) {
+  const beginChild = observeExecutionAttempt();
+  const unsettledProbes = new Set();
+  let activeProbes = 0;
+  let executionBegun = false;
   assertSupportedClientPlatform();
   const config = capture(input, CONFIG_KEYS, ['executable', 'worktree'], 'invalid-contract');
   const timeoutMs = boundedInteger(config.timeoutMs, 30_000, 10 * 60_000);
@@ -405,6 +414,9 @@ export async function createProcessRunner(input) {
   const maxOutputBytes = boundedInteger(config.maxOutputBytes, 256 * 1024, 10 * 1024 * 1024);
   const maxInputBytes = boundedInteger(config.maxInputBytes, 128 * 1024, 1024 * 1024);
   if (config.allowOptionArgs !== undefined && typeof config.allowOptionArgs !== 'boolean') failAgent('invalid-contract');
+  if (config.onExecution !== undefined && typeof config.onExecution !== 'function') failAgent('invalid-contract');
+  if (config.onTelemetry !== undefined && typeof config.onTelemetry !== 'function') failAgent('invalid-contract');
+  if (config.telemetryProvider !== undefined && !['claude','codex','host'].includes(config.telemetryProvider)) failAgent('invalid-contract');
   if (config.resultFormat !== undefined && config.resultFormat !== 'claude-json') failAgent('invalid-contract');
   const executable = config.executable;
   const interpreter = config.interpreter;
@@ -434,6 +446,7 @@ export async function createProcessRunner(input) {
   const executionEnvironment = environment(config.environment);
 
   async function probe(args, help = false) {
+    if (executionBegun) failAgent('provider-unavailable');
     let cancelled = signalAborted(boundSignal);
     if (cancelled) failAgent('aborted');
     let terminateChild;
@@ -442,6 +455,7 @@ export async function createProcessRunner(input) {
       terminateChild?.('aborted');
     });
     const guard = () => { if (cancelled || signalAborted(boundSignal)) failAgent('aborted'); };
+    activeProbes++;
     try {
       await verifyDirectory(worktree, worktreeIdentity, 'cwd-unsafe', guard);
       guard();
@@ -450,6 +464,8 @@ export async function createProcessRunner(input) {
       const command = invocation(currentTarget, args);
       return await new Promise((resolvePromise, rejectPromise) => {
         let child;
+        let proveStopped;
+        const probeIdentity = {};
         let classification;
         let cleanupDeadline;
         let settled = false;
@@ -463,7 +479,10 @@ export async function createProcessRunner(input) {
           settled = true;
           clearTimeout(timer); clearTimeout(killTimer); clearTimeout(hardTimer);
           if (error && classification && child) {
-            settleTermination(child, Math.max(0, cleanupDeadline - performance.now())).then(() => rejectPromise(error), () => rejectPromise(error));
+            settleTermination(child, Math.max(0, cleanupDeadline - performance.now())).then(stopped => {
+              if (stopped) proveStopped?.();
+              rejectPromise(error);
+            }, () => rejectPromise(error));
           } else if (error) rejectPromise(error); else resolvePromise(value);
         };
         terminateChild = reason => {
@@ -481,11 +500,17 @@ export async function createProcessRunner(input) {
         };
         if (cancelled) { finish(new AgentContractError('aborted')); return; }
         try {
+          const proveScopeStopped = beginChild();
+          unsettledProbes.add(probeIdentity);
+          proveStopped = () => {
+            unsettledProbes.delete(probeIdentity);
+            proveScopeStopped();
+          };
           child = spawn(command.executable, command.args, {
             cwd: worktree, shell: false, windowsHide: true, detached: true,
             env: executionEnvironment, stdio: ['ignore', 'pipe', 'pipe'],
           });
-        } catch { finish(new AgentContractError('provider-unavailable')); return; }
+        } catch { proveStopped?.(); finish(new AgentContractError('provider-unavailable')); return; }
         if (cancelled) terminateChild('aborted');
         const collect = (chunk, keep) => {
           if (classification) return;
@@ -498,15 +523,23 @@ export async function createProcessRunner(input) {
         child.stdout.on('data', chunk => collect(chunk, true));
         child.stderr.on('data', chunk => collect(chunk, false));
         child.once('error', () => {
+          if (!child.pid) proveStopped?.();
           if (classification) killTree(child, 'SIGKILL');
           finish(new AgentContractError(classification ?? 'provider-unavailable'));
         });
         child.once('close', code => {
+          if (child.pid) {
+            try { process.kill(-child.pid, 0); } catch (error) { if (error.code === 'ESRCH') proveStopped?.(); }
+          }
           if (classification) {
             // A detached adapter can exit before a descendant in its process
             // group. Kill the group before clearing the escalation timer.
             killTree(child, 'SIGKILL');
             finish(new AgentContractError(classification));
+            return;
+          }
+          if (unsettledProbes.has(probeIdentity)) {
+            finish(new AgentContractError('provider-unavailable'));
             return;
           }
           if (code !== 0) { finish(new AgentContractError('provider-unavailable')); return; }
@@ -520,12 +553,17 @@ export async function createProcessRunner(input) {
         timer.unref?.();
       });
     } finally {
+      activeProbes--;
       terminateChild = undefined;
       removeListener();
     }
   }
 
   async function execute(inputRequest, protocol) {
+    // A compatibility process may outlive its parent. Its unknown descendants
+    // must not be hidden by a later main-process stopped receipt.
+    if (activeProbes > 0 || unsettledProbes.size > 0) failAgent('provider-unavailable');
+    executionBegun = true;
     const request = capture(inputRequest, REQUEST_KEYS, ['args', 'cwd', 'payload'], 'invalid-contract');
     const args = snapshotArgs(request.args, config.allowOptionArgs === true);
     if (typeof request.payload !== 'string' || Buffer.byteLength(request.payload, 'utf8') > maxInputBytes || request.payload.includes('\0')) failAgent('invalid-contract');
@@ -533,7 +571,7 @@ export async function createProcessRunner(input) {
     try {
       contract = protocol === 'launch'
         ? validateLaunchPayload(request.payload)
-        : protocol === 'review' ? validateReviewPayload(request.payload) : validatePlanningPayload(request.payload);
+        : protocol === 'review' ? validateReviewPayload(request.payload) : protocol === 'policy' ? validatePolicyPayload(request.payload) : validatePlanningPayload(request.payload);
     } catch { failAgent('invalid-contract'); }
     if (protocol !== 'launch' && request.protocolContext !== undefined) failAgent('invalid-contract');
     let stdinPayload = protocol === 'launch'
@@ -566,11 +604,37 @@ export async function createProcessRunner(input) {
       const command = invocation(currentTarget, args);
       return await new Promise((resolvePromise, rejectPromise) => {
         let child;
+        let proveStopped;
         const stdout = [];
         let totalBytes = 0;
         let classification;
         let cleanupDeadline;
         let settled = false;
+        let childClosed = false;
+        const executionId = `execution-${randomUUID()}`;
+        let startReceipt;
+        let executionStopped = false;
+        let terminationStarted = false;
+        let processGroupStopped = false;
+        const boundedReceipt = async operation => {
+          let timer;
+          try {await Promise.race([operation,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new AgentContractError('output-invalid')),1000);})]);}
+          finally {clearTimeout(timer);}
+        };
+        const reportExecution = async status => {
+          if(!config.onExecution || !child?.pid) return;
+          let observed=status;
+          if(status!=='started') {
+            if(executionStopped) return;
+            executionStopped=true;
+            observed='unknown';
+            if(processGroupStopped)observed='stopped';
+            else if(childClosed) {try {process.kill(-child.pid,0);}catch(error){if(error.code==='ESRCH')observed='stopped';}}
+          }
+          const receipt={version:1,executionId,processId:child.pid,processGroupId:child.pid,ownerProcessId:process.pid,processBirth:null,
+            observedAtMs:Date.now(),source:'owned-process',assurance:'observed',status:observed};
+          await boundedReceipt(Promise.resolve().then(()=>config.onExecution(Object.freeze(receipt))));
+        };
         let runtimeTimer;
         let launchTimer;
         let termTimer;
@@ -579,13 +643,20 @@ export async function createProcessRunner(input) {
           if (settled) return;
           settled = true;
           clearTimeout(runtimeTimer); clearTimeout(launchTimer); clearTimeout(termTimer); clearTimeout(hardTimer);
-          if (error && classification && child) {
-            settleTermination(child, Math.max(0, cleanupDeadline - performance.now())).then(() => rejectPromise(error), () => rejectPromise(error));
-          } else if (error) rejectPromise(error); else resolvePromise(value);
+          if (error && terminationStarted && child) {
+            settleTermination(child, Math.max(0, cleanupDeadline - performance.now())).then(stopped => {processGroupStopped=stopped;return reportExecution('unknown');}).then(() => rejectPromise(error), () => rejectPromise(error));
+          } else if (error) {
+            const timer=setTimeout(()=>rejectPromise(error),1000);
+            Promise.resolve(reportExecution('unknown')).then(()=>{clearTimeout(timer);rejectPromise(error);},()=>{clearTimeout(timer);rejectPromise(error);});
+          } else resolvePromise(value);
         };
         terminateChild = reason => {
-          if (classification || !child) return;
+          if (settled || classification || !child) return;
           classification = reason;
+          // Receipt persistence still obeys cancellation/deadlines after close,
+          // but a reaped child PID/group is no longer ours to signal.
+          if (childClosed) { finish(new AgentContractError(reason)); return; }
+          terminationStarted = true;
           cleanupDeadline = performance.now() + termGraceMs + killGraceMs;
           killTree(child, 'SIGTERM');
           termTimer = setTimeout(() => killTree(child, 'SIGKILL'), termGraceMs);
@@ -598,11 +669,12 @@ export async function createProcessRunner(input) {
         };
         if (cancelled) { finish(new AgentContractError('aborted')); return; }
         try {
+          proveStopped = beginChild();
           child = spawn(command.executable, command.args, {
             cwd, shell: false, windowsHide: true, detached: true,
             env: executionEnvironment, stdio: ['pipe', 'pipe', 'pipe'],
           });
-        } catch { finish(new AgentContractError('spawn-failed')); return; }
+        } catch { proveStopped?.(); finish(new AgentContractError('spawn-failed')); return; }
         const collect = (target, chunk) => {
           if (classification) return;
           const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -618,17 +690,22 @@ export async function createProcessRunner(input) {
         // makes the result depend on whether stdin or close wins the event race.
         child.stdin.on('error', () => terminateChild('provider-unavailable'));
         child.once('error', () => {
+          if (!child.pid) proveStopped?.();
           if (classification) killTree(child, 'SIGKILL');
           finish(new AgentContractError(classification ?? 'spawn-failed'));
         });
         child.once('spawn', () => clearTimeout(launchTimer));
         child.once('close', code => {
+          if (child.pid) {
+            try { process.kill(-child.pid, 0); } catch (error) { if (error.code === 'ESRCH') proveStopped?.(); }
+          }
+          childClosed = true;
           if (classification) {
-            // The direct adapter may be gone while its descendants remain.
-            killTree(child, 'SIGKILL');
             finish(new AgentContractError(classification));
             return;
           }
+          clearTimeout(launchTimer);
+          // Keep the runtime deadline while awaiting telemetry persistence.
           const bytes = Buffer.concat(stdout);
           const providerFailure = config.resultFormat === 'claude-json' ? claudeFailure(bytes, protocol) : null;
           if (providerFailure) { finish(new AgentContractError(providerFailure)); return; }
@@ -643,7 +720,21 @@ export async function createProcessRunner(input) {
             // A native cost-cap result can accompany a nonzero process exit.
             // Only that validated terminal envelope preserves its accounting;
             // any other nonzero exit remains a failed provider execution.
-            finish(null, protocol === 'launch' ? parseEnvelope(bytes, contract, config.resultFormat, code !== 0) : parsePlanningResult(bytes));
+            const result = protocol === 'launch' ? parseEnvelope(bytes, contract, config.resultFormat, code !== 0) : parsePlanningResult(bytes);
+            if (config.onTelemetry || config.onExecution) {
+              // The child no longer keeps Node alive; the bounded receipt wait must.
+              runtimeTimer.ref?.();
+              let usage = protocol === 'launch' && (config.telemetryProvider !== 'claude' || config.resultFormat === 'claude-json') ? result.usage : undefined;
+              if (config.telemetryProvider === 'claude' && protocol !== 'launch') {
+                try { usage = claudeMeasuredUsage(JSON.parse(strictDecode(bytes))); } catch { /* Missing native usage remains unknown. */ }
+              }
+              Promise.resolve(startReceipt).then(()=>reportExecution('stopped')).then(()=>config.onTelemetry?.(sessionTelemetry(config.telemetryProvider ?? 'host', usage))).then(
+                () => finish(classification ? new AgentContractError(classification) : null, result),
+                () => finish(new AgentContractError('output-invalid')),
+              );
+              return;
+            }
+            finish(null, result);
           } catch (error) {
             finish(error instanceof AgentContractError ? error : new AgentContractError('output-invalid'));
           }
@@ -654,7 +745,8 @@ export async function createProcessRunner(input) {
         launchTimer = setTimeout(() => terminateChild('launch-timeout'), Math.min(launchTimeoutMs, runtimeLimit));
         launchTimer.unref?.();
         if (cancelled) { terminateChild('aborted'); return; }
-        try { child.stdin.end(stdinPayload, 'utf8'); } catch { terminateChild('provider-unavailable'); }
+        startReceipt=Promise.resolve().then(()=>reportExecution('started'));
+        startReceipt.then(()=>{if(settled || classification || childClosed)return;try{child.stdin.end(stdinPayload,'utf8');}catch{terminateChild('provider-unavailable');}},()=>terminateChild('output-invalid'));
       });
     } finally {
       terminateChild = undefined;
@@ -671,6 +763,6 @@ export async function createProcessRunner(input) {
       if (!['claude', 'codex'].includes(provider)) failAgent('invalid-contract');
       return probe(provider === 'codex' ? ['exec', '--help'] : ['--help'], true);
     },
-    run, runPlanning, runReview(inputRequest) { return execute(inputRequest, 'review'); },
+    run, runPlanning, runPolicy(inputRequest) { return execute(inputRequest, 'policy'); }, runReview(inputRequest) { return execute(inputRequest, 'review'); },
   });
 }
