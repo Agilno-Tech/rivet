@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0-alpha.6](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.5...v0.1.0-alpha.6) (2026-10-23)
+
+
+### Bug Fixes
+
+* avoid false positives in review secret checks ([#68](https://github.com/Agilno-Tech/rivet/issues/68)) ([88c401b](https://github.com/Agilno-Tech/rivet/commit/88c401b3b8ff393fd1ccc34624cc701cd6ff7e41))
+
 ## [0.1.0-alpha.5](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.4...v0.1.0-alpha.5) (2026-10-22)
 
 
