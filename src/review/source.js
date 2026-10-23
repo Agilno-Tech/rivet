@@ -1,3 +1,5 @@
+import {redactSecrets} from '../state/redact.js';
+import {hasReviewCredential,maskReviewDiff,canOmitLiteralLine,reviewSnapshotForScan} from './secrets.js';
 import {reviewDiffFiles} from './diff.js';
 import {createProviderWireBody} from '../adapters/contract.js';
 import {createHash} from 'node:crypto';
@@ -20,7 +22,7 @@ export function parseReviewUrl(value) {
  if(value!==`${repository.url}${suffix}${number}`)fail('Review URL must use the canonical repository URL.');
  return Object.freeze({repository,number:Number(number),url:value});
 }
-export function createReviewSource({target,transport,headers,signal}) {
+export function createReviewSource({target,transport,headers,signal,environment={}}) {
  const {repository,number}=target, provider=repository.provider;
  const http=createProviderHttpClient({provider,transport,headers,baseUrl:endpoints[provider],allowEncodedSlash:true,maxResponseBytes:512*1024});
  const root=provider==='github'?`/repos/${repository.fullName}/pulls/${number}`:provider==='bitbucket'?`/repositories/${repository.fullName}/pullrequests/${number}`:`/projects/${encodeURIComponent(repository.fullName)}/merge_requests/${number}`;
@@ -54,20 +56,44 @@ export function createReviewSource({target,transport,headers,signal}) {
   const now=await identity();
   if(now.headSha!==snapshot.headSha||now.baseSha!==snapshot.baseSha||now.title!==snapshot.title||now.description!==snapshot.description)fail('Review changed since capture. Start a new review before using these findings.');
  }
- async function capture() {
+ async function capture({confirmRedactions}={}) {
   const before=await identity();
   const path=provider==='github'?root:provider==='bitbucket'?`/repositories/${repository.fullName}/diff/${before.headSha}..${before.baseSha}?topic=true`:`${root}/raw_diffs`;
-  const diff=(await http.requestText({method:'GET',path,signal,headers:{accept:provider==='github'?'application/vnd.github.diff':'text/plain'}})).data;
+  let diff=(await http.requestText({method:'GET',path,signal,headers:{accept:provider==='github'?'application/vnd.github.diff':'text/plain'}})).data;
   if(typeof diff!=='string'||!diff.startsWith('diff --git ')||diff.includes('\0')||Buffer.byteLength(diff)>384*1024)fail('Review diff is empty, unavailable, binary-only or too large. Review it manually.');
   const supplied=JSON.stringify({...before,diff});
   const credential=typeof headers?.authorization==='string'?headers.authorization.replace(/^Bearer /,''):null;
-  if(containsSecretMaterial(supplied)||(credential?.length>=8&&supplied.includes(credential)))fail('Review contains credential-shaped text. Remove secrets before delegating it.');
+  if(hasReviewCredential(supplied)||(credential?.length>=8&&supplied.includes(JSON.stringify(credential).slice(1,-1)))
+    ||JSON.stringify(redactSecrets({before,diff},{environment}))!==JSON.stringify({before,diff}))fail('Review contains credential material. Remove secrets before delegating it.');
+  if(containsSecretMaterial(JSON.stringify(before)))fail('Review metadata contains credential-shaped text. Remove secrets before delegating it.');
   const files=reviewDiffFiles(diff);
+  if(containsSecretMaterial(JSON.stringify(files)))fail('Review paths contain credential-shaped text. Review these changes manually.');
   let expectedCount=before.changedFileCount;
   if(provider==='bitbucket'){const stats=(await http.request({method:'GET',path:`/repositories/${repository.fullName}/diffstat/${before.headSha}..${before.baseSha}?topic=true&pagelen=100`,signal})).data;expectedCount=stats?.size;if(!Number.isSafeInteger(expectedCount)||expectedCount<1||expectedCount>500)fail('PR file count is unavailable or exceeds the 500-file review limit.');}
   if(files.length!==expectedCount)fail('Provider returned an incomplete diff. Review the PR manually.');
+  const omissions=[];let file=-1,oldLine=0,newLine=0,inHunk=false;
+  const lines=diff.split('\n');
+  const scannedLines=maskReviewDiff(diff).split('\n');
+  for(let index=0;index<lines.length;index++) {
+   const line=lines[index];
+   if(line.startsWith('diff --git ')){file++;inHunk=false;}
+   const hunk=/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+   if(hunk){oldLine=Number(hunk[1]);newLine=Number(hunk[2]);inHunk=true;continue;}
+   const body=inHunk&&['+','-',' '].includes(line[0]);
+   if(containsSecretMaterial(scannedLines[index])) {
+    if(!body||!canOmitLiteralLine(line.slice(1)))fail('Review contains credential-shaped text that cannot be safely omitted. Remove secrets before delegating it.');
+    omissions.push({path:files[file].path,line:line[0]==='-'?oldLine:newLine,side:line[0]==='-'?'old':'new',reason:'Credential-shaped literal; this entire line will be omitted from review context.'});
+    lines[index]=line[0]+'[Rivet: credential-shaped source line omitted]';
+   }
+   if(body){if(line[0]!=='+')oldLine++;if(line[0]!=='-')newLine++;}
+  }
+  if(omissions.length) {
+   if(omissions.length>100||typeof confirmRedactions!=='function'||await confirmRedactions(omissions)!==true||signal?.aborted)fail('Review needs approval to omit credential-shaped source lines; no context was saved or delegated.');
+   diff=lines.join('\n');
+  }
+  if(containsSecretMaterial(JSON.stringify(reviewSnapshotForScan({...before,diff}))))fail('Review contains credential-shaped text. Remove secrets before delegating it.');
   await assertCurrent(before);
-  return {schemaVersion:1,url:target.url,repository,number,...before,diff,files,diffDigest:digest(diff),capturedAt:new Date().toISOString(),limitations:['Diff-only review; surrounding files and configured checks were not executed.','Provider diff size/truncation limits may apply. Inspect large and binary changes manually.']};
+  return {schemaVersion:1,url:target.url,repository,number,...before,diff,files,diffDigest:digest(diff),capturedAt:new Date().toISOString(),limitations:[...(omissions.length?[`${omissions.length} credential-shaped source line(s) omitted with approval; omitted code was not reviewed.`]:[]),'Diff-only review; surrounding files and configured checks were not executed.','Provider diff size/truncation limits may apply. Inspect large and binary changes manually.']};
  }
  async function publishComment(snapshot,body) {
   await assertCurrent(snapshot);
