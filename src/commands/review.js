@@ -43,7 +43,7 @@ async function executeReview(parsed,dependencies,signal) {
  if(flags.publish&&dependencies.terminalIsInteractive?.()!==true)fail('Publishing a review summary needs an interactive terminal for approval.');
  const auth=repositoryHeaders(provider,dependencies.env);
  const credentialText=JSON.stringify(auth.authorization.slice('Bearer '.length)).slice(1,-1);
- const source=createReviewSource({target,transport:dependencies.repositories?.transport??createNodeProviderTransport(),headers:auth,signal});
+ const source=createReviewSource({target,transport:dependencies.repositories?.transport??createNodeProviderTransport(),headers:auth,signal,environment:dependencies.env});
  const paths=await resolveStatePaths(project.root,`pr-review-${digest(target.url).slice(0,32)}`,{runner});
  const store=createSnapshotStore(paths,{environment:dependencies.env});
  let saved=await store.read(),snapshot,report;
@@ -57,7 +57,19 @@ async function executeReview(parsed,dependencies,signal) {
   report=validateReport(report,snapshot);
  }else{
   if(saved?.data?.publication?.status==='pending')fail('A previous publication has an unknown outcome. Inspect the PR before replacing this review.','REPOSITORY_CONFLICT');
-  snapshot=await source.capture();
+  snapshot=await source.capture({confirmRedactions:async findings=>{
+   if(flags.json||dependencies.terminalIsInteractive?.()!==true)fail('Credential-shaped source lines require interactive redaction approval. Run review without --json; no context was saved or delegated.');
+   let outputFailed=false,approved=false;
+   const unobserve=observeOutputErrors(dependencies.output,()=>{outputFailed=true;});
+   try {
+    dependencies.output.log(visible('These credential-shaped source lines will be omitted from the saved and delegated review context:\n'+findings.map(item=>`${item.path}:${item.line} (${item.side}): ${item.reason}`).join('\n')));
+    if(outputFailed||signal.aborted)fail('Could not display the redaction preview. Review cancelled.');
+    approved=await (dependencies.review?.confirmRedactions??confirmTaskAction)('Continue with these lines omitted? Their code will not be reviewed. [y/N] ',{signal})===true;
+    if(outputFailed||signal.aborted)fail('Review output failed or redaction approval was interrupted.');
+   } finally {unobserve?.();}
+   if(approved&&digest(await loadProjectConfig(project.root))!==digest(project.config))fail('Project configuration changed during redaction approval. Review again.','REPOSITORY_CONFLICT');
+   return approved;
+  }});
   if(JSON.stringify(redactSecrets(snapshot,{environment:dependencies.env}))!==JSON.stringify(snapshot))fail('Review contains sensitive environment material. Remove it before delegation.');
   saved=await store.write({snapshot,report:null,publication:null},{expectedVersion:saved?.version??0});
   if(!flags.context){
@@ -96,9 +108,11 @@ async function executeReview(parsed,dependencies,signal) {
  const result={snapshot,report:report??null,reportSchema:reviewReportSchema,checksExecuted:false,published:saved.data.publication?.status==='published',savedTo:paths.snapshotPath};
  if(flags.json)dependencies.output.json({ok:true,result});else{
   dependencies.output.log(visible(`Review: ${target.url}\nHead: ${snapshot.headSha}\nSaved privately: ${paths.snapshotPath}`));
+  for(const limitation of snapshot.limitations??[])if(limitation.includes('omitted with approval'))dependencies.output.log(visible(limitation));
   if(report){dependencies.output.log(visible(report.summary));for(const item of report.findings)dependencies.output.log(visible(`[${item.severity}] ${item.path}:${item.line}: ${item.message}`));dependencies.output.log('Diff-only review. No tests were executed; no findings is not proof of correctness.');}
+  else if(snapshot.limitations?.some(item=>item.includes('omitted with approval'))){dependencies.output.log('Sanitized context captured in the private snapshot above. JSON capture cannot approve omissions; run review without --context to use an installed harness.');}
   else{dependencies.output.log('Context captured. Use --context --json to export the snapshot and report schema to your harness, then --input=<report.json> to save its findings.');}
  }
  return EXIT_CODES.SUCCESS;
 }
-export function reviewComment(snapshot,report){return `Rivet review summary\n\nReviewed head: ${snapshot.headSha}\nReviewed base: ${snapshot.baseSha}\nDiff digest: ${snapshot.diffDigest}\n\n${report.summary}\n\n${report.findings.map(item=>`- [${item.severity}] ${item.path}:${item.line}: ${item.message}`).join('\n')||'No findings in the supplied diff.'}\n\nLimitations:\n- Diff-only review; no project checks were executed. This is a summary comment, not an approval.\n${report.limitations.map(item=>`- ${item}`).join('\n')}`;}
+export function reviewComment(snapshot,report){return `Rivet review summary\n\nReviewed head: ${snapshot.headSha}\nReviewed base: ${snapshot.baseSha}\nDiff digest: ${snapshot.diffDigest}\n\n${report.summary}\n\n${report.findings.map(item=>`- [${item.severity}] ${item.path}:${item.line}: ${item.message}`).join('\n')||'No findings in the supplied diff.'}\n\nLimitations:\n- Diff-only review; no project checks were executed. This is a summary comment, not an approval.\n${[...new Set([...(snapshot.limitations??[]),...report.limitations])].map(item=>`- ${item}`).join('\n')}`;}
