@@ -14,7 +14,7 @@ export function validateReport(input,snapshot) {
  for(const key of Object.keys(identity))if(report[key]!==snapshot[key])fail();
  for(const finding of report.findings)if(finding.path.startsWith('/')||finding.path.includes('\\')||finding.path.split('/').some(part=>!part||part==='.'||part==='..')||/[\u0000-\u001f\u007f]/.test(finding.path))fail();
  const files=reviewDiffFiles(snapshot.diff);
- for(const finding of report.findings){const file=files.find(item=>item.path===finding.path);if(!file||!file.ranges.some(([start,end])=>finding.line>=start&&finding.line<=end))fail();}
+ for(const finding of report.findings){if(snapshot.omittedFiles?.includes(finding.path))fail();const file=files.find(item=>item.path===finding.path);if(!file||!file.ranges.some(([start,end])=>finding.line>=start&&finding.line<=end))fail();}
  return report;
 }
 export function serializeReviewPayload({worktree,snapshot}) {

@@ -57,21 +57,27 @@ async function executeReview(parsed,dependencies,signal) {
   report=validateReport(report,snapshot);
  }else{
   if(saved?.data?.publication?.status==='pending')fail('A previous publication has an unknown outcome. Inspect the PR before replacing this review.','REPOSITORY_CONFLICT');
-  snapshot=await source.capture({confirmRedactions:async findings=>{
-   if(flags.json||dependencies.terminalIsInteractive?.()!==true)fail('Credential-shaped source lines require interactive redaction approval. Run review without --json; no context was saved or delegated.');
+  let redactionApproval=null;
+  const configDigest=digest(project.config);
+  snapshot=await source.capture({confirmRedactions:async (findings,proof)=>{
+   const receipt={...proof,configDigest};
+   if(flags.context&&flags.json&&saved?.data?.redactionApproval&&digest(saved.data.redactionApproval)===digest(receipt)){redactionApproval=receipt;return true;}
+   if(flags.json||dependencies.terminalIsInteractive?.()!==true)fail('Credential-shaped file diffs require interactive redaction approval. Run rivet review <PR-URL> --context interactively, then retry --context --json; no new context was saved or delegated.');
    let outputFailed=false,approved=false;
    const unobserve=observeOutputErrors(dependencies.output,()=>{outputFailed=true;});
    try {
-    dependencies.output.log(visible('These credential-shaped source lines will be omitted from the saved and delegated review context:\n'+findings.map(item=>`${item.path}:${item.line} (${item.side}): ${item.reason}`).join('\n')));
+    dependencies.output.log(visible('These file diffs will be omitted from the saved and delegated review context:\n'+findings.map(item=>`${item.path}:${item.line} (${item.side}): ${item.reason}`).join('\n')));
     if(outputFailed||signal.aborted)fail('Could not display the redaction preview. Review cancelled.');
-    approved=await (dependencies.review?.confirmRedactions??confirmTaskAction)('Continue with these lines omitted? Their code will not be reviewed. [y/N] ',{signal})===true;
+    approved=await (dependencies.review?.confirmRedactions??confirmTaskAction)('Continue with these file diffs omitted? Their code will not be reviewed. [y/N] ',{signal})===true;
     if(outputFailed||signal.aborted)fail('Review output failed or redaction approval was interrupted.');
    } finally {unobserve?.();}
    if(approved&&digest(await loadProjectConfig(project.root))!==digest(project.config))fail('Project configuration changed during redaction approval. Review again.','REPOSITORY_CONFLICT');
+   if(approved)redactionApproval=receipt;
    return approved;
   }});
+  if(digest(await loadProjectConfig(project.root))!==configDigest)fail('Project configuration changed during capture. Review again.','REPOSITORY_CONFLICT');
   if(JSON.stringify(redactSecrets(snapshot,{environment:dependencies.env}))!==JSON.stringify(snapshot))fail('Review contains sensitive environment material. Remove it before delegation.');
-  saved=await store.write({snapshot,report:null,publication:null},{expectedVersion:saved?.version??0});
+  saved=await store.write({snapshot,report:null,publication:null,redactionApproval},{expectedVersion:saved?.version??0});
   if(!flags.context){
    const harnesses=dependencies.harnesses??{discover:root=>discoverHarnesses({env:dependencies.env,projectRoot:root,signal}),select:async(kind,root)=>(await discoverHarnesses({env:dependencies.env,projectRoot:root,signal})).find(item=>item.kind===kind&&item.executable)};
    const available=(await harnesses.discover(project.root,{signal})).filter(item=>item.executable);
@@ -108,9 +114,9 @@ async function executeReview(parsed,dependencies,signal) {
  const result={snapshot,report:report??null,reportSchema:reviewReportSchema,checksExecuted:false,published:saved.data.publication?.status==='published',savedTo:paths.snapshotPath};
  if(flags.json)dependencies.output.json({ok:true,result});else{
   dependencies.output.log(visible(`Review: ${target.url}\nHead: ${snapshot.headSha}\nSaved privately: ${paths.snapshotPath}`));
-  for(const limitation of snapshot.limitations??[])if(limitation.includes('omitted with approval'))dependencies.output.log(visible(limitation));
+  for(const limitation of snapshot.limitations??[])if(limitation.includes('omitted with approval')||limitation.startsWith('All file diffs'))dependencies.output.log(visible(limitation));
   if(report){dependencies.output.log(visible(report.summary));for(const item of report.findings)dependencies.output.log(visible(`[${item.severity}] ${item.path}:${item.line}: ${item.message}`));dependencies.output.log('Diff-only review. No tests were executed; no findings is not proof of correctness.');}
-  else if(snapshot.limitations?.some(item=>item.includes('omitted with approval'))){dependencies.output.log('Sanitized context captured in the private snapshot above. JSON capture cannot approve omissions; run review without --context to use an installed harness.');}
+  else if(snapshot.limitations?.some(item=>item.includes('omitted with approval'))){dependencies.output.log('Sanitized context captured. Your harness can now run --context --json; Rivet will refetch the PR and reuse this approval only if its source and configuration still match.');}
   else{dependencies.output.log('Context captured. Use --context --json to export the snapshot and report schema to your harness, then --input=<report.json> to save its findings.');}
  }
  return EXIT_CODES.SUCCESS;

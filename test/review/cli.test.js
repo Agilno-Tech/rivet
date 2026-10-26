@@ -9,14 +9,14 @@ import {main} from '../../src/cli/main.js';
 import {createOutput} from '../../src/cli/output.js';
 import {createTrustedProviderTransport} from '../../src/adapters/http.js';
 const url='https://github.com/team/demo/pull/7', head='a'.repeat(40),base='b'.repeat(40);
-async function fixture(t){
+async function fixture(t,{bitbucket=false}={}){
  const root=await realpath(await mkdtemp(join(tmpdir(),'rivet-review-cli-')));t.after(()=>rm(root,{recursive:true,force:true}));
  await cp(new URL('../fixtures/config/valid/.rivet',import.meta.url),join(root,'.rivet'),{recursive:true});await mkdir(join(root,'.git'));
  const file=join(root,'.rivet/providers.yaml'),config=parse(await readFile(file,'utf8'));
- config.providers.push({id:'github-main',kind:'git-ci',mode:'read-only',capabilities:['repository-read'],endpoint:'https://api.github.com',resourceIds:['team/demo'],credentials:{tokenEnv:'TEST_REPO_TOKEN'}});await writeFile(file,stringify(config));
- let output='',calls=0,launches=0,posts=0,liveHead=head,postFails=false,customDiff=null,lastSnapshot;
- const deps={reportFailure:false,cwd:()=>root,env:{TEST_REPO_TOKEN:'sample-token'},runGit:async(_command,args)=>({code:0,stdout:args.includes('--git-common-dir')?join(root,'.git')+'\n':root+'\n'}),repositories:{discoverRemotes:async()=>[{name:'origin',url:'git@github.com:team/demo.git'}],transport:createTrustedProviderTransport({resolve:async()=>['93.184.216.34'],fetchPinned:async(_url,init)=>{calls++;if(init.method==='POST'){posts++;if(postFails)throw new Error('connection dropped');return new Response(JSON.stringify({id:42}),{status:201});}assert.equal(init.method,'GET');return new Response(init.headers.accept==='application/vnd.github.diff'?customDiff??'diff --git a/a.js b/a.js\n--- a/a.js\n+++ b/a.js\n@@ -1 +1 @@\n-old\n+new\n':JSON.stringify({number:7,changed_files:1,state:'open',head:{sha:liveHead},base:{sha:base},title:'Fix',body:''}));}})},harnesses:{discover:async()=>[{kind:'codex',executable:'/usr/bin/fake',version:'1'}],select:async()=>({kind:'codex',executable:'/usr/bin/fake',version:'1'})},review:{run:async({snapshot})=>{launches++;lastSnapshot=snapshot;return {url,headSha:head,baseSha:base,diffDigest:snapshot.diffDigest,summary:'No findings in supplied diff',findings:[],limitations:['Checks not executed']};}},output:createOutput({stdout:{write:value=>output+=value},stderr:{write:value=>output+=value}})};
- return {root,deps,text:()=>output,setDiff:value=>{customDiff=value;},snapshot:()=>lastSnapshot,result:()=>JSON.parse(output),clear:()=>{output='';},calls:()=>calls,launches:()=>launches,posts:()=>posts,setHead:value=>{liveHead=value;},failPost:()=>{postFails=true;},enablePublish:async()=>{config.providers.at(-1).mode='read-write-with-approval';config.providers.at(-1).capabilities.push('review-comment');await writeFile(file,stringify(config));}};
+ config.providers.push({id:'github-main',kind:'git-ci',mode:'read-only',capabilities:['repository-read'],endpoint:bitbucket?'https://api.bitbucket.org/2.0':'https://api.github.com',resourceIds:['team/demo'],credentials:{tokenEnv:'TEST_REPO_TOKEN'}});await writeFile(file,stringify(config));
+ let output='',calls=0,launches=0,posts=0,liveHead=head,postFails=false,customDiff=null,lastSnapshot,beforeRead=null;
+ const deps={reportFailure:false,cwd:()=>root,env:{TEST_REPO_TOKEN:'sample-token'},runGit:async(_command,args)=>({code:0,stdout:args.includes('--git-common-dir')?join(root,'.git')+'\n':root+'\n'}),repositories:{discoverRemotes:async()=>[{name:'origin',url:bitbucket?'git@bitbucket.org:team/demo.git':'git@github.com:team/demo.git'}],transport:createTrustedProviderTransport({resolve:async()=>['93.184.216.34'],fetchPinned:async(_url,init)=>{calls++;if(init.method==='POST'){posts++;if(postFails)throw new Error('connection dropped');return new Response(JSON.stringify({id:42}),{status:201});}assert.equal(init.method,'GET');if(beforeRead){const action=beforeRead;beforeRead=null;await action();}if(new URL(_url).pathname.includes('/diffstat/'))return new Response(JSON.stringify({size:customDiff?.split('diff --git ').length-1||1}));return new Response((init.headers.accept==='application/vnd.github.diff'||new URL(_url).pathname.includes('/diff/'))?customDiff??'diff --git a/a.js b/a.js\n--- a/a.js\n+++ b/a.js\n@@ -1 +1 @@\n-old\n+new\n':JSON.stringify(bitbucket?{id:7,state:'OPEN',source:{commit:{hash:liveHead}},destination:{commit:{hash:base}},title:'Fix',description:''}:{number:7,changed_files:customDiff?.split('diff --git ').length-1||1,state:'open',head:{sha:liveHead},base:{sha:base},title:'Fix',body:''}));}})},harnesses:{discover:async()=>[{kind:'codex',executable:'/usr/bin/fake',version:'1'}],select:async()=>({kind:'codex',executable:'/usr/bin/fake',version:'1'})},review:{run:async({snapshot})=>{launches++;lastSnapshot=snapshot;return {url,headSha:head,baseSha:base,diffDigest:snapshot.diffDigest,summary:'No findings in supplied diff',findings:[],limitations:['Checks not executed']};}},output:createOutput({stdout:{write:value=>output+=value},stderr:{write:value=>output+=value}})};
+ return {root,deps,beforeRead:action=>{beforeRead=action;},text:()=>output,setDiff:value=>{customDiff=value;},snapshot:()=>lastSnapshot,result:()=>JSON.parse(output),clear:()=>{output='';},calls:()=>calls,launches:()=>launches,posts:()=>posts,setHead:value=>{liveHead=value;},failPost:()=>{postFails=true;},enablePublish:async()=>{config.providers.at(-1).mode='read-write-with-approval';config.providers.at(-1).capabilities.push('review-comment');await writeFile(file,stringify(config));}};
 }
 test('default review executes harness and saves private independent findings',async t=>{const f=await fixture(t);assert.equal(await main(['review',url,'--json'],f.deps),0);assert.equal(f.launches(),1);assert.equal(f.result().result.report.summary,'No findings in supplied diff');assert.equal(f.result().result.checksExecuted,false);});
 test('context export does not launch harness; import rejects stale identity before model launch',async t=>{const f=await fixture(t);assert.equal(await main(['review',url,'--context','--json'],f.deps),0);assert.equal(f.launches(),0);const snapshot=f.result().result.snapshot;const path=join(f.root,'report.json');await writeFile(path,JSON.stringify({url,headSha:base,baseSha:base,diffDigest:snapshot.diffDigest,summary:'Summary',findings:[],limitations:['Untested']}));f.clear();assert.notEqual(await main(['review',url,`--input=${path}`,'--json'],f.deps),0);assert.equal(f.launches(),0);});
@@ -119,7 +119,7 @@ test('interactive review omits approved literal before saving or launching and r
  const f=await fixture(t);f.setDiff(literalDiff);f.deps.terminalIsInteractive=()=>true;let prompts=0;
  f.deps.review.confirmRedactions=async()=>{prompts++;assert.match(f.text(),/tests\/test_user.py:1/);assert.ok(!f.text().includes('testpassword123'));return true;};
  assert.equal(await main(['review',url],f.deps),0);assert.equal(prompts,1);assert.equal(f.launches(),1);
- assert.ok(!JSON.stringify(f.snapshot()).includes('testpassword123'));assert.match(f.snapshot().diff,/omitted/);
+ assert.ok(!JSON.stringify(f.snapshot()).includes('testpassword123'));assert.deepEqual(f.snapshot().omittedFiles,['tests/test_user.py']);
  const path=/Saved privately: ([^\n]+)/.exec(f.text())[1];const saved=await readFile(path,'utf8');assert.ok(!saved.includes('testpassword123'));assert.match(saved,/omitted/);
  const comment=reviewComment(f.snapshot(),{summary:'No findings',findings:[],limitations:[]});assert.match(comment,/omitted with approval/);assert.ok(!comment.includes('testpassword123'));
 });
@@ -135,4 +135,51 @@ test('environment secret cannot reach redaction approval or model',async t=>{
  const f=await fixture(t);f.setDiff(literalDiff);f.deps.env.APP_PASSWORD='testpassword123';f.deps.terminalIsInteractive=()=>true;let prompts=0;
  f.deps.review.confirmRedactions=async()=>{prompts++;return true;};assert.notEqual(await main(['review',url],f.deps),0);
  assert.equal(prompts,0);assert.equal(f.launches(),0);assert.ok(!f.text().includes('testpassword123'));
+});
+
+test('agent exports freshly validated context after interactive omission approval',async t=>{
+ const f=await fixture(t);f.setDiff(literalDiff.replace("password='testpassword123'","self._post(token=f'ip-token-{attempt}')"));
+ assert.notEqual(await main(['review',url,'--context','--json'],f.deps),0);assert.equal(f.launches(),0);f.clear();
+ f.deps.terminalIsInteractive=()=>true;f.deps.review.confirmRedactions=async()=>true;
+ assert.equal(await main(['review',url,'--context'],f.deps),0);assert.equal(f.launches(),0);f.clear();
+ f.deps.terminalIsInteractive=()=>false;
+ assert.equal(await main(['review',url,'--context','--json'],f.deps),0);
+ assert.ok(!JSON.stringify(f.result()).includes('ip-token-'));assert.deepEqual(f.result().result.snapshot.omittedFiles,['tests/test_user.py']);assert.equal(f.launches(),0);
+});
+for(const drift of ['raw-value','head','config','environment','receipt'])test('saved omission approval cannot bypass '+drift,async t=>{
+ const f=await fixture(t);f.setDiff(literalDiff);f.deps.terminalIsInteractive=()=>true;f.deps.review.confirmRedactions=async()=>true;
+ assert.equal(await main(['review',url,'--context'],f.deps),0);
+ const path=/Saved privately: ([^\n]+)/.exec(f.text())[1];f.clear();f.deps.terminalIsInteractive=()=>false;
+ if(drift==='raw-value')f.setDiff(literalDiff.replace('testpassword123','differentpassword456'));
+ if(drift==='head')f.setHead(base);
+ if(drift==='config')await f.enablePublish();
+ if(drift==='environment')f.deps.env.APP_PASSWORD='testpassword123';
+ if(drift==='receipt'){const data=JSON.parse(await readFile(path,'utf8'));delete data.data.redactionApproval;await writeFile(path,JSON.stringify(data));}
+ assert.notEqual(await main(['review',url,'--context','--json'],f.deps),0);assert.equal(f.launches(),0);assert.ok(!f.text().includes('testpassword123'));
+});
+
+for(const bitbucket of [false,true])test('mixed-file Ana workflow: approve, export, import and retain omission notice '+(bitbucket?'Bitbucket':'GitHub'),async t=>{
+ const f=await fixture(t,{bitbucket});const target=bitbucket?'https://bitbucket.org/team/demo/pull-requests/7':url;
+ const section=(path,lines)=>`diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -0,0 +1,${lines.length} @@\n${lines.map(line=>'+'+line).join('\n')}\n`;
+ f.setDiff(section('docs/design.md',['token: create one guest from a store build and read the API log'])+section('users/tests.py',[
+  "self._post(token=f'ip-token-{attempt}')",
+  'self.verify_token.side_effect = lambda token: {}',
+  "email='idle_customer@example.test', password='testpassword123',",
+ ])+section('users/views.py',['return guest.id']));
+ assert.notEqual(await main(['review',target,'--context','--json'],f.deps),0);f.clear();
+ f.deps.terminalIsInteractive=()=>true;f.deps.review.confirmRedactions=async()=>true;
+ assert.equal(await main(['review',target,'--context'],f.deps),0);f.clear();f.deps.terminalIsInteractive=()=>false;
+ assert.equal(await main(['review',target,'--context','--json'],f.deps),0);const snapshot=f.result().result.snapshot;
+ assert.match(snapshot.diff,/return guest.id/);assert.ok(!snapshot.diff.includes('ip-token-'));assert.ok(!snapshot.diff.includes('testpassword123'));assert.deepEqual(snapshot.omittedFiles,['docs/design.md','users/tests.py']);
+ const report={url:target,headSha:head,baseSha:base,diffDigest:snapshot.diffDigest,summary:'Reviewed remaining source',findings:[],limitations:['No checks run']};
+ const reportFile=join(f.root,'report.json');await writeFile(reportFile,JSON.stringify(report));f.clear();
+ assert.equal(await main(['review',target,'--input='+reportFile,'--json'],f.deps),0);
+ assert.match(reviewComment(snapshot,report),/Entire file diff omitted/);assert.equal(f.launches(),0);
+});
+
+test('configuration changed during recapture invalidates saved approval',async t=>{
+ const f=await fixture(t);f.setDiff(literalDiff);f.deps.terminalIsInteractive=()=>true;f.deps.review.confirmRedactions=async()=>true;
+ assert.equal(await main(['review',url,'--context'],f.deps),0);f.clear();f.deps.terminalIsInteractive=()=>false;
+ f.beforeRead(()=>f.enablePublish());
+ assert.notEqual(await main(['review',url,'--context','--json'],f.deps),0);assert.equal(f.launches(),0);assert.match(f.text(),/configuration changed/i);
 });
