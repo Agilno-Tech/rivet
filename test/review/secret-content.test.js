@@ -5,8 +5,8 @@ import {createReviewSource,parseReviewUrl,digest} from '../../src/review/source.
 import {serializeReviewPayload,validateReviewPayload,validateReport} from '../../src/review/contract.js';
 const head='a'.repeat(40),base='b'.repeat(40);
 const worktree={path:'/tmp/review',dev:'1',ino:'2',reservationId:'review-read-only'};
-function fixture(lines,{title='Fix',description='',headers={},environment={},path='tests/test_review.py',gitPath=path}={}) {
- const diff=`diff --git a/${gitPath} b/${gitPath}\n--- a/${path}\n+++ b/${path}\n@@ -0,0 +1,${lines.length} @@\n${lines.map(line=>'+'+line).join('\n')}\n`;
+function fixture(lines,{title='Fix',description='',headers={},environment={},path='tests/test_review.py',gitPath=path,diffOverride}={}) {
+ const diff=diffOverride??`diff --git a/${gitPath} b/${gitPath}\n--- a/${path}\n+++ b/${path}\n@@ -0,0 +1,${lines.length} @@\n${lines.map(line=>'+'+line).join('\n')}\n`;
  let reads=0;
  const metadata={number:7,changed_files:1,state:'open',head:{sha:head},base:{sha:base},title,body:description};
  const transport=createTrustedProviderTransport({resolve:async()=>['93.184.216.34'],fetchPinned:async(_url,init)=>{
@@ -76,21 +76,20 @@ test('approval preview mutation cannot alter the source snapshot',async()=>{
  const snapshot=await f.source.capture({confirmRedactions:async findings=>{findings[0].path='elsewhere';return true}});
  assert.ok(!snapshot.diff.includes('testpassword123'));assert.equal(snapshot.files[0].path,'tests/test_review.py');
 });
-test('redaction cannot consume an unfinished multiline literal',async()=>{
+test('unfinished multiline values require whole-file omission',async()=>{
  for(const lines of [["password='first", "second'"],["password='first' \\","'second'"],["password='''first", "second'''"],["password=", "'testpassword123'"]]) {
-  let approvals=0;const f=fixture(lines);await assert.rejects(f.source.capture({confirmRedactions:async()=>{approvals++;return true}}));assert.equal(approvals,0);
+  const f=fixture(lines);await assertSafeFileOmission(f);
  }
 });
 for(const code of ["password = get_password(), 'hunter2'","token = get_token(), ('super-private-value',)","token = build_token(),\n 'super-private-value'"])test('tuple RHS cannot hide a literal credential: '+code,async()=>{
- const f=fixture(code.split('\n'));let approvals=0;
- await assert.rejects(f.source.capture({confirmRedactions:async()=>{approvals++;return true}}));assert.equal(approvals,0);
+ const f=fixture(code.split('\n'));await assertSafeFileOmission(f);
  const clean=await fixture(['pass']).source.capture();const diff=f.diff;
  assert.throws(()=>serializeReviewPayload({worktree,snapshot:{...clean,diff,diffDigest:digest(diff)}}));
 });
 
 for(const path of ['.env','settings.ini','config.txt'])test('call-shaped config values remain blocked: '+path,async()=>{
  const f=fixture(['PASSWORD=myPasswordFunction()'],{path});
- await assert.rejects(f.source.capture({confirmRedactions:async()=>true}));
+ await assertSafeFileOmission(f);
  const original=await fixture(['pass']).source.capture();
  assert.throws(()=>serializeReviewPayload({worktree,snapshot:{...original,diff:f.diff,diffDigest:digest(f.diff)}}));
 });
@@ -99,18 +98,60 @@ for(const lines of [
  ["data = 'password=myPasswordFunction()'"],
  ['# password=myPasswordFunction()'],
 ])test('quoted or commented call-shaped text remains blocked: '+lines[0],async()=>{
- const f=fixture(lines);await assert.rejects(f.source.capture({confirmRedactions:async()=>true}));
+ const f=fixture(lines);await assertSafeFileOmission(f);
  const original=await fixture(['pass']).source.capture();
  assert.throws(()=>serializeReviewPayload({worktree,snapshot:{...original,diff:f.diff,diffDigest:digest(f.diff)}}));
 });
 
 test('capture and payload check authoritative file headers despite misleading git header',async()=>{
- await assert.rejects(fixture(['PASSWORD=myPasswordFunction()'],{path:'.env',gitPath:'x.py'}).source.capture({confirmRedactions:async()=>true}));
+ await assertSafeFileOmission(fixture(['PASSWORD=myPasswordFunction()'],{path:'.env',gitPath:'x.py'}));
  const snapshot=await fixture(['token = build_token()']).source.capture();
  const diff=snapshot.diff.replace('--- a/tests/test_review.py','--- a/.env').replace('+++ b/tests/test_review.py','+++ b/.env');
  assert.throws(()=>serializeReviewPayload({worktree,snapshot:{...snapshot,diff,diffDigest:digest(diff)}}));
 });
 
 test('Python floor division cannot hide a literal operand during capture',async()=>{
- await assert.rejects(fixture(["password = derive() // 'literal-private-value'"]).source.capture({confirmRedactions:async()=>true}));
+ await assertSafeFileOmission(fixture(["password = derive() // 'literal-private-value'"]));
+});
+
+for(const [path,code] of [
+ ['docs/design.md','token: create one guest from a store build and read the API log'],
+ ['users/tests.py',"self._post(token=f'ip-token-{attempt}')"],
+ ['users/tests.py','self.verify_token.side_effect = lambda token: {}'],
+ ['users/tests.py',"email='idle_customer@example.test', password='testpassword123',"],
+])test('Ana follow-up: approved file omission for '+code,async()=>{
+ const f=fixture([code,'unlabeled_private_continuation'],{path});
+ await assert.rejects(f.source.capture());
+ const snapshot=await f.source.capture({confirmRedactions:async findings=>{assert.equal(findings[0].scope,'file');return true;}});
+ assert.deepEqual(snapshot.omittedFiles,[path]);
+ assert.ok(!snapshot.diff.includes(code));assert.ok(!snapshot.diff.includes('unlabeled_private_continuation'));
+ validateReviewPayload(serializeReviewPayload({worktree,snapshot}));
+ assert.throws(()=>validateReport({url:snapshot.url,headSha:head,baseSha:base,diffDigest:snapshot.diffDigest,summary:'Finding',findings:[{path,line:1,severity:'high',message:'Claim about omitted code'}],limitations:['No tests']},snapshot));
+});
+
+async function assertSafeFileOmission(f) {
+ await assert.rejects(f.source.capture());
+ const snapshot=await f.source.capture({confirmRedactions:async()=>true});
+ assert.equal(snapshot.omittedFiles.length,1);
+ for(const line of f.diff.split('\n').filter(line=>line.startsWith('+')&&!line.startsWith('+++')))assert.ok(!snapshot.diff.includes(line));
+ validateReviewPayload(serializeReviewPayload({worktree,snapshot}));
+}
+
+test('whole-file omission removes continuation and context across distant hunks',async()=>{
+ const diff="diff --git a/tests/test_review.py b/tests/test_review.py\n--- a/tests/test_review.py\n+++ b/tests/test_review.py\n@@ -0,0 +1 @@ header_private_text\n+password='''first\n@@ -10 +11 @@ continuation_private_text\n-old_private_text\n+last_private_text'''\n";
+ const f=fixture([],{diffOverride:diff});const snapshot=await f.source.capture({confirmRedactions:async()=>true});
+ for(const value of ['header_private_text','continuation_private_text','old_private_text','last_private_text','first'])assert.ok(!snapshot.diff.includes(value));
+ validateReviewPayload(serializeReviewPayload({worktree,snapshot}));
+ assert.ok(snapshot.limitations.some(item=>item.startsWith('All file diffs')));
+});
+test('quoted assignment cannot leak a continued literal on another line',async()=>{
+ await assertSafeFileOmission(fixture(["password = 'prefix'", "  + 'real-secret-suffix'"],{path:'a.js'}));
+});
+
+test('credential-shaped function context in hunk headers can be omitted safely',async()=>{
+ const diff="diff --git a/tests/test_review.py b/tests/test_review.py\n--- a/tests/test_review.py\n+++ b/tests/test_review.py\n@@ -0,0 +1 @@ def authenticate(password='fixture')\n+return user\n";
+ const f=fixture([],{diffOverride:diff});await assert.rejects(f.source.capture());
+ const snapshot=await f.source.capture({confirmRedactions:async()=>true});
+ assert.deepEqual(snapshot.omittedFiles,['tests/test_review.py']);assert.ok(!snapshot.diff.includes('fixture'));assert.ok(!snapshot.diff.includes('return user'));
+ validateReviewPayload(serializeReviewPayload({worktree,snapshot}));
 });

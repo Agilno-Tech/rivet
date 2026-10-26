@@ -62,18 +62,6 @@ export function maskReviewExpressions(text) {
   return result?.call===true&&boundary(line.slice(result.end));
  });
 }
-export function hasReviewTextSecret(text) {
- return hasReviewCredential(text)||containsSecretMaterial(maskReviewExpressions(text));
-}
-export function canOmitLiteralLine(text) {
- const masked=maskReviewExpressions(text);
- const withoutLabels=maskAssignments(masked,(line,start)=>{
-  const literal=/^(['"])(?:\\[^\r\n]|(?!\1)[^\\\r\n])*?\1/.exec(line.slice(start));
-  return literal&&boundary(line.slice(start+literal[0].length));
- });
- return withoutLabels!==masked&&!hasReviewTextSecret(withoutLabels);
-}
-
 // Used solely for scanning, never as saved/exported/model-visible content.
 export function reviewSnapshotForScan(snapshot) {
  return {...snapshot,diff:maskReviewDiff(snapshot.diff)};

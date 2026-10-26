@@ -1,5 +1,5 @@
 import {redactSecrets} from '../state/redact.js';
-import {hasReviewCredential,maskReviewDiff,canOmitLiteralLine,reviewSnapshotForScan} from './secrets.js';
+import {hasReviewCredential,maskReviewDiff,reviewSnapshotForScan} from './secrets.js';
 import {reviewDiffFiles} from './diff.js';
 import {createProviderWireBody} from '../adapters/contract.js';
 import {createHash} from 'node:crypto';
@@ -71,29 +71,37 @@ export function createReviewSource({target,transport,headers,signal,environment=
   let expectedCount=before.changedFileCount;
   if(provider==='bitbucket'){const stats=(await http.request({method:'GET',path:`/repositories/${repository.fullName}/diffstat/${before.headSha}..${before.baseSha}?topic=true&pagelen=100`,signal})).data;expectedCount=stats?.size;if(!Number.isSafeInteger(expectedCount)||expectedCount<1||expectedCount>500)fail('PR file count is unavailable or exceeds the 500-file review limit.');}
   if(files.length!==expectedCount)fail('Provider returned an incomplete diff. Review the PR manually.');
-  const omissions=[];let file=-1,oldLine=0,newLine=0,inHunk=false;
+  const omissions=[],omittedFiles=new Set(),bodyLines=[],hunkHeaders=[];let file=-1,oldLine=0,newLine=0,inHunk=false;
+  const rawDigest=digest({url:target.url,repository,before,diff});
   const lines=diff.split('\n');
   const scannedLines=maskReviewDiff(diff).split('\n');
+  const omitFile=(line,side)=>{
+   const path=files[file].path;
+   if(!omittedFiles.has(path))omissions.push({scope:'file',path,line,side,reason:'Credential-shaped content; the entire file diff will be omitted, including other hunks and context lines.'});
+   omittedFiles.add(path);
+  };
   for(let index=0;index<lines.length;index++) {
    const line=lines[index];
    if(line.startsWith('diff --git ')){file++;inHunk=false;}
    const hunk=/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
-   if(hunk){oldLine=Number(hunk[1]);newLine=Number(hunk[2]);inHunk=true;continue;}
+   if(hunk){hunkHeaders.push({index,path:files[file].path,header:hunk[0]});oldLine=Number(hunk[1]);newLine=Number(hunk[2]);inHunk=true;if(containsSecretMaterial(line))omitFile(files[file].side==='old'?oldLine:newLine,files[file].side);continue;}
    const body=inHunk&&['+','-',' '].includes(line[0]);
-   if(containsSecretMaterial(scannedLines[index])) {
-    if(!body||!canOmitLiteralLine(line.slice(1)))fail('Review contains credential-shaped text that cannot be safely omitted. Remove secrets before delegating it.');
-    omissions.push({path:files[file].path,line:line[0]==='-'?oldLine:newLine,side:line[0]==='-'?'old':'new',reason:'Credential-shaped literal; this entire line will be omitted from review context.'});
-    lines[index]=line[0]+'[Rivet: credential-shaped source line omitted]';
+   if(containsSecretMaterial(scannedLines[index])||body&&containsSecretMaterial(scannedLines[index]+' rivet_unresolved')) {
+    if(!body)fail('Review contains credential-shaped metadata that cannot be omitted. Remove secrets before delegating it.');
+    omitFile(line[0]==='-'?oldLine:newLine,line[0]==='-'?'old':'new');
    }
-   if(body){if(line[0]!=='+')oldLine++;if(line[0]!=='-')newLine++;}
+   if(body){bodyLines.push({index,path:files[file].path});if(line[0]!=='+')oldLine++;if(line[0]!=='-')newLine++;}
   }
+  for(const {index,path} of bodyLines)if(omittedFiles.has(path))lines[index]=lines[index][0]+'[Rivet: file diff omitted with approval]';
+  for(const {index,path,header} of hunkHeaders)if(omittedFiles.has(path))lines[index]=header;
   if(omissions.length) {
-   if(omissions.length>100||typeof confirmRedactions!=='function'||await confirmRedactions(omissions)!==true||signal?.aborted)fail('Review needs approval to omit credential-shaped source lines; no context was saved or delegated.');
+   const approval={version:1,rawDigest,sanitizedDigest:digest(lines.join('\n')),omissionsDigest:digest(omissions)};
+   if(omissions.length>100||typeof confirmRedactions!=='function'||await confirmRedactions(structuredClone(omissions),approval)!==true||signal?.aborted)fail('Review needs approval to omit credential-shaped file diffs; no context was saved or delegated.');
    diff=lines.join('\n');
   }
   if(containsSecretMaterial(JSON.stringify(reviewSnapshotForScan({...before,diff}))))fail('Review contains credential-shaped text. Remove secrets before delegating it.');
   await assertCurrent(before);
-  return {schemaVersion:1,url:target.url,repository,number,...before,diff,files,diffDigest:digest(diff),capturedAt:new Date().toISOString(),limitations:[...(omissions.length?[`${omissions.length} credential-shaped source line(s) omitted with approval; omitted code was not reviewed.`]:[]),'Diff-only review; surrounding files and configured checks were not executed.','Provider diff size/truncation limits may apply. Inspect large and binary changes manually.']};
+  return {schemaVersion:1,url:target.url,repository,number,...before,diff,files,diffDigest:digest(diff),capturedAt:new Date().toISOString(),...(omittedFiles.size?{omittedFiles:[...omittedFiles]}:{}),limitations:[...(omissions.length?[`${omissions.length} file diff(s) omitted with approval; omitted code was not reviewed.`]:[]),...(omittedFiles.size?[`Entire file diff omitted with approval: ${[...omittedFiles].join(', ')}. No code from these files was reviewed.`]:[]),...(omittedFiles.size===files.length?['All file diffs were omitted; no source code was reviewed. Manual review is required.']:[]),'Diff-only review; surrounding files and configured checks were not executed.','Provider diff size/truncation limits may apply. Inspect large and binary changes manually.']};
  }
  async function publishComment(snapshot,body) {
   await assertCurrent(snapshot);

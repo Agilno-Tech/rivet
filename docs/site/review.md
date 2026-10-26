@@ -29,9 +29,19 @@ Findings are saved privately in the Git directory and printed with paths and lin
 
 Rivet checks PR content before saving or sending it for review. In Python diffs, narrowly recognized calls such as `api_key=os.environ.get('SENDGRID_API_KEY')` and `token = build_resolution_review_token(...)` can pass without a prompt. Expressions with literal arguments or defaults, config files and ambiguous quoted content retain strict checks. This is a conservative diff check, not a complete source parser; it cannot infer string context outside the captured hunks. Reports that quote credential-shaped code in Markdown may still be rejected—describe the issue without repeating the assignment.
 
-For a complete quoted assignment such as `password='testpassword123'`, Rivet does not assume the value is fake because it appears in a test. In an interactive terminal, it shows the file and line and asks whether to continue with that **entire line omitted**. The preview does not print the value. If you approve, only the sanitized diff is saved and sent; the review and any published summary state that omitted code was not reviewed.
+For other credential-shaped content—including test literals, f-strings, lambda parameters and documentation prose—Rivet does not guess whether it is a real secret. In an interactive terminal, it shows the affected files and triggering line numbers and asks whether to continue with each **entire file diff omitted**. This includes every hunk and context line, so a multiline value cannot leak through a continuation. The preview does not print the values.
 
-Known credential formats and actual configured secret values remain blocked and cannot be approved away. Declining stops the review. Automated runs and `--json` cannot approve omissions; run the ordinary interactive `rivet review <PR-URL>` command instead. There is no blanket secret-check bypass.
+If you approve, only sanitized context is saved and sent. Omitted files remain listed as unreviewed in the output and published summary, and findings cannot cite them. If every file is omitted, Rivet explicitly states that no source code was reviewed and manual review is required.
+
+Known credential formats and actual configured secret values remain blocked and cannot be approved away. Declining stops the review. There is no blanket secret-check bypass.
+
+If your agent's `--context --json` export requests approval, run this once in your own terminal:
+
+```sh
+rivet review <PR-URL> --context
+```
+
+Review the omission preview and approve it, then have the agent retry `--context --json`. Rivet refetches and scans the PR on every export. It reuses the approval only when the original source, PR identity, sanitized content, omissions and project configuration still match. Changed content needs a new interactive approval. JSON and noninteractive runs cannot create approval themselves.
 
 ## From Claude Code, Codex or another coding harness
 
