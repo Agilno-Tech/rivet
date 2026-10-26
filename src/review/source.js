@@ -92,7 +92,8 @@ export function createReviewSource({target,transport,headers,signal,environment=
    }
    if(body){bodyLines.push({index,path:files[file].path});if(line[0]!=='+')oldLine++;if(line[0]!=='-')newLine++;}
   }
-  for(const {index,path} of bodyLines)if(omittedFiles.has(path))lines[index]=lines[index][0]+'[Rivet: file diff omitted with approval]';
+  // Preserve diff line counts without expanding content; omittedFiles and limitations explain the omission.
+  for(const {index,path} of bodyLines)if(omittedFiles.has(path))lines[index]=lines[index][0];
   for(const {index,path,header} of hunkHeaders)if(omittedFiles.has(path))lines[index]=header;
   if(omissions.length) {
    const approval={version:1,rawDigest,sanitizedDigest:digest(lines.join('\n')),omissionsDigest:digest(omissions)};

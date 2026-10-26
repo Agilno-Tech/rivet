@@ -30,7 +30,7 @@ test('literal fixture requires approval and only sanitized context crosses captu
  assert.equal(preview.length,1);assert.equal(preview[0].path,'tests/test_review.py');assert.equal(preview[0].line,1);
  assert.ok(!JSON.stringify(preview).includes('testpassword123'));
  assert.ok(!JSON.stringify(snapshot).includes('testpassword123'));
- assert.match(snapshot.diff,/omitted/);assert.equal(snapshot.diffDigest,digest(snapshot.diff));
+ assert.deepEqual(snapshot.omittedFiles,['tests/test_review.py']);assert.equal(snapshot.diffDigest,digest(snapshot.diff));
  assert.ok(snapshot.limitations.some(x=>/omitted/i.test(x)));
  const payload=serializeReviewPayload({worktree,snapshot});assert.ok(!payload.includes('testpassword123'));validateReviewPayload(payload);
  const tampered={...snapshot,diff:f.diff,diffDigest:digest(f.diff)};
@@ -154,4 +154,13 @@ test('credential-shaped function context in hunk headers can be omitted safely',
  const snapshot=await f.source.capture({confirmRedactions:async()=>true});
  assert.deepEqual(snapshot.omittedFiles,['tests/test_review.py']);assert.ok(!snapshot.diff.includes('fixture'));assert.ok(!snapshot.diff.includes('return user'));
  validateReviewPayload(serializeReviewPayload({worktree,snapshot}));
+});
+
+test('whole-file omission never expands a small diff beyond the harness payload limit',async()=>{
+ const f=fixture(["password='testpassword123'",...Array(400).fill('x')]);
+ const snapshot=await f.source.capture({confirmRedactions:async()=>true});
+ assert.ok(snapshot.diff.length<=f.diff.length);
+ const payload=serializeReviewPayload({worktree,snapshot});
+ assert.deepEqual(validateReviewPayload(payload).snapshot.omittedFiles,['tests/test_review.py']);
+ assert.ok(!payload.includes('testpassword123'));
 });

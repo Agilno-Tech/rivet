@@ -119,7 +119,7 @@ test('interactive review omits approved literal before saving or launching and r
  const f=await fixture(t);f.setDiff(literalDiff);f.deps.terminalIsInteractive=()=>true;let prompts=0;
  f.deps.review.confirmRedactions=async()=>{prompts++;assert.match(f.text(),/tests\/test_user.py:1/);assert.ok(!f.text().includes('testpassword123'));return true;};
  assert.equal(await main(['review',url],f.deps),0);assert.equal(prompts,1);assert.equal(f.launches(),1);
- assert.ok(!JSON.stringify(f.snapshot()).includes('testpassword123'));assert.match(f.snapshot().diff,/omitted/);
+ assert.ok(!JSON.stringify(f.snapshot()).includes('testpassword123'));assert.deepEqual(f.snapshot().omittedFiles,['tests/test_user.py']);
  const path=/Saved privately: ([^\n]+)/.exec(f.text())[1];const saved=await readFile(path,'utf8');assert.ok(!saved.includes('testpassword123'));assert.match(saved,/omitted/);
  const comment=reviewComment(f.snapshot(),{summary:'No findings',findings:[],limitations:[]});assert.match(comment,/omitted with approval/);assert.ok(!comment.includes('testpassword123'));
 });
