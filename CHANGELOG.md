@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0-alpha.7](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.6...v0.1.0-alpha.7) (2026-10-26)
+
+
+### Bug Fixes
+
+* support approved redaction and agent review context export ([ea0fb3f](https://github.com/Agilno-Tech/rivet/commit/ea0fb3f520d7c109fdbdfe645001d58baa55604e))
+
 ## [0.1.0-alpha.6](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.5...v0.1.0-alpha.6) (2026-10-23)
 
 
