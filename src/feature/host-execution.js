@@ -920,7 +920,9 @@ export function createHostExecution(input) {
     // Validate every association before inspecting any reservation-selected checkout.
     const associated = reservations.map(reservation => {
       const node = snapshot.data.graph.nodes.find(item => item.id === reservation.nodeId);
-      const planned = run.featurePlan.nodes.find(item => item.id === reservation.nodeId);
+      let plannedId=reservation.nodeId;
+      for(let depth=0;snapshot.data.reviewCorrections?.[plannedId]&&depth<10;depth++)plannedId=snapshot.data.reviewCorrections[plannedId].sourceNodeId;
+      const planned = run.featurePlan.nodes.find(item => item.id === plannedId);
       if (!node || planned?.role !== 'worker' || node.owner.role !== 'worker'
         || node.owner.id !== reservation.ownerId || reservation.repositoryId !== repository.repositoryId
         || reservation.branch !== `worker/${run.runId}/${node.id}`

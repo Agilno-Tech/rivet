@@ -2,11 +2,11 @@
 
 Current work focuses on clearer task decisions, reviewable evidence, simpler onboarding and real-world integration testing. See [task decisions and review evidence](./runtime-reference.md#task-decisions-and-review-evidence) for the supported commands and their limits.
 
-[Managed orchestration](./orchestration.md) supports dependency-aware parallel work, opt-in exact-result reuse, selected-task verification batches and approved Worker checkout cleanup with optional foreground retention. Batch reports remain advisory and do not certify each participant’s original branch.
+[Managed orchestration](./orchestration.md) supports bounded independent final review, corrections and re-review for terminal tasks, dependency-aware parallel work, opt-in exact-result reuse, selected-task verification batches and approved Worker checkout cleanup with optional foreground retention. Batch reports remain advisory and do not certify each participant’s original branch.
 
 The following capabilities are not available today:
 
-- A continuing task coordinator that automatically runs independent review, routes findings back to the original implementer, re-reviews corrected work and follows authorized delivery through CI. The current runtime executes approved task graphs and stops at unresolved review or delivery gates.
+- Automatic PR/CI follow-through after authorized delivery, and automatic reviewer scheduling for host-owned tasks. Terminal tasks now support the bounded implementation/review/correction loop and stop on unresolved findings, human questions or exhausted limits.
 - Shared delivery of an exact multi-task candidate, allowing one expensive verification to replace separate branch checks. Current verification batches are advisory.
 - Terminal delivery cleanup for integration and verification candidate checkouts. Current cleanup covers eligible owned Worker checkouts.
 - Optional protected client deliverables with versioned archives and an explicit retention policy. This should not require copying deliverables into every repository.

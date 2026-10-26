@@ -326,9 +326,9 @@ test('installed CLI uses one selected live client through planning and Worker ex
       assert.equal((await execFile('git', ['-C', fixture.root, 'status', '--porcelain'])).stdout, '');
       assert.equal((await execFile('git', ['-C', fixture.root, 'ls-remote', '--refs', 'origin'])).stdout, remoteBefore);
       const log = (await readFile(join(fixture.parent, 'rivet-fake-client.log'), 'utf8')).trim().split('\n').map(JSON.parse);
-      assert.deepEqual(log.map(item => item.provider), [kind, worker]);
-      assert.deepEqual(log.map(item => item.mode), [kind === 'claude' ? 'dontAsk' : 'read-only', worker === 'claude' ? 'acceptEdits' : 'workspace-write']);
-      assert.deepEqual(log.map(item => item.kind), ['agilno.feature-planning', 'agilno.agent-launch']);
+      assert.deepEqual(log.map(item => item.provider), [kind, worker, kind]);
+      assert.deepEqual(log.map(item => item.mode), [kind === 'claude' ? 'dontAsk' : 'read-only', worker === 'claude' ? 'acceptEdits' : 'workspace-write', kind === 'claude' ? 'dontAsk' : 'read-only']);
+      assert.deepEqual(log.map(item => item.kind), ['agilno.feature-planning', 'agilno.agent-launch', 'rivet.task-review']);
       if (kind === 'claude') assert.equal(log[0].maxBudgetUsd, caps?.planningMaxCostUsd ?? 1);
       if (worker === 'claude') assert.equal(log[1].maxBudgetUsd, caps?.workerMaxCostUsd ?? 2);
       assert.equal((await execFile('git', ['-C', fixture.root, 'ls-files', '.git/rivet'])).stdout, '');

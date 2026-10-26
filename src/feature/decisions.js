@@ -7,7 +7,7 @@ const DIGEST = /^[a-f0-9]{64}$/;
 const INPUT = ['id', 'tier', 'title', 'options', 'choice', 'rationale', 'approvedPlanDecisionId'];
 const RECORD = ['schemaVersion', ...INPUT, 'runId', 'requestDigest', 'planDigest', 'actor', 'createdAt', 'status', 'approval', 'digest'];
 const BINDINGS = ['runId', 'requestDigest', 'planDigest'];
-const CONTEXT = [...BINDINGS, 'actor', 'now', 'approvedPlanDecisions', 'secretValues', 'humanConfirmed'];
+const CONTEXT = [...BINDINGS, 'actor', 'now', 'approvedPlanDecisions', 'secretValues', 'humanConfirmed', 'choice'];
 
 export class DecisionError extends Error {
   constructor(reason = 'invalid-decision') {
@@ -145,11 +145,12 @@ export function validateDecision(value, suppliedContext) {
     planDigest: ctx.planDigest, actor: actor(source.actor, ctx.secretValues), createdAt: instant(source.createdAt),
     status: source.status, approval: null };
   if (source.status === 'approved') {
-    const approval = record(source.approval, ['actor', 'approvedAt', 'decisionDigest']);
+    const approval = record(source.approval, ['actor', 'approvedAt', 'decisionDigest', 'choice'], ['actor', 'approvedAt', 'decisionDigest']);
     const approvedBy = actor(approval.actor, ctx.secretValues);
     if (approvedBy.kind !== 'human' || instant(approval.approvedAt) < result.createdAt) fail();
     if (digest(approval.decisionDigest) !== hash({ ...result, status: 'pending' })) fail('digest-mismatch');
-    result.approval = { actor: approvedBy, approvedAt: approval.approvedAt, decisionDigest: approval.decisionDigest };
+    if(approval.choice!==undefined&&!fields.options.some(option=>option.id===approval.choice))fail();
+    result.approval = { actor: approvedBy, approvedAt: approval.approvedAt, decisionDigest: approval.decisionDigest, ...(approval.choice===undefined?{}:{choice:approval.choice}) };
   } else if (source.approval !== null) fail();
   if (digest(source.digest) !== hash(result)) fail('digest-mismatch');
   return sealed(result);
@@ -161,8 +162,9 @@ export function approveDecision(value, suppliedContext) {
   const original = validateDecision(value, ctx);
   if (original.status !== 'pending') fail('approval-conflict');
   if (ctx.now < original.createdAt) fail();
+  if(ctx.choice!==undefined&&!original.options.some(option=>option.id===ctx.choice))fail();
   const { digest: previousDigest, ...fields } = original;
-  return sealed({ ...fields, status: 'approved', approval: { actor: ctx.actor, approvedAt: ctx.now, decisionDigest: previousDigest } });
+  return sealed({ ...fields, status: 'approved', approval: { actor: ctx.actor, approvedAt: ctx.now, decisionDigest: previousDigest, ...(ctx.choice===undefined?{}:{choice:ctx.choice}) } });
 }
 
 function markdown(value) {
@@ -177,7 +179,7 @@ export function renderDecisions(values, suppliedContext) {
   if (!decisions.length) return `${lines.join('\n')}\n\nNo decisions recorded.\n`;
   for (const decision of decisions) {
     lines.push('', `### ${markdown(decision.title)}`, '', `Tier ${decision.tier} · ${decision.status}`,
-      `Decision: ${markdown(decision.id)}`, `Choice: ${markdown(decision.choice)}`, `Rationale: ${markdown(decision.rationale)}`,
+      `Decision: ${markdown(decision.id)}`, `Recommendation: ${markdown(decision.choice)}`, ...(decision.approval ? [`Human answer: ${markdown(decision.approval.choice??decision.choice)}`] : []), `Rationale: ${markdown(decision.rationale)}`,
       `Recorded by: ${markdown(decision.actor.id)} (${decision.actor.kind}) at ${decision.createdAt}`, '', 'Options:');
     for (const option of decision.options) lines.push(`- ${markdown(option.id)}: ${markdown(option.description)}`);
     if (decision.approvedPlanDecisionId) lines.push('', `Approved plan reference: ${markdown(decision.approvedPlanDecisionId)}`);

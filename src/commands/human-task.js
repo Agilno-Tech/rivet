@@ -1,3 +1,4 @@
+import {continueAfterQuestions} from './task-questions.js';
 import {configureWorktreeRetention} from '../runtime/worktree-retention.js';
 import {verifyTaskBatch,bootstrapTaskBatchDependencies,inspectTaskBatchReadiness} from '../quality/verification-batch.js';
 import {batchForRun} from '../quality/verification-batch-queue.js';
@@ -415,9 +416,11 @@ export async function humanTaskCommand(parsed, dependencies) {
       try { await dependencies.harnesses.select(client, project.root, { signal }); }
       catch { fail(`The saved worker harness ${client} is unavailable or incompatible. Restore it before resuming; Rivet will not switch models.`, 'PROVIDER_UNAVAILABLE'); }
     }
-    const result = await invokeFeature(dependencies.feature, 'resume', {
+    let result=await continueAfterQuestions(project,record,dependencies,{signal});
+    if(result===record) result = await invokeFeature(dependencies.feature, 'resume', {
       project: project.root, runId: record.runId, expectedVersion: record.version,
     }, { signal, ...(allowanceMs===undefined?{}:{allowanceMs}), confirmDependencyInstall: confirmIsolatedDependencyInstall(dependencies, signal) });
+    result=await continueAfterQuestions(project,result,dependencies,{signal});
     dependencies.output.log(`Task: ${taskState(result.status)}.`);
     if (result.summary) dependencies.output.log(visible(result.summary));
     if (result.status === 'awaiting-final-approval') return finishTask(project, {...record,status:result.status}, dependencies, {signal});

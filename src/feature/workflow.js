@@ -18,7 +18,7 @@ import { createFeatureRunStore } from './run-store.js';
 import { acquireHostRunLock } from './host-run-lock.js';
 
 const INPUT_KEYS = new Set([
-  'gitClient', 'planningClientFor', 'trackerAdapterFor', 'executeFeature', 'now', 'loadConfig', 'protocolsFor',
+  'gitClient', 'planningClientFor', 'trackerAdapterFor', 'executeFeature', 'now', 'loadConfig', 'protocolsFor', 'automaticReview',
 ]);
 const CLIENTS = new Set(['claude', 'codex', 'host']);
 const TRACKERS = new Set(['jira', 'linear']);
@@ -275,6 +275,7 @@ export function createFeatureWorkflow(input) {
         config, workRequest, baselineCommit: observed.headSha, client: selectedClient,
       });
     }
+    if(configured.automaticReview===true&&selectedClient!=='host')featurePlan=createFeaturePlan({proposal:{...featurePlan,automaticReview:true},config,workRequest,baselineCommit:observed.headSha,client:selectedClient});
     const runId = runIdentifier(featurePlan, workRequest);
     const store = await storeFor(observed.root, runId);
     const existing = await store.read();

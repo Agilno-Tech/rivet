@@ -1,3 +1,5 @@
+import {validateProductQuestion} from '../feature/product-question.js';
+import {validateTaskReviewPayload} from '../quality/task-review-client.js';
 import { observeExecutionAttempt } from './execution-proof.js';
 import {randomUUID} from 'node:crypto';
 import { sessionTelemetry } from './session-capabilities.js';
@@ -358,7 +360,7 @@ function parseEnvelope(buffer, contract, resultFormat, requireBudgetStop = false
     || !value.usage || typeof value.usage !== 'object' || Array.isArray(value.usage)) failAgent('output-invalid');
   const outputKeys = Reflect.ownKeys(value.output);
   const usageKeys = Reflect.ownKeys(value.usage);
-  if (outputKeys.length !== 2 || !['summary', 'evidence'].every(key => Object.hasOwn(value.output, key))
+  if (outputKeys.some(key=>!['summary','evidence','question'].includes(key)) || !['summary', 'evidence'].every(key => Object.hasOwn(value.output, key))
     || typeof value.output.summary !== 'string' || value.output.summary.length === 0 || value.output.summary.length > 16_384
     || containsSecretMaterial(value.output.summary)
     || !Array.isArray(value.output.evidence) || value.output.evidence.length > 128
@@ -368,6 +370,7 @@ function parseEnvelope(buffer, contract, resultFormat, requireBudgetStop = false
     || typeof value.usage.costUsd !== 'number' || !Number.isFinite(value.usage.costUsd) || value.usage.costUsd < 0 || value.usage.costUsd > 100_000) {
     failAgent('output-invalid');
   }
+  if(value.output.question!==undefined){if(value.status!=='blocked')failAgent('output-invalid');validateProductQuestion(value.output.question);}
   if (resultFormat === 'claude-json') {
     const usage = claudeMeasuredUsage(captured);
     const exhausted = usage.tokens > contract.budget.maxTokens || usage.costUsd > contract.budget.maxCostUsd;
@@ -571,7 +574,7 @@ export async function createProcessRunner(input) {
     try {
       contract = protocol === 'launch'
         ? validateLaunchPayload(request.payload)
-        : protocol === 'review' ? validateReviewPayload(request.payload) : protocol === 'policy' ? validatePolicyPayload(request.payload) : validatePlanningPayload(request.payload);
+        : protocol === 'task-review' ? validateTaskReviewPayload(request.payload) : protocol === 'review' ? validateReviewPayload(request.payload) : protocol === 'policy' ? validatePolicyPayload(request.payload) : validatePlanningPayload(request.payload);
     } catch { failAgent('invalid-contract'); }
     if (protocol !== 'launch' && request.protocolContext !== undefined) failAgent('invalid-contract');
     let stdinPayload = protocol === 'launch'
@@ -763,6 +766,6 @@ export async function createProcessRunner(input) {
       if (!['claude', 'codex'].includes(provider)) failAgent('invalid-contract');
       return probe(provider === 'codex' ? ['exec', '--help'] : ['--help'], true);
     },
-    run, runPlanning, runPolicy(inputRequest) { return execute(inputRequest, 'policy'); }, runReview(inputRequest) { return execute(inputRequest, 'review'); },
+    run, runPlanning, runPolicy(inputRequest) { return execute(inputRequest, 'policy'); }, runTaskReview(inputRequest) { return execute(inputRequest, 'task-review'); }, runReview(inputRequest) { return execute(inputRequest, 'review'); },
   });
 }

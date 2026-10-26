@@ -372,3 +372,86 @@ test('recovery command inputs are captured once and sanitize hostile failures', 
   }), error => error.code === 'ERR_RUNTIME_INVALID_RUNTIME_INPUT' && !JSON.stringify(error).includes('recovery-private-canary'));
   assert.equal(accesses, 1);
 });
+
+test('review corrections inherit completed worker remainder without reopening final approval', async () => {
+  const {scheduleReviewCorrection} = await import('../../src/runtime/review-loop.js');
+  const graph = recoveryGraph({status:'completed'});
+  graph.nodes.find(n=>n.id==='human-final').status='ready';
+  const value=instance({graph});
+  const result=await scheduleReviewCorrection(value,{expectedVersion:4,sourceNodeId:'worker-one',nodeId:'fix-review-1',round:1,
+    authority:authority('manager-owner',['orchestration.correct']),reason:'Fix missing empty input handling',nowMs:0});
+  const correction=result.graph.nodes.find(n=>n.id==='fix-review-1');
+  assert.deepEqual(correction.authorityScopes,['implement']);
+  assert.deepEqual(correction.budget,graph.nodes[2].budget);
+  assert.equal(result.graph.nodes[2].status,'archived');
+  assert.deepEqual(result.graph.nodes[3].dependencies,['fix-review-1']);
+  assert.equal(result.reviewCorrections['fix-review-1'].sourceNodeId,'worker-one');
+  assert.equal(result.graph.nodes[3].status,'ready');
+});
+
+test('review calls reserve bounded budget durably and cannot repeat unknown outcomes', async () => {
+  const {reserveReviewCall,completeReviewCall}=await import('../../src/runtime/review-loop.js');
+  const value=instance();
+  const result=await reserveReviewCall(value,{expectedVersion:4,nodeId:'manager-one',callId:'review-1',subjectDigest:'a'.repeat(64),round:1,nowMs:0});
+  assert.equal(result.reviewCalls['review-1'].status,'pending');
+  assert.equal(result.usage.taskLimit,1);
+  assert.ok(result.usage.tokens>0);
+  await assert.rejects(()=>reserveReviewCall(value,{expectedVersion:result.version,nodeId:'manager-one',callId:'review-1',subjectDigest:'a'.repeat(64),round:1,nowMs:0}));
+  const done=await completeReviewCall(value,{expectedVersion:result.version,callId:'review-1'});
+  assert.equal(done.reviewCalls['review-1'].status,'complete');
+  assert.equal(done.usage.tokens,result.usage.tokens);
+});
+
+test('saved correction cannot widen its source budget or authority',async()=>{
+ const {scheduleReviewCorrection}=await import('../../src/runtime/review-loop.js');
+ const {validateRuntimeSnapshot}=await import('../../src/runtime/orchestrator.js');
+ const graph=recoveryGraph({status:'completed'});graph.nodes[3].status='ready';
+ const value=instance({graph});
+ const result=await scheduleReviewCorrection(value,{expectedVersion:4,sourceNodeId:'worker-one',nodeId:'fix-review-1',round:1,authority:authority('manager-owner',['orchestration.correct']),reason:'Fix empty input',nowMs:0});
+ result.graph.nodes.at(-1).budget.tokenLimit++;
+ assert.throws(()=>validateRuntimeSnapshot(result,value.id));
+});
+
+test('saved review allocation cannot exceed the charged manager ledger',async()=>{
+ const {reserveReviewCall}=await import('../../src/runtime/review-loop.js');
+ const {validateRuntimeSnapshot}=await import('../../src/runtime/orchestrator.js');
+ const value=instance();
+ const result=await reserveReviewCall(value,{expectedVersion:4,nodeId:'manager-one',callId:'review-1',subjectDigest:'a'.repeat(64),round:1,nowMs:0});
+ result.reviewCalls['review-1'].allocation.tokenLimit++;
+ assert.throws(()=>validateRuntimeSnapshot(result,value.id));
+});
+
+test('native review context fits a bounded reservation without exceeding approved parent limits',async()=>{
+ const {reserveReviewCall,completeReviewCall}=await import('../../src/runtime/review-loop.js');
+ const graph=recoveryGraph();
+ for(const node of graph.nodes)node.budget.tokenLimit=100000;
+ const value=instance({graph,limits:{tokens:100000,costUsd:'10',retries:2}});
+ const reserved=await reserveReviewCall(value,{expectedVersion:4,nodeId:'manager-one',callId:'review-native',subjectDigest:'a'.repeat(64),round:1,nowMs:0});
+ const done=await completeReviewCall(value,{expectedVersion:reserved.version,callId:'review-native',usage:{tokens:28717,costUsd:0.089},usageSource:'native'});
+ assert.equal(done.reviewCalls['review-native'].status,'complete');
+ assert.equal(done.reviewCalls['review-native'].allocation.tokenLimit,64000);
+ const smaller=await reserveReviewCall(instance(),{expectedVersion:4,nodeId:'manager-one',callId:'review-small',subjectDigest:'a'.repeat(64),round:1,nowMs:0});
+ assert.equal(smaller.reviewCalls['review-small'].allocation.tokenLimit,4000);
+});
+
+test('review correction fits the remaining parent and global budgets after review charges',async()=>{
+ const {reserveReviewCall,completeReviewCall,scheduleReviewCorrection}=await import('../../src/runtime/review-loop.js');
+ const graph=recoveryGraph({status:'completed'});graph.nodes[3].status='ready';
+ for(const node of graph.nodes)node.budget={timeMinutes:20,tokenLimit:100000,costUsd:5,taskLimit:5};
+ const value=instance({graph,limits:{tokens:100000,costUsd:'5',timeMinutes:20,taskLimit:5,retries:2}});
+ const reserved=await reserveReviewCall(value,{expectedVersion:4,nodeId:'manager-one',callId:'review-budget',subjectDigest:'a'.repeat(64),round:1,nowMs:0});
+ const reviewed=await completeReviewCall(value,{expectedVersion:reserved.version,callId:'review-budget',usage:{tokens:10000,costUsd:0.1}});
+ const fixed=await scheduleReviewCorrection(value,{expectedVersion:reviewed.version,sourceNodeId:'worker-one',nodeId:'fix-parent-budget',round:1,authority:authority('manager-owner',['orchestration.correct']),reason:'Fix review findings',nowMs:1});
+ assert.deepEqual(fixed.graph.nodes.at(-1).budget,{timeMinutes:18,tokenLimit:36000,costUsd:4,taskLimit:4});
+});
+
+test('correction cost shares round down exactly when native usage has long decimal precision',async()=>{
+ const {remainingRuntimeCorrectionBudget}=await import('../../src/runtime/orchestrator.js');
+ const graph=recoveryGraph({status:'completed'});
+ for(const node of graph.nodes)node.budget={timeMinutes:20,tokenLimit:100000,costUsd:10,taskLimit:10};
+ const used={tokens:10,costUsd:'0.24389700000000003',timeMinutes:1,tasks:1};
+ const state={graph,limits:{tokens:100000,costUsd:'10',timeMinutes:20,taskLimit:10},usage:{tokens:10,costUsd:used.costUsd,timeMinutes:1,taskLimit:1},nodeUsage:{'worker-one':used},delegatedUsage:{'manager-one':used,'boss-one':used}};
+ assert.equal(Number(remainingRuntimeCorrectionBudget(state,graph.nodes[2]).costUsd),9.756102);
+ graph.nodes[2].budget.costUsd=5;
+ assert.equal(Number(remainingRuntimeCorrectionBudget(state,graph.nodes[2]).costUsd),4.756102);
+});

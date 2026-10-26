@@ -1,3 +1,6 @@
+import {validateCheckFeedback} from '../feature/check-feedback.js';
+import {validateProductQuestion} from '../feature/product-question.js';
+import {validateReviewLoopState} from './review-loop.js';
 import {newSession,validateSessions,requireSession,stopReceipt,sessionFailure,turnoverReason,validateSessionTelemetry,observeHostSession} from '../feature/sessions.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -204,6 +207,8 @@ function canonicalState(input, expectedInstanceId, retryDelaysMs = null) {
       || (node.status === 'running' && intentStatus !== 'started')) fail('invalid-runtime-input');
   }
   validateSessions(state,expectedInstanceId);
+  validateReviewLoopState(state);
+  validateCheckFeedback(state);
   validateDurableIntentRelations(state, retryDelaysMs);
   state.appliedSequence = state.events.length;
   state.terminal ??= null;
@@ -426,6 +431,43 @@ function validateRetryDeadline(state, nodeId, deadlineMs, retryDelaysMs) {
       || retryScheduleIndex >= retryDelaysMs.length || delayMs !== retryDelaysMs[retryScheduleIndex]))) fail('invalid-runtime-input');
 }
 
+function correctionCostShare(value, batchSize) {
+  const [whole,fraction='']=String(value).split('.');
+  const units=(BigInt(whole)*1000000n+BigInt((fraction+'000000').slice(0,6)))/BigInt(batchSize);
+  return `${units/1000000n}.${String(units%1000000n).padStart(6,'0')}`;
+}
+
+export function remainingRuntimeCorrectionBudget(state, source, batchSize = 1) {
+  const shared=[availableBudget(state),...ancestorNodes(state,source).map(node=>remainingParentBudget(state,node))].map(b=>({tokenLimit:Math.floor(b.tokenLimit/batchSize),timeMinutes:Math.floor(b.timeMinutes/batchSize),taskLimit:Math.floor(b.taskLimit/batchSize),costUsd:correctionCostShare(b.costUsd,batchSize)}));
+  const own=remainingNodeBudget(state,source);
+  const bounds=[{...own,costUsd:correctionCostShare(own.costUsd,1)},...shared];
+  return {tokenLimit:Math.min(...bounds.map(b=>b.tokenLimit)),costUsd:bounds.reduce((min,b)=>decimalCompare(b.costUsd,min)<0?b.costUsd:min,bounds[0].costUsd),timeMinutes:Math.min(...bounds.map(b=>b.timeMinutes)),taskLimit:Math.min(...bounds.map(b=>b.taskLimit))};
+}
+
+// Review allowances are conservative reservations charged once, before any process starts.
+export function chargeReviewBudget(state, node) {
+  const bounds=[remainingParentBudget(state,node),availableBudget(state),...ancestorNodes(state,node).map(n=>remainingParentBudget(state,n))];
+  const allocation={tokenLimit:Math.min(64000,...bounds.map(b=>b.tokenLimit)),costUsd:String(Math.min(1,...bounds.map(b=>Number(b.costUsd)))),timeMinutes:Math.min(2,...bounds.map(b=>b.timeMinutes)),taskLimit:1};
+  if(allocation.tokenLimit<1||Number(allocation.costUsd)<=0||allocation.timeMinutes<1||bounds.some(b=>b.taskLimit<1))fail('invalid-runtime-input');
+  const charged={tokens:allocation.tokenLimit,costUsd:allocation.costUsd,timeMinutes:allocation.timeMinutes,tasks:1};
+  const own=state.nodeUsage[node.id]??zeroNodeUsage();addNodeUsage(own,charged);state.nodeUsage[node.id]=own;
+  for(const parent of ancestorNodes(state,node)){const usage=state.delegatedUsage[parent.id]??zeroNodeUsage();addNodeUsage(usage,charged);state.delegatedUsage[parent.id]=usage;}
+  state.usage.tokens+=charged.tokens;state.usage.costUsd=decimalMath(state.usage.costUsd,charged.costUsd);state.usage.timeMinutes+=charged.timeMinutes;state.usage.taskLimit++;
+  return allocation;
+}
+
+export function settleReviewBudget(state,call,usage) {
+  if(!usage||Object.keys(usage).some(k=>!['tokens','costUsd'].includes(k))||!Number.isSafeInteger(usage.tokens)||usage.tokens<0||typeof usage.costUsd!=='number'||!Number.isFinite(usage.costUsd)||usage.costUsd<0)fail('client-output');
+  const excess={tokens:Math.max(0,usage.tokens-call.allocation.tokenLimit),costUsd:decimalCompare(usage.costUsd,call.allocation.costUsd)>0?decimalMath(usage.costUsd,call.allocation.costUsd,true):'0',timeMinutes:0,tasks:0};
+  call.usage=usage;call.status='complete';
+  if(excess.tokens||Number(excess.costUsd)>0){
+    const node=state.graph.nodes.find(n=>n.id===call.nodeId);addNodeUsage(state.nodeUsage[node.id],excess);
+    for(const parent of ancestorNodes(state,node))addNodeUsage(state.delegatedUsage[parent.id],excess);
+    state.usage.tokens+=excess.tokens;state.usage.costUsd=decimalMath(state.usage.costUsd,excess.costUsd);
+    call.status='over-budget';state.terminal='budget-exhausted';transition(state,state.graph,'blocked',call.startedAtMs);
+  }
+}
+
 function validateNonnegativeBudget(value) {
   if (!Number.isSafeInteger(value.tokenLimit) || value.tokenLimit < 0
     || !Number.isSafeInteger(value.timeMinutes) || value.timeMinutes < 0
@@ -485,7 +527,7 @@ export function captureRuntimeResult(input, managed = false) {
     const output = immutableJson(value.output);
     const usage = immutableJson(value.usage);
     if (value.version !== 1 || !['success', 'retry', 'failed', 'blocked', 'budget-exhausted', ...(managed ? ['checkpoint'] : [])].includes(value.status)
-      || Reflect.ownKeys(output).some(key => !['summary', 'evidence'].includes(key))
+      || Reflect.ownKeys(output).some(key => !['summary', 'evidence', 'question'].includes(key))
       || Reflect.ownKeys(usage).some(key => !['tokens', 'costUsd', 'timeMinutes', 'tasks'].includes(key))
       || typeof output.summary !== 'string' || output.summary.length < 1 || containsSecretMaterial(output.summary)
       || !Array.isArray(output.evidence) || output.evidence.length > 64
@@ -495,6 +537,7 @@ export function captureRuntimeResult(input, managed = false) {
       || typeof usage.costUsd !== 'number' || !Number.isFinite(usage.costUsd) || usage.costUsd < 0
       || (usage.timeMinutes !== undefined && (!Number.isSafeInteger(usage.timeMinutes) || usage.timeMinutes < 0))
       || (usage.tasks !== undefined && (!Number.isSafeInteger(usage.tasks) || usage.tasks < 0))) fail('client-output');
+    if(output.question!==undefined){if(value.status!=='blocked')fail('client-output');validateProductQuestion(output.question);}
     return Object.freeze({ version: 1, status: value.status, output, usage });
   } catch (error) {
     if (error instanceof RuntimeError) throw error;
@@ -524,6 +567,7 @@ function classify(error) {
 function deriveTerminal(state, nowMs) {
   if (state.terminal === 'cancelled' || state.terminal === 'budget-exhausted') return;
   const statuses = state.graph.nodes.map(node => node.status);
+  if(state.graph.nodes.some(n=>['running','reserved'].includes(n.status))&&state.graph.nodes.filter(n=>n.status==='blocked').length&&state.graph.nodes.filter(n=>n.status==='blocked').every(n=>state.productQuestions?.[n.id]))return;
   let terminal = null;
   if (statuses.includes('failed')) terminal = 'failed';
   else if (statuses.includes('blocked')) terminal = 'blocked';
@@ -738,6 +782,8 @@ export function createOrchestrator(input) {
               state.evidence.push(...exact.map(id => ({ id, nodeId: node.id, type: bindings.get(id), approvalState: 'approved' })));
               event(state, config.now(), { actor: node.owner, event: { type: 'evidence-recorded', nodeId: node.id, evidenceRefs: exact } });
               transition(state, node, 'completed', config.now());
+              state.workerSummaries??={};state.workerSummaries[node.id]=result.output.summary;
+              if(/^[a-f0-9]{40,64}$/.test(outcome.reconciliation?.workerTip??'')){state.acceptedWorkerHeads??={};state.acceptedWorkerHeads[node.id]=outcome.reconciliation.workerTip;}
             }
           } else if (result?.status === 'budget-exhausted') {
             transition(state, node, 'blocked', config.now());
@@ -761,6 +807,7 @@ export function createOrchestrator(input) {
               }
             } else transition(state, node, preparationFailure ? 'blocked' : result?.status === 'failed' ? 'failed' : 'blocked', config.now());
           }
+          if(result?.output.question){state.productQuestions??={};state.productQuestions[node.id]=result.output.question.id;state.workerSummaries??={};state.workerSummaries[node.id]=result.output.summary;}
           delete state.launchIntents[node.id].preparationClaim;
           state.launchIntents[node.id].status = 'complete';
           // transition() replaces graph nodes; the launch's node is a stale snapshot.
@@ -957,7 +1004,7 @@ export function createOrchestrator(input) {
         if (reconciliation.performed) {
           const report = reconciliation.report;
           if (report?.status !== 'integrated') outcome = { result: { version: 1, status: 'blocked', output: { summary: 'Worktree reconciliation requires review.', evidence: [] }, usage: result.usage } };
-          else outcome = { result };
+          else outcome = { result, reconciliation: report };
         } else outcome = { result };
       }
       catch (error) {
@@ -1043,7 +1090,7 @@ export function createOrchestrator(input) {
         if (node.status === 'corrective' && Number.isSafeInteger(retryAtMs) && retryAtMs <= config.now()) { transition(state, node, 'ready', config.now()); if (state.retryAtMs) delete state.retryAtMs[node.id]; }
       }
       deriveTerminal(state, config.now());
-      if (TERMINAL.has(state.terminal)) return state;
+      if (TERMINAL.has(state.terminal)||state.graph.nodes.some(n=>n.status==='blocked'&&state.productQuestions?.[n.id])) return state;
       const recoverable = state.graph.nodes.filter(node => node.status === 'reserved' && ['committed', 'prepared'].includes(state.launchIntents[node.id]?.status));
       const scheduledIds = scheduleReadyNodes(state.graph, { maxActiveNodes, ...(options.capacityByOwner === undefined ? {} : {capacityByOwner:options.capacityByOwner}), ...(options.childCapacityByParent === undefined ? {} : {childCapacityByParent:options.childCapacityByParent}) }).filter(id => {
         const node = state.graph.nodes.find(item => item.id === id); const intent = state.launchIntents[id];
@@ -1385,6 +1432,7 @@ export function createOrchestrator(input) {
     await Promise.allSettled([...inflight.entries()].filter(([key]) => key.startsWith(`${instance.id}:`)).map(([,promise]) => promise));
   }
 
-  const runtime = Object.freeze({ sessionOperation, activate, approveNode, recordHeartbeat, tick, advance, drain, prepareAction, prepareActions, submitAction, retryNode, recoverStalledNode, cancelNode, cancelGoal });
+  async function waitForActive(instance){await Promise.allSettled([...inflight.entries()].filter(([key])=>key.startsWith(`${instance.id}:`)).map(([,promise])=>promise));}
+  const runtime = Object.freeze({ waitForActive, sessionOperation, activate, approveNode, recordHeartbeat, tick, advance, drain, prepareAction, prepareActions, submitAction, retryNode, recoverStalledNode, cancelNode, cancelGoal });
   return runtime;
 }

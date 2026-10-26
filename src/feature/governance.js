@@ -20,7 +20,7 @@ const fail=message=>{throw new GovernanceError(message);};
 const digest=value=>createHash('sha256').update(typeof value==='string'?value:JSON.stringify(value)).digest('hex');
 const binding=run=>({runId:run.runId,requestDigest:run.workRequest.digest,planDigest:run.proposalDigest});
 const sameBinding=(left,right)=>Object.entries(right).every(([key,value])=>left[key]===value);
-const approved=decisions=>decisions.filter(value=>value.status==='approved').map(({id,choice})=>({id,choice}));
+const approved=decisions=>decisions.filter(value=>value.status==='approved').map(({id,choice,approval})=>({id,choice:approval?.choice??choice}));
 
 async function journal(paths,run) {
   const selected=await governancePaths(paths), snapshot=await readSnapshotWithoutLock(selected);
@@ -70,7 +70,8 @@ export async function inspectGovernance({project,run,gitClient,config,phase,chec
   const state=await journal(paths,run);
   const configured=config??await loadProjectConfig(project);
   await assertGovernancePolicy({project,baselineCommit:run.featurePlan.baselineCommit,gitClient,config:configured});
-  const policy=normalizeReviewPolicy(forceReview?{...configured.quality.review,required:true}:configured.quality.review);
+  const automaticFinal=run.featurePlan.automaticReview===true&&(phase??(run.status==='proposed'?'plan':'final'))==='final';
+  const policy=normalizeReviewPolicy((forceReview||automaticFinal)?{...configured.quality.review,required:true}:configured.quality.review);
   const selectedPhase=phase??(run.status==='proposed'?'plan':'final');
   if(!['plan','final'].includes(selectedPhase))fail();
   let target=checkout;
@@ -88,7 +89,7 @@ export async function inspectGovernance({project,run,gitClient,config,phase,chec
     if(policy.required||state.reviews.length)patch=(await gitClient.reviewDiff(target.path,{fromSha:baseSha,toSha:headSha})).patch;
   }
   const subject={phase:selectedPhase,...binding(run),baseSha,headSha,
-    diffDigest:digest(selectedPhase==='plan'?run.featurePlan:patch),
+    diffDigest:digest(state.decisions.length?{source:selectedPhase==='plan'?run.featurePlan:patch,decisions:state.decisions.map(value=>value.digest)}:selectedPhase==='plan'?run.featurePlan:patch),
     acceptanceCriteria:run.workRequest.acceptanceCriteria,
     planNodeIds:run.featurePlan.nodes.filter(node=>node.role==='worker').map(node=>node.id),
     criterionPlanNodeIds:run.workRequest.acceptanceCriteria.map(criterion=>run.featurePlan.nodes.filter(node=>node.role==='worker'&&node.acceptanceCriteria.includes(criterion)).map(node=>node.id)),changedPaths,
@@ -160,9 +161,10 @@ export async function taskGovernance({project,runId,gitClient,operation,input,ph
     }
     if(operation==='approve-decision'){
       const record=state.decisions.find(value=>value.id===decisionId);if(!record)fail('Decision was not found.');
-      if(typeof confirm!=='function'||await confirm(record)!==true)return {status:'declined'};
+      const answer=typeof confirm==='function'?await confirm(record):false;
+      if(answer!==true&&!record.options.some(option=>option.id===answer))return {status:'declined'};
       signal?.throwIfAborted();
-      const updated=approveDecision(record,{...context,actor:{kind:'human',id:'human-cli-operator'},now:now(),humanConfirmed:true});
+      const updated=approveDecision(record,{...context,actor:{kind:'human',id:'human-cli-operator'},now:now(),humanConfirmed:true,...(answer===true?{}:{choice:answer})});
       await append(state,run,{type:'decision.approved',data:updated});return updated;
     }
     if(operation==='review'||operation==='review-submit'){

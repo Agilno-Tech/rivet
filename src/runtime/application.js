@@ -1,3 +1,4 @@
+import {runTaskReviewClient} from '../quality/task-review-client.js';
 import {sweepWorktreeRetention} from './worktree-retention.js';
 import {activateTaskAdmission,withOperationAdmission} from './task-orchestration.js';
 import {homedir} from 'node:os';
@@ -319,9 +320,14 @@ export function createRivetApplication(input = {}) {
         await harnesses.select(kind, project, { signal });
         return agentClientFor(kind, profile, {executionSelection});
       },
+      reviewClientFor: async (kind,{project,signal,executionSelection}) => {
+        const selected=await harnesses.select(kind,project,{signal});
+        return {review: options=>runTaskReviewClient({selected,executionSelection,environment:clientEnvironment,secretEnvironment:env,...options})};
+      },
       resolveCommandExecutable,
       now,
       environment: clientEnvironment,
+      secretEnvironment: env,
     }));
     return (await executorPromise)(request, options);
   };
@@ -337,6 +343,7 @@ export function createRivetApplication(input = {}) {
         clock: now,
       }).create({ tracker: provider }),
       executeFeature,
+      automaticReview: true,
       now,
     }));
     return workflowPromise;

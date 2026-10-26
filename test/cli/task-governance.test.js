@@ -117,22 +117,22 @@ test('input modes are exclusive and unsupported flags cannot create evidence', a
 test('pending decision approval requires an interactive terminal and the explicit approve choice', async t => {
   const f = await fixture(t); await f.record(decision('human-choice', 2));
   const before = await f.snapshot(); let prompts = 0;
-  const noninteractive = await f.call(['approve-decision', '--decision=human-choice'], { taskApprovalPrompt: async () => { prompts++; return 'approve'; } });
+  const noninteractive = await f.call(['approve-decision', '--decision=human-choice'], { taskApprovalPrompt: async () => { prompts++; return 'answer:json'; } });
   assert.equal(noninteractive.code, EXIT_CODES.BLOCKED_AUTHORITY, noninteractive.text); assert.equal(prompts, 0);
   for (const choice of ['leave', null, undefined, true, 'yes']) {
     const result = await f.call(['approve-decision', '--decision=human-choice'], { terminalIsInteractive: () => true,
-      taskApprovalPrompt: async preview => { assert.deepEqual(preview.choices.map(item => item.value), ['approve', 'leave']); return choice; } });
+      taskApprovalPrompt: async preview => { assert.deepEqual(preview.choices.map(item => item.value), ['answer:json', 'answer:text', 'leave']); return choice; } });
     if (choice === 'leave' || choice === null || choice === undefined) assert.equal(result.code, EXIT_CODES.SUCCESS, result.text);
     assert.deepEqual(await f.snapshot(), before);
   }
   const approved = await f.call(['approve-decision', '--decision=human-choice'], { terminalIsInteractive: () => true,
-    taskApprovalPrompt: async () => 'approve' });
+    taskApprovalPrompt: async () => 'answer:json' });
   assert.equal(approved.code, EXIT_CODES.SUCCESS, approved.text);
   const after = await f.snapshot(); assert.equal(after.version, 2);
   assert.equal(after.data.events[1].data.status, 'approved');
   assert.equal(after.data.events[1].data.approval.actor.kind, 'human');
   assert.equal((await f.store.readOnly()).status, 'proposed');
-  const repeated = await f.call(['approve-decision', '--decision=human-choice'], { terminalIsInteractive: () => true, taskApprovalPrompt: async () => 'approve' });
+  const repeated = await f.call(['approve-decision', '--decision=human-choice'], { terminalIsInteractive: () => true, taskApprovalPrompt: async () => 'answer:json' });
   assert.equal(repeated.code, EXIT_CODES.FAILED_GATE); assert.deepEqual(await f.snapshot(), after);
 });
 
@@ -168,7 +168,7 @@ test('failed review display cannot approve a pending decision', async t => {
   const f = await fixture(t); await f.record(decision('display-failure', 2)); const before = await f.snapshot();
   const stdout = new EventEmitter(), stderr = new EventEmitter(); stdout.write = () => true; stderr.write = () => true;
   await f.call(['approve-decision', '--decision=display-failure'], { terminalIsInteractive: () => true,
-    output: createOutput({ stdout, stderr }), taskApprovalPrompt: async () => { stdout.emit('error', new Error('display failed')); return 'approve'; } });
+    output: createOutput({ stdout, stderr }), taskApprovalPrompt: async () => { stdout.emit('error', new Error('display failed')); return 'answer:json'; } });
   assert.deepEqual(await f.snapshot(), before);
 });
 
@@ -176,7 +176,7 @@ test('interrupting the decision prompt cannot approve a late answer', async t =>
   const f = await fixture(t); await f.record(decision('interrupted-choice', 3)); const before = await f.snapshot();
   let receivedSignal = false;
   await f.call(['approve-decision', '--decision=interrupted-choice'], { terminalIsInteractive: () => true,
-    taskApprovalPrompt: async preview => { receivedSignal = preview.signal instanceof AbortSignal; if (receivedSignal) process.emit('SIGINT'); return 'approve'; } });
+    taskApprovalPrompt: async preview => { receivedSignal = preview.signal instanceof AbortSignal; if (receivedSignal) process.emit('SIGINT'); return 'answer:json'; } });
   assert.equal(receivedSignal, true, 'Decision approval prompt must receive an interruption signal.');
   assert.deepEqual(await f.snapshot(), before);
 });
@@ -197,4 +197,29 @@ test('a complete independent review report records through the CLI without appro
   assert.equal((await f.store.readOnly()).status, 'proposed');
   const reread = await f.call(['review', '--phase=plan']);
   assert.equal(reread.code, EXIT_CODES.SUCCESS, reread.text); assert.equal(JSON.parse(reread.messages[0]).review.valid, true);
+});
+
+for(const special of ['leave','leave-pending','approve'])test(`question option ${special} cannot collide with leaving pending`,async t=>{
+ const f=await fixture(t);
+ const question={...decision('sentinel-question',2),options:[{id:special,description:'First option'},{id:'alternative',description:'Alternative'}],choice:'alternative'};
+ await f.record(question);const before=await f.snapshot();
+ await f.call(['approve-decision','--decision=sentinel-question'],{terminalIsInteractive:()=>true,taskApprovalPrompt:async()=> 'leave'});
+ assert.deepEqual(await f.snapshot(),before);
+ await f.call(['approve-decision','--decision=sentinel-question'],{terminalIsInteractive:()=>true,taskApprovalPrompt:async()=> `answer:${special}`});
+ assert.equal((await f.snapshot()).data.events.at(-1).data.approval.choice,special);
+});
+
+test('interactive task question waits for the human reply before resuming',async t=>{
+ const f=await fixture(t);await f.record(decision('wait-for-human',2));
+ const {continueAfterQuestions}=await import('../../src/commands/task-questions.js');
+ let reply,entered;const promptEntered=new Promise(resolve=>{entered=resolve;});let resumes=0;
+ const pending=continueAfterQuestions({root:f.root},{runId:f.run.runId,status:'blocked'},{
+  terminalIsInteractive:()=>true,resolveCommandExecutable:async()=>realpath(fixtureGit),output:{log:()=>{}},
+  taskApprovalPrompt:async prompt=>{assert.equal(prompt.choices[0].value,'answer:json');entered();return new Promise(resolve=>{reply=resolve;});},
+  feature:{status:async()=>({version:1}),resume:async()=>{resumes++;return {runId:f.run.runId,status:'awaiting-final-approval'};}},
+ });
+ await promptEntered;assert.equal(resumes,0);assert.equal((await f.snapshot()).data.events.at(-1).data.status,'pending');
+ reply('answer:text');
+ assert.equal((await pending).status,'awaiting-final-approval');assert.equal(resumes,1);
+ assert.equal((await f.snapshot()).data.events.at(-1).data.approval.choice,'text');
 });

@@ -5,7 +5,7 @@ import {createHash} from 'node:crypto';
 import {immutableJson,containsSecretMaterial} from '../clients/contract.js';
 import {sessionFailure} from './sessions.js';
 export function checkpointDigest(value) {return createHash('sha256').update(JSON.stringify(value)).digest('hex');}
-export async function captureCheckpoint({gitClient,run,node,intent,session,summary,usage,nativeHandle,actorId,observedAtMs,nowMs=Date.now()}) {
+export async function captureCheckpoint({gitClient,run,node,intent,session,summary,usage,approvedPlanNode,nativeHandle,actorId,observedAtMs,nowMs=Date.now()}) {
  if(typeof summary!=='string'||!summary.length||summary.length>8000||containsSecretMaterial(summary))sessionFailure('invalid-checkpoint');
  if(!usage||!Number.isSafeInteger(usage.tokens)||usage.tokens<0||!Number.isFinite(usage.costUsd)||usage.costUsd<0
    ||(usage.timeMinutes!==undefined&&(!Number.isSafeInteger(usage.timeMinutes)||usage.timeMinutes<0))
@@ -19,7 +19,8 @@ export async function captureCheckpoint({gitClient,run,node,intent,session,summa
  await verifyReservedWorktree({projectRoot:intent.worktree.path,statePaths,nodeId:node.id,ownerId:node.owner.id,leaseId:lease.leaseId},{gitClient,nowMs});
  const manifest=await gitClient.checkpointManifest(intent.worktree.path);
  if(manifest.rootIdentity.dev!==intent.worktree.dev||manifest.rootIdentity.ino!==intent.worktree.ino)sessionFailure('checkout-changed');
- const planNode=run.featurePlan.nodes.find(item=>item.id===node.id);
+ const planNode=approvedPlanNode??run.featurePlan.nodes.find(item=>item.id===node.id);
+ if(!planNode)sessionFailure('scope-changed');
  if(manifest.entries.some(entry=>!planNode.ownedPaths.some(path=>entry.path===path||entry.path.startsWith(`${path}/`))))sessionFailure('scope-changed');
  if(nativeHandle!==undefined&&(typeof nativeHandle!=='string'||!nativeHandle.length||nativeHandle.length>200||containsSecretMaterial(nativeHandle)))sessionFailure('invalid-writer');
  const value={version:1,runId:run.runId,nodeId:node.id,intentId:intent.id,sessionId:session.id,generation:session.generation,

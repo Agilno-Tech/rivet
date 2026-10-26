@@ -12,6 +12,7 @@
     "baselineCommit": { "type": "string", "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$" },
     "workRequestDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "client": { "enum": ["claude", "codex", "host"] },
+    "automaticReview": {"const": true},
     "executionPolicy": {"type": "object", "additionalProperties": false, "required": ["version", "policyDigest"], "properties": {"version": {"const": 1}, "policyDigest": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}},
     "clientProfile": { "$ref": "#/$defs/clientProfile" },
     "managedClaudeProfile": { "$ref": "#/$defs/clientProfile" },
