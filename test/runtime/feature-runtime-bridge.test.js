@@ -9,7 +9,7 @@ import test from 'node:test';
 import { failAgent } from '../../src/clients/contract.js';
 import { createFakeClient } from '../../src/clients/fake.js';
 import { loadProjectConfig } from '../../src/config/load.js';
-import { featurePlanDigest } from '../../src/feature/plan-contract.js';
+import { createFeaturePlan, featurePlanDigest } from '../../src/feature/plan-contract.js';
 import { createAcceptedIntegrationStore } from '../../src/feature/accepted-integration.js';
 import { createVerificationReportStore } from '../../src/feature/verification-report.js';
 import { createFeaturePlanner } from '../../src/feature/planner.js';
@@ -890,7 +890,7 @@ test('custom Worker ceiling respects lower approved allocations and the saved pr
   }
 });
 
-async function parallelFixture(t, {failure = false, workerChecksPending = false, beforeResult, dependent = false, stoppedProof = true, outerFailure = false, preparationRace = false, slowPreparation = false, cancelPreparation = false} = {}) {
+async function parallelFixture(t, {failure = false, workerChecksPending = false, beforeResult, dependent = false, stoppedProof = true, outerFailure = false, preparationRace = false, slowPreparation = false, cancelPreparation = false, reviewClientFor, correctionCheckpoint=false, approvedAutomaticReview=true, tightReviewBudget=false} = {}) {
   const parentRoot = await realpath(await mkdtemp(join(tmpdir(), 'rivet-adapter-parallel-')));
   t.after(() => rm(parentRoot, {recursive:true, force:true}));
   const root = join(parentRoot, 'project');
@@ -902,6 +902,7 @@ async function parallelFixture(t, {failure = false, workerChecksPending = false,
   const orchestration = parse(await readFile(orchestrationPath,'utf8'));
   orchestration.executionPolicy = managedPolicy();
   orchestration.roles.find(role => role.kind === 'worker').capacity = 2;
+  if(tightReviewBudget)for(const role of orchestration.roles)role.budget={tokenLimit:role.kind==='worker'?40000:100000,timeMinutes:role.kind==='worker'?20:60,costUsd:role.kind==='worker'?3:10,taskLimit:role.kind==='worker'?5:20};
   await writeFile(orchestrationPath,stringify(orchestration));
   await writeFile(join(root,'README.md'),'parallel fixture\n');
   await writeFile(join(root,'package.json'),JSON.stringify({scripts:{build:'x',test:'x',lint:'x',typecheck:'x'}}));
@@ -937,7 +938,8 @@ exec '${executableGit}' "$@"
     ownedPaths:[`app/${id}.txt`],acceptanceCriterionIndexes:[index===1?2:1],
   }));
   const planner = createFeaturePlanner({planningClient:{propose:async()=>({schemaVersion:1,kind:'agilno.feature-decomposition',workItems})}});
-  const featurePlan = await planner.propose({config,workRequest:request,baselineCommit,client:'codex'});
+  const planned = await planner.propose({config,workRequest:request,baselineCommit,client:'codex'});
+  const featurePlan=reviewClientFor&&approvedAutomaticReview?createFeaturePlan({proposal:{...planned,automaticReview:true},config,workRequest:request,baselineCommit,client:'codex'}):planned;
   const run = await persistedRunningRun(root,'parallel-run',request,featurePlan);
   const executable = join(parentRoot,'gate');
   const gateLog=join(parentRoot,'candidate-gates');
@@ -946,7 +948,7 @@ exec '${executableGit}' "$@"
   let releaseTimer;
   t.after(()=>clearTimeout(releaseTimer));
   const slowGate=outerFailure ? `if [ -f app/slow.txt ] && [ ! -f app/fast.txt ]; then printf waiting > '${slowMarker}'; while [ ! -f '${releaseMarker}' ]; do sleep 0.05; done; fi\n` : '';
-  await writeFile(executable,`#!/bin/sh\nprintf '%s\\n' \"$PWD\" >> '${gateLog}'\n${slowGate}exit ${failure?1:0}\n`,{mode:0o700});
+  await writeFile(executable,`#!/bin/sh\nprintf '%s\\n' \"$PWD\" >> '${gateLog}'\n${slowGate}${failure==='fast'?'[ ! -f app/fast.txt ] || [ -f app/slow.txt ]; exit $?':`exit ${failure?1:0}`}\n`,{mode:0o700});
   let active = 0; let maximum = 0; const bases = []; const events = []; const launches = [];
   let startedSlow; const slowStarted = new Promise(resolve=>{startedSlow=resolve;});
   let startedDependent; const dependentStarted = new Promise(resolve=>{startedDependent=resolve;});
@@ -961,7 +963,7 @@ exec '${executableGit}' "$@"
       })]);
     } finally {clearTimeout(timer);signal.removeEventListener('abort',abort);}
   }
-  const executor = createFeatureExecutor({gitClient,now:()=>NOW,resolveCommandExecutable:async()=>executable,
+  const executor = createFeatureExecutor({gitClient,now:()=>NOW,resolveCommandExecutable:async()=>executable, ...(reviewClientFor?{reviewClientFor:async(...args)=>{const client=await reviewClientFor(...args);return {review:async options=>{const result=await client.review(options);await options.onExecution({status:'stopped'});return result;}};}}:{}),
     clientFor:()=>({provider:'codex',async launch(contract,options){
       active++; maximum=Math.max(maximum,active); events.push(`start:${contract.nodeId}`);
       launches.push(contract);
@@ -1006,10 +1008,10 @@ exec '${executableGit}' "$@"
         // the slow candidate, so the regression fails instead of hanging forever.
         releaseTimer=setTimeout(()=>writeFile(releaseMarker,'release').catch(()=>{}),15000);
       }
-      if(beforeResult) await beforeResult({root,run,contract,gitClient});
+      const workerOverride=beforeResult?await beforeResult({root,run,contract,gitClient}):null;
       if(stoppedProof) await options.onExecution({...receipt,status:'stopped'});
       active--;events.push(`finish:${contract.nodeId}`);
-      return {version:1,status:'success',output:{summary:workerChecksPending ? 'Implementation complete. Worker checks were denied; verification is pending the trusted host.' : 'Complete',evidence:[...contract.evidence]},usage:{tokens:10,costUsd:0}};
+      return workerOverride??{version:1,status:correctionCheckpoint&&contract.nodeId.startsWith('fix-')&&contract.session.generation===1?'checkpoint':'success',output:{summary:workerChecksPending ? 'Implementation complete. Worker checks were denied; verification is pending the trusted host.' : 'Complete',evidence:[...contract.evidence]},usage:{tokens:10,costUsd:0}};
     }})});
   const cancellationController=new AbortController();
   let cancellationError;
@@ -1025,7 +1027,7 @@ exec '${executableGit}' "$@"
   await cancellation;
   if(cancellationError)throw cancellationError;
   const accepted=await createAcceptedIntegrationStore(await acceptedIntegrationPaths(await resolveFeatureRunPaths(root,run.runId))).readOnly();
-  return {result,accepted,root,run,gitClient,maximum,bases,events,launches,baselineCommit,gateLog};
+  return {result,accepted,root,run,gitClient,maximum,bases,events,launches,baselineCommit,gateLog,executor};
 }
 
 test('explicit adapter workers overlap and both same-base siblings are verified and accepted',async t=>{
@@ -1070,7 +1072,7 @@ test('explicit adapter starts accepted fast dependency before slow sibling finis
 });
 
 test('explicit adapter refuses failed candidate quality without accepting a worker',async t=>{
-  const fixture=await parallelFixture(t,{failure:true});
+  const fixture=await parallelFixture(t,{failure:'fast'});
   assert.match(await readFile(fixture.gateLog,'utf8'),/candidate-worker-/);
   assert.equal(fixture.result.status,'blocked');
   assert.equal(fixture.accepted,null);
@@ -1124,4 +1126,155 @@ test('explicit adapter cancellation stops the waiter during slow checkout withou
   assert.equal(fixture.accepted,null);
   assert.equal(fixture.maximum,0);
   assert.equal(await fixture.gitClient.branchTip(fixture.root,'worker/parallel-run/slow'),null);
+});
+
+function passingTaskReport(context) {
+ return {...context.reportTemplate,status:'PASS',blocking:false,findings:[],filesReviewed:context.subject.changedPaths,
+  checkedAt:new Date().toISOString(),commandsExecuted:[],coverage:context.subject.acceptanceCriteria.map((_,index)=>({criterionIndex:index+1,
+  planNodeIds:context.subject.criterionPlanNodeIds[index],paths:context.subject.changedPaths,evidence:[{kind:'manual',reference:'supplied-diff',summary:'Inspected criterion implementation in the exact supplied revision.'}]}))};
+}
+test('automatic independent review corrects in original scope and re-reviews exact accepted revision',async t=>{
+ const reviews=[];
+ const fixture=await parallelFixture(t,{correctionCheckpoint:true,reviewClientFor:async(kind,options)=>{
+  assert.equal(options.executionSelection.classification,'independent-review');
+  return {review:async({context})=>{reviews.push(context);assert.equal(context.trustedVerification.commitSha,context.subject.headSha);assert.equal(context.trustedVerification.status,'pass');assert.ok(context.trustedVerification.gates.every(g=>g.status==='passed'));const report=passingTaskReport(context);report.checkedAt='2099-01-01T00:00:00.000Z';
+   if(reviews.length===1){report.status='FAIL';report.blocking=true;report.findings=[{kind:'missing',summary:'Handle empty input',blocking:true,paths:['app/fast.txt']}];}
+   return {report,question:null,usage:{tokens:20,costUsd:0.01}};}};
+ }});
+ assert.equal(fixture.result.status,'awaiting-final-approval',fixture.result.summary);
+ assert.equal(reviews.length,2);
+ assert.notEqual(reviews[0].reportTemplate.actorId,reviews[1].reportTemplate.actorId);
+ assert.notEqual(reviews[0].subject.headSha,reviews[1].subject.headSha);
+ assert.equal(reviews[1].subject.headSha,fixture.accepted.commitSha);
+ assert.equal(reviews[1].reportTemplate.round,2);
+ assert.equal(fixture.launches.length,4);
+ const {createHostExecution}=await import('../../src/feature/host-execution.js');
+ const status=await createHostExecution({gitClient:fixture.gitClient,now:()=>NOW}).status({project:fixture.root,runId:fixture.run.runId});
+ assert.equal(status.workerCheckouts.length,3);
+ assert.deepEqual(fixture.launches[2].ownedPaths,['app/fast.txt']);
+ assert.match(fixture.launches[2].objective,/Handle empty input/);
+ const resumed=await fixture.executor({project:fixture.root,run:fixture.run});
+ assert.equal(resumed.status,'awaiting-final-approval',resumed.summary);
+ assert.equal(reviews.length,2);
+});
+
+test('automatic review failures retain unknown launch and do not relaunch on resume',async t=>{
+ let calls=0,failedContext;
+ const fixture=await parallelFixture(t,{reviewClientFor:async()=>({review:async({context})=>{calls++;failedContext=context;throw new Error('provider failed');}})});
+ assert.equal(fixture.result.status,'blocked');
+ const {taskGovernance}=await import('../../src/feature/governance.js');
+ await taskGovernance({project:fixture.root,runId:fixture.run.runId,gitClient:fixture.gitClient,operation:'review-submit',phase:'final',input:passingTaskReport(failedContext)});
+ const resumed=await fixture.executor({project:fixture.root,run:fixture.run});
+ assert.equal(resumed.status,'blocked');assert.match(resumed.summary,/unknown outcome/);assert.equal(calls,1);
+});
+
+const productQuestion={id:'output-format',title:'Which output format should be used?',options:[{id:'json',description:'JSON object'},{id:'text',description:'Plain text'}],choice:'json',rationale:'The approved request does not specify the product format.'};
+test('review product question waits across resume and carries the human answer',async t=>{
+ let calls=0;
+ const fixture=await parallelFixture(t,{reviewClientFor:async()=>({review:async({context})=>{
+  calls++;if(calls===1)return {report:null,question:productQuestion,usage:{tokens:10,costUsd:0}};
+  assert.equal(context.decisions[0].approval.choice,'text');
+  return {report:passingTaskReport(context),question:null,usage:{tokens:10,costUsd:0}};
+ }})});
+ assert.equal(fixture.result.status,'blocked');assert.match(fixture.result.summary,/Product question/);
+ const before=await fixture.executor({project:fixture.root,run:fixture.run}).catch(()=>({status:'blocked'}));
+ assert.equal(before.status,'blocked');assert.equal(calls,1);
+ const {taskGovernance}=await import('../../src/feature/governance.js');
+ await taskGovernance({project:fixture.root,runId:fixture.run.runId,gitClient:fixture.gitClient,operation:'approve-decision',decisionId:(await taskGovernance({project:fixture.root,runId:fixture.run.runId,gitClient:fixture.gitClient,operation:'decisions'})).decisions[0].id,confirm:async()=> 'text',now:()=>NOW});
+ const resumed=await fixture.executor({project:fixture.root,run:fixture.run});
+ assert.equal(resumed.status,'awaiting-final-approval',resumed.summary);assert.equal(calls,2);
+});
+test('parallel implementation question preserves peers and resumes with full human answer',async t=>{
+ let questions=0;
+ const fixture=await parallelFixture(t,{beforeResult:async({contract})=>{
+  if(contract.nodeId==='fast'&&questions++===0)return {version:1,status:'blocked',output:{summary:'Need product input',evidence:[],question:productQuestion},usage:{tokens:10,costUsd:0}};
+  if(contract.nodeId==='fast'){assert.match(contract.objective,/Plain text/);assert.match(contract.objective,/"answer":"text"/);}
+ }});
+ assert.equal(fixture.result.status,'blocked');
+ const {taskGovernance}=await import('../../src/feature/governance.js');
+ await taskGovernance({project:fixture.root,runId:fixture.run.runId,gitClient:fixture.gitClient,operation:'approve-decision',decisionId:(await taskGovernance({project:fixture.root,runId:fixture.run.runId,gitClient:fixture.gitClient,operation:'decisions'})).decisions[0].id,confirm:async()=> 'text',now:()=>NOW});
+ const resumed=await fixture.executor({project:fixture.root,run:fixture.run});
+ assert.equal(resumed.status,'awaiting-final-approval',resumed.summary);
+});
+
+test('automatic review stops at configured round cap without extra corrections',async t=>{
+ const heads=[];
+ const fixture=await parallelFixture(t,{reviewClientFor:async()=>({review:async({context})=>{
+  heads.push(context.subject.headSha);
+  return {question:null,usage:{tokens:10,costUsd:0},report:{...passingTaskReport(context),status:'FAIL',blocking:true,findings:[{kind:'general',summary:'Still missing empty-input handling',blocking:true,paths:['app/fast.txt']}]}};
+ }})});
+ assert.equal(fixture.result.status,'blocked');assert.match(fixture.result.summary,/round limit/);
+ assert.equal(heads.length,3);assert.equal(new Set(heads).size,3);assert.equal(fixture.launches.length,4);
+ const resumed=await fixture.executor({project:fixture.root,run:fixture.run});
+ assert.equal(resumed.status,'blocked');assert.equal(heads.length,3);
+});
+
+test('automatic review rejects stale identities and persists usage overruns',async t=>{
+ for(const mode of ['stale','overrun'])await t.test(mode,async t=>{
+  const fixture=await parallelFixture(t,{reviewClientFor:async()=>({review:async({context,allocation})=>({question:null,usage:{tokens:mode==='overrun'?allocation.tokenLimit+10:10,costUsd:0},report:{...passingTaskReport(context),...(mode==='stale'?{headSha:'f'.repeat(40)}:{})}})})});
+  assert.equal(fixture.result.status,'blocked');
+  const runtime=createRuntimeInstance({id:fixture.run.runId,paths:await resolveStatePaths(fixture.root,fixture.run.runId),initialState:{version:0}});
+  const lock=await runtime.acquire();let state;try{state=await runtime.read();}finally{await lock.release();}
+  if(mode==='overrun'){assert.equal(state.terminal,'budget-exhausted');assert.equal(Object.values(state.reviewCalls)[0].status,'over-budget');assert.ok(state.usage.tokens>8000);}
+  else assert.equal(Object.values(state.reviewCalls)[0].status,'pending');
+ });
+});
+
+test('parallel identical question IDs remain separately answerable and both workers resume',async t=>{
+ const asked=new Set();
+ const fixture=await parallelFixture(t,{beforeResult:async({contract})=>{
+  if(!asked.has(contract.nodeId)){asked.add(contract.nodeId);return {version:1,status:'blocked',output:{summary:'Need human input',evidence:[],question:productQuestion},usage:{tokens:10,costUsd:0}};}
+ }});
+ const {taskGovernance}=await import('../../src/feature/governance.js');
+ const questions=(await taskGovernance({project:fixture.root,runId:fixture.run.runId,gitClient:fixture.gitClient,operation:'decisions'})).decisions;
+ assert.equal(questions.length,2);assert.notEqual(questions[0].id,questions[1].id);
+ for(const question of questions)await taskGovernance({project:fixture.root,runId:fixture.run.runId,gitClient:fixture.gitClient,operation:'approve-decision',decisionId:question.id,confirm:async()=> 'text',now:()=>NOW});
+ const resumed=await fixture.executor({project:fixture.root,run:fixture.run});
+ assert.equal(resumed.status,'awaiting-final-approval',resumed.summary);
+});
+
+test('legacy saved approval never silently enables new model review calls',async t=>{
+ let reviews=0;
+ const fixture=await parallelFixture(t,{approvedAutomaticReview:false,reviewClientFor:async()=>{reviews++;throw new Error('Unexpected new delegation');}});
+ assert.equal(fixture.result.status,'awaiting-final-approval',fixture.result.summary);assert.equal(reviews,0);
+});
+
+test('decision changing during review invalidates the in-flight report',async t=>{
+ const fixture=await parallelFixture(t,{reviewClientFor:async(_kind,{project})=>({review:async({context})=>{
+  const {taskGovernance}=await import('../../src/feature/governance.js');
+  const gitClient=await createGitClient({gitExecutable:await gitExecutable()});
+  await taskGovernance({project,runId:context.subject.runId,gitClient,operation:'decide',input:{...productQuestion,tier:2},now:()=>NOW});
+  await taskGovernance({project,runId:context.subject.runId,gitClient,operation:'approve-decision',decisionId:productQuestion.id,confirm:async()=> 'text',now:()=>NOW});
+  return {report:passingTaskReport(context),question:null,usage:{tokens:10,costUsd:0}};
+ }})});
+ assert.equal(fixture.result.status,'blocked');assert.match(fixture.result.summary,/changed while the reviewer/);
+});
+
+
+test('multiple review corrections share the post-review parent budget and both complete',async t=>{
+ let reviews=0;
+ const fixture=await parallelFixture(t,{tightReviewBudget:true,reviewClientFor:async()=>({review:async({context})=>{
+  const report=passingTaskReport(context);
+  if(++reviews===1){report.status='FAIL';report.blocking=true;report.findings=[{kind:'general',summary:'Correct both approved outputs',blocking:true,paths:[]}];}
+  return {report,question:null,usage:{tokens:10,costUsd:0}};
+ }})});
+ assert.equal(fixture.result.status,'awaiting-final-approval',fixture.result.summary);
+ assert.equal(reviews,2);assert.equal(fixture.launches.filter(c=>c.nodeId.startsWith('fix-')).length,2);
+});
+
+test('failed host checks survive resume and give the worker bounded actionable feedback',async t=>{
+ const fixture=await parallelFixture(t,{failure:'fast'});
+ assert.match(fixture.result.summary,/Host checks failed/);
+ const {resolveStatePaths}=await import('../../src/state/paths.js');
+ const {inspectFeatureRuntime}=await import('../../src/feature/runtime-bridge.js');
+ const paths=await resolveStatePaths(fixture.root,fixture.run.runId);
+ const instance=createRuntimeInstance({id:fixture.run.runId,paths,initialState:{version:0}});
+ const state=await inspectFeatureRuntime(instance);
+ assert.ok(Object.keys(state.nodeCheckFailures).length>0);
+ // The gate is outside the repository; allow the next verification to pass.
+ await writeFile(join(dirname(fixture.root),'gate'),'#!/bin/sh\nexit 0\n',{mode:0o700});
+ const resumed=await fixture.executor({project:fixture.root,run:fixture.run});
+ assert.equal(resumed.status,'awaiting-final-approval',resumed.summary);
+ assert.ok(fixture.launches.slice(2).some(c=>c.objective.includes('Prior failed host checks')));
+ assert.deepEqual(Object.keys((await inspectFeatureRuntime(instance)).nodeCheckFailures),[]);
 });

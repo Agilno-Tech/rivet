@@ -1,9 +1,10 @@
+import {productQuestionSchema} from '../feature/product-question.js';
 import { immutableJson } from './contract.js';
 
 const AGENT_RESULT_CONTRACT = immutableJson({
   version: 1,
   kind: 'agilno.agent-result',
-  framing: 'Emit exactly one JSON object matching this result schema on stdout. Emit no Markdown or commentary. For a successful result, output.evidence must contain exactly the evidence identifiers declared by the launch contract, with no invented or omitted identifiers.',
+  framing: 'Emit exactly one JSON object matching this result schema on stdout. Emit no Markdown or commentary. For a successful result, output.evidence must contain exactly the evidence identifiers declared by the launch contract, with no invented or omitted identifiers. If a product decision blocks progress, return blocked with output.question and wait for the human answer. Its choice is a recommendation only; never decide it yourself.',
   schema: {
     $schema: 'http://json-schema.org/draft-07/schema#',
     title: 'agilno.agent-result',
@@ -18,6 +19,7 @@ const AGENT_RESULT_CONTRACT = immutableJson({
         additionalProperties: false,
         required: ['summary', 'evidence'],
         properties: {
+          question: productQuestionSchema,
           summary: { type: 'string', minLength: 1, maxLength: 16_384 },
           evidence: {
             type: 'array',

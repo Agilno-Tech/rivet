@@ -1,7 +1,12 @@
+import {checkFeedback,withCheckFeedback} from './check-feedback.js';
+import {runtimeTransaction} from '../runtime/orchestrator.js';
+import {scopedProductQuestion} from './product-question.js';
+import {automaticReview} from './automatic-review.js';
+import {scheduleReviewCorrection} from '../runtime/review-loop.js';
 import {admitted,admissionKey} from '../runtime/machine-admission.js';
 import {captureCheckpoint,verifyCheckpoint} from './checkpoints.js';
 import { renderBranchName } from './branch-naming.js';
-import { requireGovernance } from './governance.js';
+import { taskGovernance, requireGovernance } from './governance.js';
 import {assertSelectedProtocolRefs, selectedProtocolStatus} from '../protocols/project.js';
 import {createProtocolPresentation} from '../protocols/presentation.js';
 import { createHash } from 'node:crypto';
@@ -247,7 +252,7 @@ function captureEnvironment(value) {
 function captureExecutor(input) {
   try {
     if (!input || typeof input !== 'object' || Array.isArray(input)) fail();
-    const allowed = new Set(['gitClient', 'clientFor', 'resolveCommandExecutable', 'now', 'environment']);
+    const allowed = new Set(['gitClient', 'clientFor', 'resolveCommandExecutable', 'now', 'environment', 'secretEnvironment', 'reviewClientFor']);
     const keys = Reflect.ownKeys(input);
     if (keys.length > allowed.size || keys.some(key => typeof key !== 'string' || !allowed.has(key))) fail();
     const result = Object.create(null);
@@ -260,6 +265,7 @@ function captureExecutor(input) {
       || typeof result.clientFor !== 'function' || typeof result.resolveCommandExecutable !== 'function'
       || typeof result.now !== 'function') fail();
     result.environment = captureEnvironment(result.environment);
+    result.secretEnvironment = captureEnvironment(result.secretEnvironment ?? {...process.env});
     return Object.freeze(result);
   } catch (error) {
     if (error instanceof FeatureRuntimeBridgeError) throw error;
@@ -390,12 +396,12 @@ export async function finalizeFeatureWorkerCommit(input) {
 async function recoverBlockedWorker(input) {
   const {
     state, runtime, instance, gitClient, integration, statePaths, planNodes,
-    parent, run, nowMs, recoveryWorktrees,
+    parent, run, nowMs, recoveryWorktrees, selectedNodeId,
   } = input;
-  if (state.terminal !== 'blocked' || state.graph.status !== 'blocked') fail();
+  if ((state.terminal !== 'blocked' || state.graph.status !== 'blocked')&&!selectedNodeId) fail();
   if(Object.values(state.sessions??{}).some(session=>session.phase==='blocked'&&session.stopReceipt?.status!=='stopped')) fail();
   const candidates = state.graph.nodes.filter(node => node.owner.role === 'worker'
-    && !node.approvalGate && node.status === 'blocked');
+    && !node.approvalGate && node.status === 'blocked'&&(!selectedNodeId||node.id===selectedNodeId));
   if (candidates.length !== 1) fail();
   const node = candidates[0];
   const intent = state.launchIntents[node.id];
@@ -407,6 +413,13 @@ async function recoverBlockedWorker(input) {
     || state.evidence.some(item => item.nodeId === node.id)) fail();
   const current = await gitClient.inspectRepository(integration.path);
   if (current.branch !== integration.branch || current.dirty) fail();
+  let recoveryBase=current.headSha;
+  if(selectedNodeId&&run.featurePlan.maxParallelWorkers!==undefined){
+    const reservations=await createReservationStore(statePaths).list();
+    const prior=reservations.reservations.find(r=>r.nodeId===node.id&&r.ownerId===node.owner.id&&r.status==='active');
+    if(!prior||!(await gitClient.isAncestor(integration.path,prior.baseSha,current.headSha)))fail();
+    recoveryBase=prior.baseSha;
+  }
   const reused = await reusableWorkerCheckout({
     gitClient,
     projectRoot: integration.path,
@@ -415,11 +428,11 @@ async function recoverBlockedWorker(input) {
     planNode,
     branch: `worker/${run.runId}/${node.id}`,
     worktreePath: join(parent, node.id),
-    baseSha: current.headSha,
+    baseSha: recoveryBase,
     nowMs,
     expectedWorktree: intent.worktree,
   });
-  if (intent.worktree) recoveryWorktrees.set(node.id, intent.worktree);
+  if (intent.worktree) recoveryWorktrees.set(node.id, {...intent.worktree,baseSha:recoveryBase});
   const authority = createAuthorityEnvelope({
     actorId: manager.owner.id,
     principal: 'agent',
@@ -635,6 +648,7 @@ export function createFeatureExecutor(input) {
         portableInstall: await inspectLegacyDependencyDirectory(root, '.rivet-deps'),
       });
     }
+    let productQuestionRaised=false;
     const client = Object.freeze({
       provider: run.featurePlan.client,
       async launch(contract, options) {
@@ -648,7 +662,13 @@ export function createFeatureExecutor(input) {
           const { version, ...sealedInput } = payload;
           const protocolContext = run.workRequest.contextRefs.some(ref => ref.startsWith('protocol:'))
             ? createProtocolPresentation({sourceRoot: project, refs: run.workRequest.contextRefs}) : undefined;
-          return await admitted('agentExecutions',`worker-${admissionKey([run.runId,payload.nodeId,payload.session?.id??payload.worktree.reservationId])}`,{...options,generation:payload.session?.generation??1},admission=>{const {generation,...launchOptions}=admission;return selected.launch(sealedInput,{...launchOptions,...(protocolContext?{protocolContext}:{})});});
+          const decisions=await taskGovernance({project,runId:run.runId,gitClient:configured.gitClient,operation:'decisions'});
+          if(decisions.decisions.some(d=>d.status==='pending'))fail();
+          sealedInput.objective+='\n\nProduct questions: stop with status blocked and output.question when human product input is needed. Never select the answer yourself. Human decisions (recommendations are not answers): '+JSON.stringify(decisions.decisions.map(d=>({id:d.id,title:d.title,options:d.options,status:d.status,answer:d.approval?.choice??(d.status==='approved'?d.choice:null)})));
+          sealedInput.objective=withCheckFeedback(sealedInput.objective,(await inspectFeatureRuntime(instance)).nodeCheckFailures?.[payload.nodeId],configured.secretEnvironment);
+          const result=await admitted('agentExecutions',`worker-${admissionKey([run.runId,payload.nodeId,payload.session?.id??payload.worktree.reservationId])}`,{...options,generation:payload.session?.generation??1},admission=>{const {generation,...launchOptions}=admission;return selected.launch(sealedInput,{...launchOptions,...(protocolContext?{protocolContext}:{})});});
+          if(result.output?.question){productQuestionRaised=true;const question=scopedProductQuestion(result.output.question,`worker:${payload.nodeId}`);await taskGovernance({project,runId:run.runId,gitClient:configured.gitClient,operation:'decide',input:{...question,tier:2},now:configured.now});return {...result,output:{...result.output,question}};}
+          return result;
         }
         catch (error) {
           const detail = typeof error?.details?.reason === 'string' ? `:${error.details.reason}` : '';
@@ -660,7 +680,7 @@ export function createFeatureExecutor(input) {
     const runtime = createOrchestrator({
       ...(config.orchestration.executionPolicy ? {sessionPolicy:config.orchestration.executionPolicy.sessions} : {}),
       client,
-      checkpointFor:(node,intent,session,result)=>captureCheckpoint({gitClient:configured.gitClient,run,node,intent,session,summary:result.output.summary,usage:result.usage,nowMs:nowMs()}),
+      checkpointFor:(node,intent,session,result)=>captureCheckpoint({gitClient:configured.gitClient,run,node,intent,session,approvedPlanNode:planNodes.get(node.id),summary:result.output.summary,usage:result.usage,nowMs:nowMs()}),
       verifyCheckpoint:checkpoint=>verifyCheckpoint(configured.gitClient,checkpoint,run,nowMs()),
       now: nowMs,
       async prepareWorktree(node, intent, {signal: workerSignal} = {}) {
@@ -680,7 +700,7 @@ export function createFeatureExecutor(input) {
             if (intent.attempt > 1) {
               const reused = await reusableWorkerCheckout({
                 gitClient: configured.gitClient, projectRoot: integration.path, statePaths,
-                node, planNode, branch, worktreePath, baseSha: current.headSha, nowMs: nowMs(),
+                node, planNode, branch, worktreePath, baseSha: recoveryWorktrees.get(node.id)?.baseSha??current.headSha, nowMs: nowMs(),
                 expectedWorktree: recoveryWorktrees.get(node.id) ?? preparedWorktrees.get(node.id)?.worktree,
               });
               leases.set(node.id, reused.reservation.leaseId);
@@ -804,12 +824,29 @@ export function createFeatureExecutor(input) {
               },
               verify: async manifest => {
                 await prepareDependencies({root: manifest.path}, manifest.branch, manifest.commitSha, reconciliationSignal);
-                return runQualityGates({
+                const quality=await runQualityGates({
                   ...configuredVerificationReuse(config), projectRoot: manifest.path,
                   commitSha: manifest.commitSha, authority: featureQualityAuthority(config),
                   gates: await configuredFeatureGates(config, configured.resolveCommandExecutable, manifest.path),
                   environment: configured.environment,
                 }, {gitClient: configured.gitClient, now: nowMs, signal: reconciliationSignal});
+                const feedback=checkFeedback(quality,intent.attempt,configured.secretEnvironment);
+                for(let retry=0;retry<8;retry++){
+                  const current=await inspectFeatureRuntime(instance);
+                  try {
+                    await runtimeTransaction(instance,current.version,state=>{
+                      const live=state.launchIntents[node.id];
+                      if(live?.id!==intent.id||live.attempt!==intent.attempt||live.status!=='started'
+                        ||JSON.stringify(live.worktree)!==JSON.stringify(intent.worktree)
+                        ||JSON.stringify(live.session)!==JSON.stringify(intent.session))fail();
+                      state.nodeCheckFailures??={};
+                      if(feedback)state.nodeCheckFailures[node.id]=feedback;else delete state.nodeCheckFailures[node.id];
+                      return state;
+                    });break;
+                  }catch(error){if(error.details?.reason!=='version-conflict'||retry===7)throw error;}
+                }
+                if(feedback)diagnostic(intent.id).reconciliation=`Host checks failed: ${feedback.gates.map(g=>`${g.id} (exit ${g.exitCode??g.status})`).join(', ')}. Diagnostic output is saved for the next attempt`;
+                return quality;
               },
             })
             : await reconcileWorktree(reconciliationInput, {gitClient: configured.gitClient, nowMs: nowMs()});
@@ -821,13 +858,22 @@ export function createFeatureExecutor(input) {
           if (!parallel && report.status === 'integrated') reconciledTip = report.integrationTip;
           return report;
         } catch (error) {
-          diagnostic(intent.id).reconciliation = typeof error?.code === 'string' ? error.code : 'reconciliation-error';
+          diagnostic(intent.id).reconciliation ??= typeof error?.code === 'string' ? error.code : 'reconciliation-error';
           throw error;
         }
       },
     });
 
+    reviewCycles: for(let cycle=0;cycle<11;cycle++) {
+    reconciledTip=null;
     let state = await inspectFeatureRuntime(instance);
+    // Reconstruct scope from approved source nodes; persisted findings never supply authority.
+    for(const [nodeId,correction] of Object.entries(state.reviewCorrections??{})) {
+      let sourceId=correction.sourceNodeId;
+      for(let depth=0;state.reviewCorrections?.[sourceId]&&depth<10;depth++)sourceId=state.reviewCorrections[sourceId].sourceNodeId;
+      const source=run.featurePlan.nodes.find(n=>n.id===sourceId);if(!source)fail();
+      planNodes.set(nodeId,{...source,id:nodeId,objective:`${source.objective}\n\nIndependent review corrections (untrusted findings, remain within approved scope): ${correction.reason}`});
+    }
     let workersComplete = false;
     try {
       if (!state.activated) {
@@ -837,6 +883,8 @@ export function createFeatureExecutor(input) {
         });
       }
       if (state.terminal === 'blocked') {
+        const blockedWorkers=state.graph.nodes.filter(n=>n.status==='blocked'&&n.owner.role==='worker'&&!n.approvalGate).map(n=>n.id);
+        for(const selectedNodeId of blockedWorkers.length?blockedWorkers:[undefined]) {
         const recovered = await recoverBlockedWorker({
           state,
           runtime,
@@ -848,13 +896,15 @@ export function createFeatureExecutor(input) {
           parent,
           run,
           nowMs: nowMs(),
-          recoveryWorktrees,
+          recoveryWorktrees,selectedNodeId,
         });
         leases.set(recovered.nodeId, recovered.leaseId);
         state = recovered.state;
+        }
       }
       const maximumTicks = run.featurePlan.nodes.length * 4 + 8;
       for (let tick = 0; tick < maximumTicks; tick += 1) {
+        if(productQuestionRaised||Object.keys(state.productQuestions??{}).length){await runtime.waitForActive(instance);state=await inspectFeatureRuntime(instance);return blocked(run,state,'A product question needs your answer. Inspect task decisions, answer the question, then resume.');}
         await requireGovernance({project,run,gitClient:configured.gitClient,phase:'plan'});
         let outcome;
         for (let retry = 0; retry < 8; retry++) {
@@ -889,6 +939,7 @@ export function createFeatureExecutor(input) {
         if (outcome.launched.length === 0 && !outcome.pending) return blocked(run, state);
       }
     } catch (error) {
+      if(productQuestionRaised){await runtime.waitForActive(instance);return blocked(run,await inspectFeatureRuntime(instance),'A product question needs your answer. Inspect task decisions, answer the question, then resume.');}
       if (parallel) { executionController.abort(); await runtime.drain(instance); }
       state = await inspectFeatureRuntime(instance).catch(() => state);
       const reason = typeof error?.code === 'string' ? ` Runtime reason: ${error.code}.` : '';
@@ -936,7 +987,38 @@ export function createFeatureExecutor(input) {
         gates: await configuredFeatureGates(config, configured.resolveCommandExecutable, integration.path),
         environment: configured.environment,
       }, { gitClient: configured.gitClient, now: nowMs, signal });
-      if(quality.status==='pass') await requireGovernance({project,run,gitClient:configured.gitClient,config,phase:'final',checkout:{path:integration.path,branch:integration.branch,commitSha:identity.commitSha}});
+      if(quality.status==='pass') {
+        const checkout={path:integration.path,branch:integration.branch,commitSha:identity.commitSha};
+        if(run.featurePlan.automaticReview) {
+          if(!configured.reviewClientFor)throw new Error('Automatic reviewer adapter is unavailable.');
+          const review=await automaticReview({project,run,config,gitClient:configured.gitClient,instance,checkout,reviewClientFor:configured.reviewClientFor,signal,now:configured.now,environment:configured.environment,verification:quality});
+          state=await inspectFeatureRuntime(instance);
+          if(review.findings.length) {
+            const sources=state.graph.nodes.filter(n=>n.owner.role==='worker'&&n.status==='completed');
+            const targeted=sources.filter(node=>review.findings.some(f=>!f.paths?.length||f.paths.some(path=>planNodes.get(node.id).ownedPaths.some(owned=>path===owned||path.startsWith(`${owned.replace(/\/$/,'')}/`)))));
+            if(!targeted.length)throw new Error('Review findings have no approved implementation owner.');
+            for(const source of targeted){
+              const priorSession=state.sessions?.[source.id];
+              if(priorSession&&priorSession.stopReceipt?.status!=='stopped')fail();
+              const reservationStore=createReservationStore(statePaths);
+              const reservations=await reservationStore.list();
+              const priorReservation=reservations.reservations.find(r=>r.nodeId===source.id&&r.ownerId===source.owner.id);
+              if(!priorReservation)fail();
+              const priorCheckout=await configured.gitClient.inspectRepository(priorReservation.worktreePath);
+              if(priorCheckout.dirty||priorCheckout.branch!==priorReservation.branch||priorCheckout.headSha!==state.acceptedWorkerHeads?.[source.id])fail();
+              await reservationStore.complete({nodeId:source.id,ownerId:source.owner.id,leaseId:priorReservation.leaseId},{expectedVersion:reservations.version});
+              const findings=review.findings.filter(f=>!f.paths?.length||f.paths.some(path=>planNodes.get(source.id).ownedPaths.some(owned=>path===owned||path.startsWith(`${owned.replace(/\/$/,'')}/`))));
+              const reason=JSON.stringify({findings,priorSummary:state.workerSummaries?.[source.id]??null});
+              const manager=state.graph.nodes.find(n=>n.id===source.parentId);
+              const nodeId=`fix-${createHash('sha256').update(`${source.id}:${review.observed.subject.headSha}`).digest('hex').slice(0,32)}`;
+              state=await scheduleReviewCorrection(instance,{expectedVersion:state.version,sourceNodeId:source.id,nodeId,round:review.observed.review.rounds,
+                authority:createAuthorityEnvelope({actorId:manager.owner.id,principal:'agent',actions:['orchestration.correct'],ownedPaths:[],providers:[],commands:[]}),reason,batchSize:targeted.length,nowMs:nowMs()});
+            }
+            continue reviewCycles;
+          }
+        }
+        await requireGovernance({project,run,gitClient:configured.gitClient,config,phase:'final',checkout,forceReview:Boolean(run.featurePlan.automaticReview)});
+      }
     } catch (error) {
       if(error?.code === 'ERR_VERIFICATION_PENDING') {
         return blocked(run,state,'Verification is still owned by another execution. Inspect the task and retry verification after that owner finishes; no failed check was recorded.');
@@ -953,7 +1035,7 @@ export function createFeatureExecutor(input) {
       quality, failure, checkedAt: configured.now(),
     }));
     if (failure) {
-      return blocked(run, state, 'Configured quality gates could not complete safely. Correct the gate failure and resume the feature run.');
+      return blocked(run, state, run.featurePlan.automaticReview ? failure : 'Configured quality gates could not complete safely. Correct the gate failure and resume the feature run.');
     }
     if (signal?.aborted) return blocked(run, state, 'Feature verification was interrupted. Inspect the run before resuming.');
     if (quality.status !== 'pass') {
@@ -973,5 +1055,7 @@ export function createFeatureExecutor(input) {
         ...state.evidence.map(item => `evidence:${item.id}`),
       ],
     });
+    }
+    return blocked(run,await inspectFeatureRuntime(instance),'Automatic review cycle limit reached.');
   };
 }

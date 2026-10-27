@@ -267,7 +267,7 @@ test('real CLI completes host work, reports failed checks, and stops at human re
       `--expected-version=${prepared.run.version}`,
       `--expected-runtime-version=${submitted.runtimeVersion}`]);
   } catch (error) { verificationError = error; }
-  assert.equal(verificationError?.code, EXIT_CODES.FAILED_GATE);
+  assert.equal(verificationError?.code, EXIT_CODES.FAILED_GATE, verificationError?.stderr);
   assert.equal(JSON.parse(verificationError.stderr).error.code, 'FAILED_GATE');
   const failed = await cli(['work', 'status', proposal.runId, `--project=${root}`]);
   assert.equal(failed.run.status, 'running');

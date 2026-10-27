@@ -1,3 +1,4 @@
+import {continueAfterQuestions} from './task-questions.js';
 import { executionForNode } from '../feature/client-profile.js';
 import {taskAllowance,requireManagedAllowance} from '../runtime/task-orchestration.js';
 import { taskState } from '../cli/task-presentation.js';
@@ -98,6 +99,7 @@ function reviewLines(project, task, harness, proposal, details = false) {
     if (node.budget) lines.push(details ? `    budget: ${JSON.stringify(node.budget)}` : `    limits: ${Object.entries(node.budget).map(([key,value])=>key==='timeMinutes'?`${value} min`:key==='tokenLimit'?`${value} tokens`:key==='costUsd'?`$${value}`:key==='taskLimit'?`${value} tasks`:`${key}: ${JSON.stringify(value)}`).join('; ')}`);
     if (node.approvalGate) lines.push(`    human gate: ${node.approvalGate}`);
   }
+  if(plan.automaticReview)lines.push('After implementation: fresh independent review, bounded corrections within original worker scope and remaining budgets, then re-review of the corrected revision. Review calls reserve up to 64000 tokens, $1 and 2 minutes from the manager allowance; product questions wait for your answer.');
   lines.push('Activation and final review share the Boss allowance; those repeated limits are not added together.');
   if (!details) lines.push('Use --details when starting or resuming to include full graph identifiers.');
   lines.push('Required checks:');
@@ -222,9 +224,10 @@ export async function activateProposal(project, task, selected, proposal, depend
     project: project.root, runId: proposal.runId,
     expectedVersion: proposal.version, proposalDigest: proposal.proposalDigest,
   });
-  const result = await invokeFeature(feature, 'watch', {
+  let result = await invokeFeature(feature, 'watch', {
     project: project.root, runId: proposal.runId, expectedVersion: started.version,
   }, { signal, ...(allowanceMs===undefined?{}:{allowanceMs}), confirmDependencyInstall: confirmIsolatedDependencyInstall(dependencies, signal) });
+  result=await continueAfterQuestions(project,result,dependencies,{signal});
   dependencies.output.log(`Rivet task: ${taskState(result.status)}.`);
   if (result.summary) dependencies.output.log(visible(result.summary));
   dependencies.output.log('Use rivet task status to inspect the checkout and verification evidence.');

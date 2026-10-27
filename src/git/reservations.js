@@ -170,7 +170,7 @@ function validatePersistedReservation(value) {
     || value.schemaVersion !== 1 || !LEASE_ID.test(value.leaseId) || !ID.test(value.nodeId)
     || !BRANCH.test(value.branch) || typeof value.worktreePath !== 'string' || !isAbsolute(value.worktreePath)
     || resolve(value.worktreePath) !== value.worktreePath || !ID.test(value.ownerId) || !SHA.test(value.baseSha)
-    || !REPOSITORY_ID.test(value.repositoryId) || !['reserved', 'active'].includes(value.status)
+    || !REPOSITORY_ID.test(value.repositoryId) || !['reserved', 'active', 'completed'].includes(value.status)
     || value.cooperationBoundary !== 'cooperating-orchestrator-actors'
     || !Array.isArray(value.responsibilities) || !Array.isArray(value.intendedPaths)
     || !Number.isSafeInteger(expiryMs) || new Date(expiryMs).toISOString() !== value.expiresAt) fail('unsafe-state');
@@ -302,7 +302,7 @@ function collides(left, right) {
   return folded(left.nodeId) === folded(right.nodeId)
     || folded(left.branch) === folded(right.branch)
     || worktreeOverlap
-    || responsibilitiesOverlap(left.responsibilities, right.responsibilities);
+    || (left.status !== 'completed' && responsibilitiesOverlap(left.responsibilities, right.responsibilities));
 }
 
 function validateLeaseIdentity(value) {
@@ -395,6 +395,22 @@ export function createReservationStore(paths) {
         const next = { schemaVersion: 1, version: state.version + 1, reservations };
         await atomicWrite(paths, path, next);
         return Object.freeze({ version: next.version, reservation: active });
+      });
+    },
+
+    // Trusted orchestration calls this only after accepted integration and stopped-owner proof.
+    async complete(identityInput, options = {}) {
+      const identity=validateLeaseIdentity(identityInput);
+      const expectedVersion=operationOptions(options,false).expectedVersion;
+      return withLock(async()=>{
+        const state=await readState(path);
+        if(state.version!==expectedVersion)fail('state-version-conflict');
+        const found=state.reservations.find(item=>item.leaseId===identity.leaseId);
+        if(!found||found.nodeId!==identity.nodeId||found.ownerId!==identity.ownerId||!['active','completed'].includes(found.status))fail('lease-mismatch');
+        if(found.status==='completed')return {version:state.version,reservation:cloneReservation(found)};
+        const next={...state,version:state.version+1,reservations:state.reservations.map(item=>item===found?{...item,status:'completed'}:item)};
+        await atomicWrite(paths,path,next);
+        return {version:next.version,reservation:cloneReservation({...found,status:'completed'})};
       });
     },
 

@@ -115,6 +115,7 @@ function dependsOn(node, targetId, nodeMap) {
 function validatePlanSemantics(plan, { config, workRequest, baselineCommit, client }) {
   if (plan.baselineCommit !== baselineCommit || plan.workRequestDigest !== workRequest.digest || plan.client !== client
     || !matchesClientProfile(client, plan.clientProfile, config.project.claude)) fail();
+  if(client==='host'&&plan.automaticReview!==undefined)fail();
   if (client === 'host' && config.orchestration.roles.some(role => role.harness !== undefined)) fail();
   if (plan.branchNaming !== undefined) {
     let expected;

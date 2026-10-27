@@ -16,8 +16,8 @@ if (process.argv[2] === '--version') {
 
 if (process.argv.includes('--help')) {
   const options = provider === 'codex'
-    ? ['--ephemeral', '--ignore-user-config', '--color', '--sandbox']
-    : ['--print', '--input-format', '--output-format', '--no-session-persistence', '--strict-mcp-config', '--model', '--effort', '--permission-mode', '--tools', '--json-schema', '--max-budget-usd'];
+    ? ['--ephemeral', '--ignore-user-config', '--color', '--sandbox', '--ignore-rules', '--skip-git-repo-check', '--disable', '--config', '--output-schema']
+    : ['--print', '--input-format', '--output-format', '--no-session-persistence', '--strict-mcp-config', '--model', '--effort', '--permission-mode', '--tools', '--json-schema', '--max-budget-usd', '--safe-mode', '--mcp-config'];
   process.stdout.write(options.join('\n'));
   process.exit(0);
 }
@@ -31,7 +31,8 @@ const chunks = [];
 for await (const chunk of process.stdin) chunks.push(chunk);
 const payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
 const planning = payload.kind === 'agilno.feature-planning';
-const expectedMode = planning ? (provider === 'codex' ? 'read-only' : 'dontAsk')
+const reviewing=payload.kind==='rivet.task-review';
+const expectedMode = (planning||reviewing) ? (provider === 'codex' ? 'read-only' : 'dontAsk')
   : (provider === 'codex' ? 'workspace-write' : 'acceptEdits');
 if (mode !== expectedMode) process.exit(41);
 if (planning && provider === 'claude') {
@@ -39,6 +40,16 @@ if (planning && provider === 'claude') {
     || !args[args.indexOf('--json-schema') + 1]?.includes('agilno.feature-decomposition')) process.exit(45);
 }
 record({ provider, mode, kind: payload.kind, ...(provider === 'claude' ? {maxBudgetUsd: Number(args[args.indexOf('--max-budget-usd') + 1])} : {}) });
+
+if(reviewing){
+  if(provider==='claude'&&!args.includes('--tools='))process.exit(46);
+  if(provider==='codex'&&(!args.includes('shell_tool')||!args.includes('apps')))process.exit(46);
+  const context=payload.context;
+  const report={...context.reportTemplate,status:'PASS',blocking:false,findings:[],filesReviewed:context.subject.changedPaths,commandsExecuted:[],checkedAt:new Date().toISOString(),coverage:context.subject.acceptanceCriteria.map((_,index)=>({criterionIndex:index+1,planNodeIds:context.subject.criterionPlanNodeIds[index],paths:context.subject.changedPaths,evidence:[{kind:'manual',reference:'supplied-diff',summary:'Fixture reviewed the implementation diff.'}]}))};
+  const result={report,question:null,usage:{tokens:20,costUsd:0.01}};
+  process.stdout.write(JSON.stringify(provider==='claude'?{type:'result',subtype:'success',is_error:false,total_cost_usd:0.01,modelUsage:{'fixture-model':{inputTokens:10,outputTokens:10,cacheCreationInputTokens:0,cacheReadInputTokens:0}},structured_output:result}:result));
+  process.exit(0);
+}
 
 if (planning) {
   if (payload.resultContract?.kind !== 'agilno.feature-decomposition'

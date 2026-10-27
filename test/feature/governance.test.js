@@ -187,6 +187,9 @@ test('feature start enforces required plan review and pending decision before ac
  const pending=await f.call('decide',{input:decision(3)});
  await assert.rejects(f.workflow.start(startInput(f)),/decision-needs-human-approval/);
  await f.call('approve-decision',{decisionId:pending.id,confirm:async()=>true});
+ await assert.rejects(f.workflow.start(startInput(f)),/missing-review/);
+ const answered=await f.call('review',{phase:'plan'});
+ await f.call('review-submit',{phase:'plan',input:report(answered.subject,{round:2})});
  const activated=await f.workflow.start(startInput(f));assert.equal(activated.status,'approved');
  const host=createHostExecution({gitClient:f.gitClient});
  const status=await host.status({project:f.root,runId:f.run.runId});
@@ -284,4 +287,18 @@ test('a changed accepted head cannot reset the same phase review-round budget',a
  await assert.rejects(f.call('review-submit',{phase:'final',input:report(revised.subject,{round:1})}),/round|limit|escalat/i);
  assert.equal((await f.snapshot()).version,1,'Rejected reset must not append evidence');
  const status=await f.inspect({phase:'final'});assert.equal(status.ready,false);assert.equal(status.review.humanEscalation,true);
+});
+
+test('human answers invalidate previous review evidence even when Git revision is unchanged',async t=>{
+ const f=await fixture(t,{review:{required:true}});
+ const initial=await f.call('review',{phase:'plan'});
+ await f.call('review-submit',{phase:'plan',input:report(initial.subject)});
+ assert.equal((await f.inspect({phase:'plan'})).review.valid,true);
+ await f.call('decide',{input:decision(2,'product-answer')});
+ await f.call('approve-decision',{decisionId:'product-answer',confirm:async()=> 'text'});
+ const changed=await f.inspect({phase:'plan'});
+ assert.equal(changed.subject.headSha,initial.subject.headSha);
+ assert.notEqual(changed.subject.diffDigest,initial.subject.diffDigest);
+ assert.equal(changed.review.valid,false);
+ await assert.rejects(f.call('review-submit',{phase:'plan',input:report(initial.subject,{round:2})}));
 });

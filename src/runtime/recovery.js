@@ -60,6 +60,7 @@ export async function retryNode(instance, input, runtimeOptions = null) {
       if (!decision.retry || (state.usage?.retries ?? 0) >= (state.limits?.retries ?? 0)) fail('invalid-runtime-input');
       state.attempts[node.id] = decision.nextAttempt; state.usage.retries += 1; delayMs = decision.delayMs;
     } else retryBound(state, node);
+    if(state.productQuestions)delete state.productQuestions[node.id];
     delete state.heartbeats[node.id]; delete state.lastHeartbeatAt[node.id];
     if (['failed', 'blocked'].includes(node.status)) transitionRuntimeState(state, node, 'corrective', nowMs, node.owner);
     if (delayMs === 0) transitionRuntimeState(state, node, 'ready', nowMs, node.owner);

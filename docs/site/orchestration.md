@@ -30,7 +30,9 @@ Rivet reuses your saved model routing. Review the plan, acceptance criteria, pro
 Workers stay within the approved plan. Rivet checks their combined changes before accepting them. At final review, inspect the result and choose whether to apply it locally, begin [pull-request delivery](./delivery.md), or leave it saved for later.
 
 <span id="scope"></span>
-**Current scope:** Rivet executes the approved plan. It does not yet automatically launch independent reviews, send findings back for fixes, re-review, or follow a PR through CI. Choosing a review model does not schedule those reviews. Required task reviews use explicit reports through `rivet task review`; publishing and delivery retain their separate approvals.
+**Current scope:** Terminal tasks automatically review the accepted integration revision in a fresh, tool-disabled reviewer process using saved `independent-review` routing. Blocking findings return to a correction worker with the original scope, objective, implementation summary and remaining allowance. Rivet reruns checks and independently reviews the corrected revision before final approval. Corrections use a new session because the current adapters do not retain provider sessions. Host-owned tasks and plan reviews still use explicit `rivet task review` reports; PR/CI follow-through is not automatic. Publishing and delivery retain separate approvals.
+
+Product questions stop dependent execution. In an interactive run or resume, Rivet presents the question and options and waits for your answer. Leaving it pending keeps the task blocked; later use `rivet task approve-decision` and resume. Agent recommendations never count as human answers.
 
 ## 3. Check or continue your task
 

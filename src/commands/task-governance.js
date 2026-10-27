@@ -30,10 +30,10 @@ export async function taskGovernanceCommand(parsed,dependencies,project,run){
         activeSignal.throwIfAborted();
         dependencies.output.log(JSON.stringify(record,null,2));
         if(failed)throw new CliError('Could not display the decision. It remains pending.','REPOSITORY_CONFLICT');
-        const answer=await dependencies.taskApprovalPrompt({type:'select',signal:activeSignal,message:'Approve this exact decision? Existing execution and delivery permissions still apply.',choices:[{value:'approve',label:'Approve this decision'},{value:'leave',label:'Leave pending'}]});
+        const answer=await dependencies.taskApprovalPrompt({type:'select',signal:activeSignal,message:'Choose your answer. Existing execution and delivery permissions still apply.',choices:[...record.options.map(option=>({value:`answer:${option.id}`,label:option.description})),{value:'leave',label:'Leave pending'}]});
         activeSignal.throwIfAborted();
         if(failed)throw new CliError('Decision output failed. It remains pending.','REPOSITORY_CONFLICT');
-        return answer==='approve';
+        return typeof answer==='string'&&answer.startsWith('answer:')?answer.slice(7):false;
       }finally{unobserve?.();}
     };
   }

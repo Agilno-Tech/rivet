@@ -145,3 +145,13 @@ test('Markdown rendering escapes links, HTML, mentions and formatting, retaining
   assert.throws(() => renderDecisions([], {}), DecisionError);
   assert.throws(() => renderDecisions([value, value], bindings), DecisionError);
 });
+
+test('human can answer a product question differently from the agent recommendation',()=>{
+ const pending=createDecision({...input,tier:2},context);
+ const answer=approveDecision(pending,{...human,choice:'text'});
+ assert.equal(answer.choice,'json');
+ assert.equal(answer.approval.choice,'text');
+ assert.equal(answer.approval.decisionDigest,pending.digest);
+ assert.deepEqual(validateDecision(answer,bindings),answer);
+ assert.throws(()=>approveDecision(pending,{...human,choice:'invented'}));
+});
