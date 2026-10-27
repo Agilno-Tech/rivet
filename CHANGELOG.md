@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.1.0-alpha.9](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.8...v0.1.0-alpha.9) (2026-10-27)
+
+
+### Bug Fixes
+
+* restore deterministic all-failing candidate fixture ([#74](https://github.com/Agilno-Tech/rivet/issues/74)) ([beef7b1](https://github.com/Agilno-Tech/rivet/commit/beef7b171b3f0e77a557d745673212318ba55e68))
+
+This release includes the task-review features prepared for alpha.8, which was not published to npm after candidate verification stopped on a timing-dependent test fixture.
+
+### Task reviews and recovery
+
+* Newly approved managed terminal tasks run an independent review after required checks pass. Blocking findings trigger corrections within the approved scope, followed by fresh checks and review. Review rounds and spending remain bounded; final delivery still requires human approval.
+* Workers and reviewers can ask product questions and wait for your answer. Cancelling the prompt leaves the question pending; the agent's recommendation is not treated as your decision.
+* Failed checks now provide bounded, redacted diagnostics to the next worker attempt. Parallel recovery preserves stopped workers and respects existing retry limits.
+
+### Upgrading
+
+Run `rivet update` inside your project, confirm `rivet --version` reports `0.1.0-alpha.9` or newer, then restart your coding-agent session. Existing project settings and previously approved plans are preserved. The automatic loop applies to newly approved managed terminal tasks; host-owned workflows continue using explicit review submission.
+
 ## [0.1.0-alpha.8](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.7...v0.1.0-alpha.8) (2026-10-27)
 
 
