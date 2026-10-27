@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0-alpha.10](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.9...v0.1.0-alpha.10) (2026-10-27)
+
+
+### Bug Fixes
+
+* preserve review context and support explicit omission approval ([#76](https://github.com/Agilno-Tech/rivet/issues/76)) ([14807c3](https://github.com/Agilno-Tech/rivet/commit/14807c36c764100c1886110f4dada4fb19915340))
+
 ## [0.1.0-alpha.9](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.8...v0.1.0-alpha.9) (2026-10-27)
 
 
