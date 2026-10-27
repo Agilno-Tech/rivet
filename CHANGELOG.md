@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0-alpha.9](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.8...v0.1.0-alpha.9) (2026-10-27)
+
+
+### Bug Fixes
+
+* restore deterministic all-failing candidate fixture ([#74](https://github.com/Agilno-Tech/rivet/issues/74)) ([beef7b1](https://github.com/Agilno-Tech/rivet/commit/beef7b171b3f0e77a557d745673212318ba55e68))
+
 ## [0.1.0-alpha.8](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.7...v0.1.0-alpha.8) (2026-10-27)
 
 
