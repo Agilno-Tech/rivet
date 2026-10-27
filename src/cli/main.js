@@ -111,7 +111,7 @@ Usage:
   rivet delivery publish [--run=<id>] [--provider=<id>] [--project=<path>]
   rivet delivery review [--project=<path>] [--run=<id>] [--provider=<id>]
   rivet delivery merge [--run=<id>] [--provider=<id>] [--method=merge|squash|rebase] [--project=<path>]
-  rivet review <PR-URL> [--harness=claude|codex] [--context] [--input=<report.json>] [--publish] [--project=<path>] [--json]
+  rivet review <PR-URL> [--harness=claude|codex] [--context] [--approve-redactions=<id>] [--input=<report.json>] [--publish] [--project=<path>] [--json]
   rivet repositories inspect [--review=<number>] [--remote=<name>] [--provider=<id>] [--project=<path>] [--json]
   rivet integrations setup [--project=<path>]  Guide local read-only provider configuration
   rivet integrations list|check [--project=<path>] [--host-inventory-json=<json>] [--json]

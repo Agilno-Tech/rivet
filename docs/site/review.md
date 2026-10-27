@@ -27,21 +27,29 @@ Findings are saved privately in the Git directory and printed with paths and lin
 
 ## When Rivet flags a possible secret
 
-Rivet checks PR content before saving or sending it for review. In Python diffs, narrowly recognized calls such as `api_key=os.environ.get('SENDGRID_API_KEY')` and `token = build_resolution_review_token(...)` can pass without a prompt. Expressions with literal arguments or defaults, config files and ambiguous quoted content retain strict checks. This is a conservative diff check, not a complete source parser; it cannot infer string context outside the captured hunks. Reports that quote credential-shaped code in Markdown may still be rejected—describe the issue without repeating the assignment.
+Rivet checks PR content before saving or sending it for review. In Python diffs, narrowly recognized environment lookups, token-building calls, variable assignments such as `user, token = user_and_token`, builtin function parameter annotations, and dynamic authorization values such as `HTTP_AUTHORIZATION=f'Bearer {access}'` can pass without a prompt. Literal arguments, config files and ambiguous quoted content retain strict checks. This is a conservative diff check, not a complete source parser; it cannot infer string context outside the captured hunks. Reports should describe issues without repeating credential-shaped assignments.
 
-For other credential-shaped content—including test literals, f-strings, lambda parameters and documentation prose—Rivet does not guess whether it is a real secret. In an interactive terminal, it shows the affected files and triggering line numbers and asks whether to continue with each **entire file diff omitted**. This includes every hunk and context line, so a multiline value cannot leak through a continuation. The preview does not print the values.
+For other credential-shaped content, including test passwords, Rivet shows a value-free omission preview. A visibly bounded Python literal can be omitted at the line level, preserving surrounding logic and tests. Ambiguous content falls back to omitting the entire file diff, including every hunk and context line. The preview identifies the scope, path, line and side without printing the suspicious value.
 
-If you approve, only sanitized context is saved and sent. Omitted files remain listed as unreviewed in the output and published summary, and findings cannot cite them. If every file is omitted, Rivet explicitly states that no source code was reviewed and manual review is required.
+If you approve, only sanitized context is saved and sent. Omitted lines and files are marked unreviewed in the output and published summary, and findings cannot cite them. Known credential formats and actual configured secret values remain blocked and cannot be approved away. Declining stops the review.
 
-Known credential formats and actual configured secret values remain blocked and cannot be approved away. Declining stops the review. There is no blanket secret-check bypass.
+### Approve from your agent session
 
-If your agent's `--context --json` export requests approval, run this once in your own terminal:
+When `rivet review <PR-URL> --context --json` needs approval, the JSON error includes `error.approval` with an exact ID, omission locations and `retryArgs`. The agent must show you the preview and **wait for your explicit approval** before running those retry arguments. The retry uses:
+
+```sh
+rivet review <PR-URL> --context --json --approve-redactions=<approval-id>
+```
+
+This flag is an explicit assertion of your approval, restricted to context export. Rivet refetches and rescans the PR; the ID must match the original source, PR identity, sanitized content, omissions and project configuration. Changed content requires a fresh preview and approval. Previously approved, unchanged omissions can be reused on subsequent JSON context exports.
+
+You can also approve in a real interactive terminal (TTY):
 
 ```sh
 rivet review <PR-URL> --context
 ```
 
-Review the omission preview and approve it, then have the agent retry `--context --json`. Rivet refetches and scans the PR on every export. It reuses the approval only when the original source, PR identity, sanitized content, omissions and project configuration still match. Changed content needs a new interactive approval. JSON and noninteractive runs cannot create approval themselves.
+Then ask your agent to retry its context export. An agent shell without a TTY should use the chat-approved flow above.
 
 ## From Claude Code, Codex or another coding harness
 
