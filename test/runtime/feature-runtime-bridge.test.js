@@ -1072,7 +1072,7 @@ test('explicit adapter starts accepted fast dependency before slow sibling finis
 });
 
 test('explicit adapter refuses failed candidate quality without accepting a worker',async t=>{
-  const fixture=await parallelFixture(t,{failure:'fast'});
+  const fixture=await parallelFixture(t,{failure:true});
   assert.match(await readFile(fixture.gateLog,'utf8'),/candidate-worker-/);
   assert.equal(fixture.result.status,'blocked');
   assert.equal(fixture.accepted,null);
