@@ -183,3 +183,32 @@ test('configuration changed during recapture invalidates saved approval',async t
  f.beforeRead(()=>f.enablePublish());
  assert.notEqual(await main(['review',url,'--context','--json'],f.deps),0);assert.equal(f.launches(),0);assert.match(f.text(),/configuration changed/i);
 });
+
+test('agent receives secret-free approval preview and can retry the exact human-approved omission',async t=>{
+ const f=await fixture(t);f.setDiff(literalDiff);f.deps.terminalIsInteractive=()=>false;
+ assert.equal(await main(['review',url,'--context','--json'],f.deps),1);
+ const approval=f.result().error.approval;
+ assert.match(approval.id,/^[a-f0-9]{64}$/);assert.equal(approval.requiresHumanApproval,true);
+ assert.equal(approval.omissions[0].path,'tests/test_user.py');assert.ok(!f.text().includes('testpassword123'));
+ assert.equal(f.launches(),0);f.clear();
+ assert.equal(await main(['review',url,'--context','--json',`--approve-redactions=${approval.id}`],f.deps),0);
+ assert.ok(!f.text().includes('testpassword123'));assert.equal(f.launches(),0);
+});
+
+for(const drift of ['raw-value','head','config','environment','clean','wrong-id'])test('explicit chat approval rejects '+drift,async t=>{
+ const f=await fixture(t);f.setDiff(literalDiff);f.deps.terminalIsInteractive=()=>false;
+ assert.equal(await main(['review',url,'--context','--json'],f.deps),1);
+ let id=f.result().error.approval.id;f.clear();
+ if(drift==='raw-value')f.setDiff(literalDiff.replace('testpassword123','differentpassword456'));
+ if(drift==='head')f.setHead(base);
+ if(drift==='config')await f.enablePublish();
+ if(drift==='environment')f.deps.env.APP_PASSWORD='testpassword123';
+ if(drift==='clean')f.setDiff(literalDiff.replace("password='testpassword123'",'pass'));
+ if(drift==='wrong-id')id='0'.repeat(64);
+ assert.notEqual(await main(['review',url,'--context','--json',`--approve-redactions=${id}`],f.deps),0);
+ assert.equal(f.launches(),0);assert.ok(!f.text().includes('testpassword123'));
+});
+
+for(const args of [['--approve-redactions=bad','--context'],['--approve-redactions='+ 'a'.repeat(64)],['--approve-redactions='+ 'a'.repeat(64),'--context','--publish']])test('approval flag rejects invalid usage '+args.join(' '),async t=>{
+ const f=await fixture(t);assert.notEqual(await main(['review',url,...args,'--json'],f.deps),0);assert.equal(f.launches(),0);
+});

@@ -27,10 +27,31 @@ async function readReport(path) {
  const handle=await open(path,constants.O_RDONLY|(constants.O_NOFOLLOW??0)|(constants.O_NONBLOCK??0));
  try{const stat=await handle.stat();if(!stat.isFile()||stat.dev!==before.dev||stat.ino!==before.ino||stat.size>128*1024)fail('Review report must be a regular JSON file at most 128 KiB.');const bytes=Buffer.alloc(128*1024+1);let length=0;while(length<bytes.length){const item=await handle.read(bytes,length,bytes.length-length,null);if(!item.bytesRead)break;length+=item.bytesRead;}if(length>128*1024)fail('Review report is too large.');return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes.subarray(0,length)));}finally{await handle.close();}
 }
-export async function reviewCommand(parsed,dependencies) {return withTerminalInterruption(signal=>executeReview(parsed,dependencies,signal));}
+class ReviewOmissionApprovalRequired extends CliError {
+ constructor(findings,receipt,target,flags) {
+  const id=digest(receipt);
+  const preview=findings.map(item=>({scope:item.scope,path:item.path,line:item.line,side:item.side,reason:item.reason}));
+  const message='Review needs human approval to omit suspicious content. Ask the user to approve the listed omissions, then retry with --approve-redactions='+id+'. Alternatively, run rivet review <PR-URL> --context in a real interactive terminal (TTY). No new context was saved or delegated.\n'+preview.map(item=>`${item.path}:${item.line} (${item.side}, ${item.scope}): ${item.reason}`).join('\n');
+  super(Buffer.byteLength(message)<=24000?message:'Review omission preview is too large for JSON; use a real interactive terminal (TTY).','INVALID_INPUT');
+  if(Buffer.byteLength(JSON.stringify(preview))<=24000)this.approval={id,requiresHumanApproval:true,omissions:preview,retryArgs:['review',target.url,'--context','--json',...['project','remote','provider'].filter(key=>flags[key]).map(key=>`--${key}=${flags[key]}`),`--approve-redactions=${id}`]};
+ }
+}
+export async function reviewCommand(parsed,dependencies) {
+ return withTerminalInterruption(async signal=>{
+  try{return await executeReview(parsed,dependencies,signal);}
+  catch(error){
+   if(parsed.flags.json&&error instanceof ReviewOmissionApprovalRequired){
+    dependencies.output.json({ok:false,error:{code:error.code,exitCode:error.exitCode,message:error.safeMessage,...(error.approval?{approval:error.approval}:{})}},'stderr');
+    return error.exitCode;
+   }
+   throw error;
+  }
+ });
+}
 async function executeReview(parsed,dependencies,signal) {
  const {flags,operands}=parsed;
- if(operands.length!==1||parsed.subcommand!==null||Object.keys(flags).some(key=>!['project','remote','provider','harness','input','context','publish','json'].includes(key))||flags.context&&(flags.input||flags.publish||flags.harness)||flags.input&&flags.harness||flags.publish&&flags.harness||flags.publish&&flags.json||flags.harness&&!['claude','codex'].includes(flags.harness))fail('Use rivet review <PR-URL> [--harness=claude|codex] or --context or --input=<report.json>. Add --publish only for an interactive approved summary comment.');
+ if(operands.length!==1||parsed.subcommand!==null||Object.keys(flags).some(key=>!['project','remote','provider','harness','input','context','publish','json','approve-redactions'].includes(key))||flags.context&&(flags.input||flags.publish||flags.harness)||flags.input&&flags.harness||flags.publish&&flags.harness||flags.publish&&flags.json||flags.harness&&!['claude','codex'].includes(flags.harness))fail('Use rivet review <PR-URL> [--harness=claude|codex] or --context or --input=<report.json>. Add --publish only for an interactive approved summary comment.');
+ if(flags['approve-redactions']&&(!flags.context||! /^[a-f0-9]{64}$/.test(flags['approve-redactions'])))fail('Use --approve-redactions=<exact-approval-id> only with --context after the user approves the omission preview.');
  const target=parseReviewUrl(operands[0]);
  const project=await resolveConfiguredProject(dependencies.cwd(),flags.project,{runner:dependencies.runGit,env:dependencies.env});
  const executable=await gitExecutable(dependencies.env);
@@ -57,24 +78,29 @@ async function executeReview(parsed,dependencies,signal) {
   report=validateReport(report,snapshot);
  }else{
   if(saved?.data?.publication?.status==='pending')fail('A previous publication has an unknown outcome. Inspect the PR before replacing this review.','REPOSITORY_CONFLICT');
-  let redactionApproval=null;
+  let redactionApproval=null,explicitApprovalUsed=false;
   const configDigest=digest(project.config);
   snapshot=await source.capture({confirmRedactions:async (findings,proof)=>{
    const receipt={...proof,configDigest};
+   if(flags['approve-redactions']) {
+    if(flags['approve-redactions']!==digest(receipt))fail('Omission approval no longer matches the PR or project configuration. Export a fresh preview and ask the user again.');
+    redactionApproval=receipt;explicitApprovalUsed=true;return true;
+   }
    if(flags.context&&flags.json&&saved?.data?.redactionApproval&&digest(saved.data.redactionApproval)===digest(receipt)){redactionApproval=receipt;return true;}
-   if(flags.json||dependencies.terminalIsInteractive?.()!==true)fail('Credential-shaped file diffs require interactive redaction approval. Run rivet review <PR-URL> --context interactively, then retry --context --json; no new context was saved or delegated.');
+   if(flags.json||dependencies.terminalIsInteractive?.()!==true)throw new ReviewOmissionApprovalRequired(findings,receipt,target,flags);
    let outputFailed=false,approved=false;
    const unobserve=observeOutputErrors(dependencies.output,()=>{outputFailed=true;});
    try {
-    dependencies.output.log(visible('These file diffs will be omitted from the saved and delegated review context:\n'+findings.map(item=>`${item.path}:${item.line} (${item.side}): ${item.reason}`).join('\n')));
+    dependencies.output.log(visible('These lines or file diffs will be omitted from the saved and delegated review context:\n'+findings.map(item=>`${item.path}:${item.line} (${item.side}): ${item.reason}`).join('\n')));
     if(outputFailed||signal.aborted)fail('Could not display the redaction preview. Review cancelled.');
-    approved=await (dependencies.review?.confirmRedactions??confirmTaskAction)('Continue with these file diffs omitted? Their code will not be reviewed. [y/N] ',{signal})===true;
+    approved=await (dependencies.review?.confirmRedactions??confirmTaskAction)('Continue with exactly these omissions? Omitted code will not be reviewed. [y/N] ',{signal})===true;
     if(outputFailed||signal.aborted)fail('Review output failed or redaction approval was interrupted.');
    } finally {unobserve?.();}
    if(approved&&digest(await loadProjectConfig(project.root))!==digest(project.config))fail('Project configuration changed during redaction approval. Review again.','REPOSITORY_CONFLICT');
    if(approved)redactionApproval=receipt;
    return approved;
   }});
+  if(flags['approve-redactions']&&!explicitApprovalUsed)fail('The approved omissions are no longer present. Export fresh context without the old approval ID.');
   if(digest(await loadProjectConfig(project.root))!==configDigest)fail('Project configuration changed during capture. Review again.','REPOSITORY_CONFLICT');
   if(JSON.stringify(redactSecrets(snapshot,{environment:dependencies.env}))!==JSON.stringify(snapshot))fail('Review contains sensitive environment material. Remove it before delegation.');
   saved=await store.write({snapshot,report:null,publication:null,redactionApproval},{expectedVersion:saved?.version??0});

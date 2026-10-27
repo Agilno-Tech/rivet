@@ -45,7 +45,7 @@ function maskAssignments(text,accept) {
  for(const [start,end] of ranges.reverse())text=text.slice(0,start)+'rivet_value'+text.slice(end);
  return text;
 }
-export function maskReviewExpressions(text) {
+export function maskReviewExpressions(text, python=false) {
  if(/"{3}|'{3}|`|\/\*/.test(text))return text;
  return maskAssignments(text,(line,start,index)=>{
   // Only classify assignments outside visible quoted strings and comments.
@@ -58,8 +58,10 @@ export function maskReviewExpressions(text) {
    else if(ch==='#'||prefix.slice(i,i+2)==='//')return false;
   }
   if(quote)return false;
+  const bearer=/^f(['"])Bearer \{[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\}\1/.exec(line.slice(start));
+  if(python&&bearer&&(/^[ \t]*,/.test(line.slice(start+bearer[0].length))||boundary(line.slice(start+bearer[0].length))))return true;
   const result=expression(line,start);
-  return result?.call===true&&boundary(line.slice(result.end));
+  return result!==null&&(result.call||(python&&/^[A-Za-z_]/.test(line.slice(start))))&&boundary(line.slice(result.end));
  });
 }
 // Used solely for scanning, never as saved/exported/model-visible content.
@@ -69,7 +71,7 @@ export function reviewSnapshotForScan(snapshot) {
 export function reviewReportForScan(report) {
  return {...report,summary:maskReviewExpressions(report.summary),
   findings:report.findings?.map(item=>({...item,message:maskReviewExpressions(item.message)})),
-  limitations:report.limitations?.map(maskReviewExpressions)};
+  limitations:report.limitations?.map(item=>maskReviewExpressions(item))};
 }
 
 
@@ -83,8 +85,49 @@ export function maskReviewDiff(diff) {
     ||/"{3}|'{3}|`|\/\*/.test(section))return section;
   let inHunk=false;
   return section.split('\n').map(line=>{
-   if(/^@@ /.test(line)){inHunk=true;return line;}
-   return inHunk&&/^[+ -]/.test(line)?line[0]+maskReviewExpressions(line.slice(1)):line;
+   if(/^@@ /.test(line)){inHunk=true;return maskPythonSignature(line);}
+   return inHunk&&/^[+ -]/.test(line)?line[0]+maskPythonSignature(maskReviewExpressions(line.slice(1),true)):line;
   }).join('\n');
  }).join('');
+}
+
+// Only builtin parameter annotations in visible Python function signatures.
+// Defaults, strings, comments and arbitrary annotation expressions stay strict.
+function maskPythonSignature(line) {
+ const source=line.replace(/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@[ \t]*/, '');
+ if(!/^[ \t]*(?:async[ \t]+)?def[ \t]+/.test(source)||/['"#]/.test(source))return line;
+ return line.replace(/([,(][ \t]*)([A-Za-z_][A-Za-z0-9_]*)([ \t]*:[ \t]*(?:str|bytes|None)(?:[ \t]*\|[ \t]*(?:str|bytes|None))*[ \t]*)(?=[,)])/g,
+  (all,prefix,label,type)=>containsSecretMaterial(label+'=value')?prefix+'rivet_value'+type:all);
+}
+
+// A literal must visibly end on this physical Python line. Commas/semicolons
+// terminate a value; a closing call requires a visible opening parenthesis.
+// Ambiguous strings/continuations retain the whole-file fallback.
+export function reviewLineOmissionIndexes(diff) {
+ const eligible=new Set();let offset=0;
+ for(const section of diff.split(/(?=^diff --git )/m)) {
+  const lines=section.split('\n');
+  const header=/^--- a\/(.+)\n\+\+\+ b\/(.+)$/m.exec(section);
+  if(header&&header[1].endsWith('.py')&&header[2].endsWith('.py')&&!/"{3}|'{3}|`|\/\*|\\/.test(section)) {
+   let inHunk=false;
+   for(let i=0;i<lines.length;i++) {
+    if(/^@@ /.test(lines[i])){inHunk=true;continue;}
+    if(!inHunk||! /^[+ -]/.test(lines[i]))continue;
+    const code=lines[i].slice(1);let found=false;
+    const masked=maskAssignments(code,(text,start,index)=>{
+     const prefix=text.slice(0,index);
+     // Restrict prefixes to code punctuation and complete simple strings.
+     const withoutStrings=prefix.replace(/(['"])[^'"\n]*?\1/g,'');
+     if(/['"#]/.test(withoutStrings))return false;
+     const literal=/^(['"])[^'"\n]*\1/.exec(text.slice(start));if(!literal)return false;
+     const rest=text.slice(start+literal[0].length).trimStart();
+     if(!/^[,;]/.test(rest)&&!(rest.startsWith(')')&&withoutStrings.includes('(')))return false;
+     found=true;return true;
+    });
+    if(found&&!containsSecretMaterial(maskReviewExpressions(masked)))eligible.add(offset+i);
+   }
+  }
+  offset+=lines.length-1;
+ }
+ return eligible;
 }

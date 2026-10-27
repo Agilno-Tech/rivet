@@ -118,7 +118,6 @@ for(const [path,code] of [
  ['docs/design.md','token: create one guest from a store build and read the API log'],
  ['users/tests.py',"self._post(token=f'ip-token-{attempt}')"],
  ['users/tests.py','self.verify_token.side_effect = lambda token: {}'],
- ['users/tests.py',"email='idle_customer@example.test', password='testpassword123',"],
 ])test('Ana follow-up: approved file omission for '+code,async()=>{
  const f=fixture([code,'unlabeled_private_continuation'],{path});
  await assert.rejects(f.source.capture());
@@ -163,4 +162,48 @@ test('whole-file omission never expands a small diff beyond the harness payload 
  const payload=serializeReviewPayload({worktree,snapshot});
  assert.deepEqual(validateReviewPayload(payload).snapshot.omittedFiles,['tests/test_review.py']);
  assert.ok(!payload.includes('testpassword123'));
+});
+
+for(const code of ['user, token = user_and_token',"HTTP_AUTHORIZATION=f'Bearer {access}'"])test('Marko: dynamic Python values survive capture and payload: '+code,async()=>{
+ const f=fixture([code]);const snapshot=await f.source.capture();
+ assert.equal(snapshot.diff,f.diff);validateReviewPayload(serializeReviewPayload({worktree,snapshot}));
+});
+test('Marko: typed function hunk context is not a credential assignment',async()=>{
+ const diff='diff --git a/users/services.py b/users/services.py\n--- a/users/services.py\n+++ b/users/services.py\n@@ -1 +1 @@ def record(token: str | None, client_ip: str):\n-return user\n+return active_user\n';
+ const f=fixture([],{diffOverride:diff});const snapshot=await f.source.capture();
+ assert.equal(snapshot.diff,diff);validateReviewPayload(serializeReviewPayload({worktree,snapshot}));
+});
+test('approved bounded literal line preserves surrounding logic and forbids findings on omitted line',async()=>{
+ const f=fixture(["    password='testpassword123',",'    last_active=now,','assert result.last_active == now']);
+ const snapshot=await f.source.capture({confirmRedactions:async omissions=>{assert.equal(omissions[0].scope,'line');return true;}});
+ assert.ok(snapshot.diff.includes('assert result.last_active'));assert.ok(!snapshot.diff.includes('testpassword123'));
+ assert.deepEqual(snapshot.omittedLines,[{path:'tests/test_review.py',line:1,side:'new'}]);
+ validateReviewPayload(serializeReviewPayload({worktree,snapshot}));
+ const report={url:snapshot.url,headSha:head,baseSha:base,diffDigest:snapshot.diffDigest,summary:'Review',findings:[{path:'tests/test_review.py',line:1,severity:'high',message:'Omitted code claim'}],limitations:['No tests run']};
+ assert.throws(()=>validateReport(report,snapshot));
+ assert.doesNotThrow(()=>validateReport({...report,findings:[{...report.findings[0],line:3}]},snapshot));
+});
+
+for(const field of ['summary','message','limitations'])test('report prose retains strict bare credential checks: '+field,async()=>{
+ const snapshot=await fixture(['pass']).source.capture();
+ const report={url:snapshot.url,headSha:head,baseSha:base,diffDigest:snapshot.diffDigest,summary:'Reviewed',findings:[],limitations:['No tests']};
+ const text='password=SuperSecretPassword123';
+ if(field==='summary')report.summary=text;
+ if(field==='message')report.findings=[{path:'tests/test_review.py',line:1,severity:'high',message:text}];
+ if(field==='limitations')report.limitations=[text];
+ assert.throws(()=>validateReport(report,snapshot));
+});
+test('dynamic Bearer keyword argument with trailing comma remains reviewable',async()=>{
+ const f=fixture(["HTTP_AUTHORIZATION=f'Bearer {access}',"]);
+ const snapshot=await f.source.capture();assert.equal(snapshot.diff,f.diff);
+ validateReviewPayload(serializeReviewPayload({worktree,snapshot}));
+});
+
+test('line omissions track multiple files, hunks, removed and context lines',async()=>{
+ const diff="diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -3,2 +3,2 @@\n-password='old-test-value',\n+password='new-test-value',\n assert active\n@@ -10 +10 @@\n password='context-test-value',\ndiff --git a/b.py b/b.py\n--- a/b.py\n+++ b/b.py\n@@ -0,0 +1,2 @@\n+password='other-test-value',\n+assert seen\n";
+ const f=fixture([],{diffOverride:diff});f.metadata.changed_files=2;
+ const snapshot=await f.source.capture({confirmRedactions:async()=>true});
+ assert.deepEqual(snapshot.omittedLines,[{path:'a.py',line:3,side:'old'},{path:'a.py',line:3,side:'new'},{path:'a.py',line:10,side:'new'},{path:'b.py',line:1,side:'new'}]);
+ assert.match(snapshot.diff,/assert active/);assert.match(snapshot.diff,/assert seen/);
+ assert.ok(!snapshot.diff.includes('test-value'));validateReviewPayload(serializeReviewPayload({worktree,snapshot}));
 });
