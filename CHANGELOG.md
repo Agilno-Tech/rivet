@@ -7,6 +7,16 @@
 
 * add automatic review, bounded corrections, and human product decisions ([07a1846](https://github.com/Agilno-Tech/rivet/commit/07a18460a4c158aeb82d2de93ded09f691e002a7))
 
+### Task reviews and recovery
+
+* Newly approved managed terminal tasks run an independent review after required checks pass. Blocking findings trigger corrections within the approved scope, followed by fresh checks and review. Review rounds and spending remain bounded; final delivery still requires human approval.
+* Workers and reviewers can ask product questions and wait for your answer. Cancelling the prompt leaves the question pending; the agent's recommendation is not treated as your decision.
+* Failed checks now provide bounded, redacted diagnostics to the next worker attempt. Parallel recovery preserves stopped workers and respects existing retry limits.
+
+### Upgrading
+
+Run `rivet update` inside your project, confirm `rivet --version` reports `0.1.0-alpha.8` or newer, then restart your coding-agent session. Existing project settings and previously approved plans are preserved. The automatic loop applies to newly approved managed terminal tasks; host-owned workflows continue using explicit review submission.
+
 ## [0.1.0-alpha.7](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.6...v0.1.0-alpha.7) (2026-10-26)
 
 
