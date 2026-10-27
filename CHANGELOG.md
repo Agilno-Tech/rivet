@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0-alpha.8](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.7...v0.1.0-alpha.8) (2026-10-27)
+
+
+### Features
+
+* add automatic review, bounded corrections, and human product decisions ([07a1846](https://github.com/Agilno-Tech/rivet/commit/07a18460a4c158aeb82d2de93ded09f691e002a7))
+
 ## [0.1.0-alpha.7](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.6...v0.1.0-alpha.7) (2026-10-26)
 
 
