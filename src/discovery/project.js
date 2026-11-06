@@ -23,9 +23,13 @@ const OPTIONAL_FILES = Object.freeze([
   '.github/copilot-instructions.md',
 ]);
 
+const OPTIONAL_DOCUMENTATION = new Set(['AGENTS.md', 'CLAUDE.md', 'README.md', '.github/copilot-instructions.md']);
+
 export class ProjectDiscoveryError extends Error {
   constructor(code, details = {}) {
-    super(code === 'PACKAGE_MANAGER_CONFLICT'
+    super(code === 'ERR_DISCOVERY_FILE_TOO_LARGE'
+      ? `${JSON.stringify(details.path)} is ${details.sizeBytes} bytes; the discovery limit is ${details.limitBytes} bytes. Reduce this file before retrying setup.`
+      : code === 'PACKAGE_MANAGER_CONFLICT'
       ? 'Conflicting package-manager evidence was detected.'
       : 'Project discovery failed safely.');
     this.name = 'ProjectDiscoveryError';
@@ -64,8 +68,13 @@ function safeFile(root, relativePath, fs, required = false) {
       if (!metadata.isDirectory()) throw new Error(`${relativePath} has a non-directory allowlisted ancestor`);
       continue;
     }
-    if (!metadata.isFile() || metadata.size > MAX_DISCOVERY_FILE_BYTES) {
+    if (!metadata.isFile()) {
       throw new Error(`${relativePath} must be a regular bounded file`);
+    }
+    if (metadata.size > MAX_DISCOVERY_FILE_BYTES) {
+      throw new ProjectDiscoveryError('ERR_DISCOVERY_FILE_TOO_LARGE', {
+        path: relativePath, sizeBytes: metadata.size, limitBytes: MAX_DISCOVERY_FILE_BYTES,
+      });
     }
     return {
       path,
@@ -252,13 +261,27 @@ export async function discoverProject(projectRoot, options = {}) {
   if (!sameIdentity(rootMetadata, fs.statSync(root))) {
     throw new Error('Project root changed identity during validation');
   }
+  const warnings = [];
+  // Only size failures for optional documentation may be downgraded. Identity,
+  // symlink and file-type checks still fail closed, including on portable projects.
+  const inspect = (root, name, fs, required = false) => {
+    try { return safeFile(root, name, fs, required); }
+    catch (error) {
+      if (required || !OPTIONAL_DOCUMENTATION.has(name)
+        || !(error instanceof ProjectDiscoveryError) || error.code !== 'ERR_DISCOVERY_FILE_TOO_LARGE') throw error;
+      const {sizeBytes, limitBytes} = error.details;
+      warnings.push({code: 'discovery-file-too-large', path: name, sizeBytes, limitBytes,
+        message: `Skipped optional documentation ${JSON.stringify(name)}: ${sizeBytes} bytes exceeds the discovery limit of ${limitBytes} bytes.`});
+      return null;
+    }
+  };
   const manifestFile = safeFile(root, 'package.json', fs, false);
   if (!manifestFile || options.checks !== undefined) return discoverPortableProject(root, {
-    fs, inspect: inspectBoundedFile, read: readStrictBoundedFile, checks: options.checks,
+    fs, inspect, read: readStrictBoundedFile, checks: options.checks, warnings,
   });
   const files = new Map([['package.json', manifestFile]]);
   for (const name of OPTIONAL_FILES) {
-    const file = safeFile(root, name, fs);
+    const file = inspect(root, name, fs);
     if (file) files.set(name, file);
   }
   const entries = fs.readdirSync(root);
@@ -322,7 +345,7 @@ export async function discoverProject(projectRoot, options = {}) {
     features: { storybook, playwright },
     architectureHints: files.has('AGENTS.md') ? ['AGENTS.md'] : [],
     existingConfig,
-    warnings: registry.warnings,
+    warnings: [...warnings, ...registry.warnings],
     unresolved: registry.unresolved,
     provenance: {
       id: nameSource,

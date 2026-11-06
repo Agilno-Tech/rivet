@@ -45,7 +45,7 @@ export function parseCheckCommand(value) {
   return argv;
 }
 
-export function discoverPortableProject(root, {fs, inspect, read, checks}) {
+export function discoverPortableProject(root, {fs, inspect, read, checks, warnings = []}) {
   const metadata = new Map();
   let totalBytes=0;
   for (const name of ['manage.py','pyproject.toml','requirements.txt','setup.cfg','setup.py','Pipfile','uv.lock','poetry.lock','go.mod','Cargo.toml','Makefile','pom.xml','build.gradle','composer.json','Gemfile','AGENTS.md']) {
@@ -104,5 +104,5 @@ export function discoverPortableProject(root, {fs, inspect, read, checks}) {
   const provenance={id:'project directory basename',name:'project directory basename','stack.framework':source,'stack.language':source,'stack.packageManager':source,'features.storybook':'not detected','features.playwright':'not detected'};
   for(const [key,group] of Object.entries(commands)) group.steps.forEach((_,index)=>{provenance[`commands.${key}.steps[${index}]`]=source;});
   if(dependencies)provenance.dependencies='requirements.txt (isolated Python environment proposal; review before installation)';
-  return {root,proposal,inspectedFiles:[...metadata.keys()],features:{storybook:false,playwright:false},architectureHints:metadata.has('AGENTS.md')?['AGENTS.md']:[],existingConfig:fs.existsSync(`${root}/.rivet`),warnings:[{code:'environment-preparation',message:dependencies?'Review the proposed dependency steps. Installation requires separate approval in each isolated checkout.':'Review the proposed commands. Configure dependency installation steps when this project needs environment preparation.'}],unresolved:[],provenance};
+  return {root,proposal,inspectedFiles:[...metadata.keys()],features:{storybook:false,playwright:false},architectureHints:metadata.has('AGENTS.md')?['AGENTS.md']:[],existingConfig:fs.existsSync(`${root}/.rivet`),warnings:[...warnings,{code:'environment-preparation',message:dependencies?'Review the proposed dependency steps. Installation requires separate approval in each isolated checkout.':'Review the proposed commands. Configure dependency installation steps when this project needs environment preparation.'}],unresolved:[],provenance};
 }
