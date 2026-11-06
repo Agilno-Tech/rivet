@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.0-alpha.11](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.10...v0.1.0-alpha.11) (2026-11-06)
+
+
+Setup now skips oversized optional documentation with a warning instead of failing. Oversized manifests and configuration files report the filename, size and limit, with a diagnostic cause code. Existing file safety checks remain enforced. No configuration migration is required.
+
+### Bug Fixes
+
+* handle oversized discovery files with actionable diagnostics ([#79](https://github.com/Agilno-Tech/rivet/issues/79)) ([18b9b46](https://github.com/Agilno-Tech/rivet/commit/18b9b46a4d9c3bb9923e0e019460d4a2a2f50d59))
+
 ## [0.1.0-alpha.10](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.9...v0.1.0-alpha.10) (2026-10-27)
 
 
