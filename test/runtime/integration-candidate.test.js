@@ -40,7 +40,7 @@ async function fixture(t, conflict = false) {
   const options = {gitClient,validateOwner:async () => {}};
   const verify = manifest => runQualityGates({projectRoot:manifest.path,commitSha:manifest.commitSha,
     authority:createAuthorityEnvelope({actorId:'quality',principal:'agent',actions:['command.unit'],ownedPaths:[],providers:[],commands:['unit']}),
-    gates:[{id:'unit',executable:'/usr/bin/true',args:[],cwd:'.',required:true,artifactPaths:[],tests:[]}]}, {gitClient});
+    gates:[{id:'unit',executable:process.execPath,execution:'argv',args:['-e','process.exit(0)'],cwd:'.',required:true,artifactPaths:[],tests:[]}]}, {gitClient});
   return {root,primary,target,request,options,gitClient,verify};
 }
 test('isolates diverged siblings, preserves both ancestries, verifies and accepts exact candidate', async t => {
@@ -89,7 +89,7 @@ test('failed genuine quality results cannot be accepted', async t => {
   await assert.rejects(acceptIntegrationCandidate(f.request,{...f.options,verify:manifest=>runQualityGates({
     projectRoot:manifest.path,commitSha:manifest.commitSha,
     authority:createAuthorityEnvelope({actorId:'quality',principal:'agent',actions:['command.unit'],ownedPaths:[],providers:[],commands:['unit']}),
-    gates:[{id:'unit',executable:'/usr/bin/false',args:[],cwd:'.',required:true,artifactPaths:[],tests:[]}]}, {gitClient:f.gitClient})}),/verification failed/);
+    gates:[{id:'unit',executable:process.execPath,execution:'argv',args:['-e','process.exit(1)'],cwd:'.',required:true,artifactPaths:[],tests:[]}]}, {gitClient:f.gitClient})}),/verification failed/);
   assert.equal(await git(f.target,'rev-parse','HEAD'),f.request.baseSha);
 });
 test('changed candidate topology and interrupted persisted intent are never adopted on replay', async t => {
