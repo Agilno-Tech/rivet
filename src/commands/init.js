@@ -31,6 +31,7 @@ function emit(output, json, value, exitCode) {
     output.json(value, exitCode === EXIT_CODES.SUCCESS ? 'stdout' : 'stderr');
   } else if (exitCode === EXIT_CODES.SUCCESS) {
     output.log(value.message);
+    for (const warning of value.discovery?.warnings ?? []) output.log(`Warning: ${warning.message}`);
   } else {
     output.error(`ERROR: ${value.error.message}`);
   }
@@ -746,9 +747,10 @@ export async function init(parsed, dependencies = {}) {
     if (remote.selected) result.message += `\nSelected repository remote: ${remote.selected.name} -> ${remote.selected.url}`;
     return emit(output, json, result, EXIT_CODES.SUCCESS);
   } catch (error) {
+    if (error instanceof ProjectDiscoveryError) dependencies.recordFailureCause?.(error.code);
     if (error instanceof ProjectChecksRequiredError) return failure(output,json,'MISSING_CONFIGURATION',EXIT_CODES.MISSING_CONFIGURATION,error.message);
     return failure(output, json, 'REPOSITORY_CONFLICT', EXIT_CODES.REPOSITORY_CONFLICT,
-      error instanceof CliError ? error.message : 'Project configuration could not be proposed or written safely.',
+      error instanceof CliError || error instanceof ProjectDiscoveryError ? error.message : 'Project configuration could not be proposed or written safely.',
       error instanceof InitTransactionError ? { recovery: error.recovery }
         : error instanceof ProjectDiscoveryError ? { discovery: error.details } : {});
   }

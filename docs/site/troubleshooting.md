@@ -18,6 +18,12 @@ Check the global executable directory for your installer: `yarn global bin` for 
 
 Codex and other coding-agent sandboxes may protect their instruction directories, including `.agents/skills`. If installation reports a permission denial, run the reviewed `rivet setup --write` command from your regular terminal, or grant the exact operation through the harness's normal approval flow. Reload the harness afterward. Existing project configuration is preserved if skill installation stops partway through setup; inspect the reported partial state before retrying.
 
+## Setup reports an oversized discovery file
+
+Discovery limits individual files to 262,144 bytes (256 KiB). Oversized optional documentation (`AGENTS.md`, `CLAUDE.md`, `README.md`, and `.github/copilot-instructions.md`, where inspected) is skipped with a warning naming the file, its size and the limit. Setup can continue; the original file is not modified. The warning also appears in JSON discovery results.
+
+Manifests and configuration files still fail discovery when oversized. Reduce the named file before retrying. These errors include the size and limit, and human-terminal diagnostic reports carry `ERR_DISCOVERY_FILE_TOO_LARGE`. Symlinks, nonregular files and unsafe paths remain rejected even for optional documentation.
+
 ## A provider is listed but cannot execute
 
 Run `rivet models list`. `planned` means the descriptor/profile contract exists but its executor is not implemented. `adapter-available` still needs runtime/authentication checks. Profile validation does not call a model.

@@ -364,21 +364,31 @@ test('a nonzero Claude exit cannot present a success envelope as successful work
 });
 
 test('telemetry persistence honors abort and deadline without signalling a closed process',async t=>{
- for(const mode of ['abort','timeout','hung','reject','success']) await t.test(mode,async t=>{
-  const f=await fixture(t,`cat >/dev/null\nprintf '%s\\n' '${envelope()}'`);
+ for(const mode of ['abort','timeout','hung','reject','success']) await t.test(mode,{timeout:10000},async t=>{
+  const f=await fixture(t,`cat >/dev/null\nsleep 0.2\nprintf '%s\\n' '${envelope()}'`);
   const controller=new AbortController();let persisting=false;const signals=[];
+  let enteredPersistence;const persistenceStarted=new Promise(resolve=>{enteredPersistence=resolve;});
   const originalKill=process.kill;
   t.mock.method(process,'kill',function(pid,signal){if(persisting)signals.push(signal);return originalKill.call(process,pid,signal);});
   const runner=await createProcessRunner({executable:f.executable,interpreter:f.interpreter,worktree:f.worktree,signal:controller.signal,timeoutMs:['timeout','hung'].includes(mode)?100:2000,termGraceMs:10,killGraceMs:10,telemetryProvider:'codex',onTelemetry:async()=>{
-   persisting=true;
+   persisting=true;enteredPersistence();
    if(mode==='abort')controller.abort();
    if(mode==='hung')await new Promise(()=>{});
    await new Promise(resolve=>setTimeout(resolve,mode==='timeout'?150:10));
    if(mode==='reject')throw new Error('persistence failed');
   }});
-  const running=runner.run({args:[],cwd:'.',payload:await payload(f)});
-  if(mode==='success')assert.equal((await running).status,'success');
-  else await assert.rejects(running,error=>error.code===({abort:'ERR_AGENT_ABORTED',timeout:'ERR_AGENT_TIMEOUT',hung:'ERR_AGENT_TIMEOUT',reject:'ERR_AGENT_OUTPUT_INVALID'})[mode]);
+  const input=await payload(f);
+  // The real provider deliberately takes longer than the configured 100 ms.
+  // Advance the deadline only after close has reached telemetry persistence,
+  // so runner startup speed cannot turn this into a process-timeout test.
+  t.mock.timers.enable({apis:['setTimeout']});
+  const running=runner.run({args:[],cwd:'.',payload:input});
+  const completion=mode==='success'
+   ? running.then(result=>assert.equal(result.status,'success'))
+   : assert.rejects(running,error=>error.code===({abort:'ERR_AGENT_ABORTED',timeout:'ERR_AGENT_TIMEOUT',hung:'ERR_AGENT_TIMEOUT',reject:'ERR_AGENT_OUTPUT_INVALID'})[mode]);
+  await persistenceStarted;
+  t.mock.timers.tick(['timeout','hung'].includes(mode)?100:10);
+  await completion;
   assert.equal(persisting,true);
   assert.deepEqual(signals,[]);
  });

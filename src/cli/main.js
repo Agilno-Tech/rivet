@@ -631,6 +631,7 @@ async function executeMain(argv, dependencies, failure) {
 export async function main(argv, overrides = {}) {
   const dependencies = resolveDependencies(overrides);
   const failure = {};
+  dependencies.recordFailureCause = code => { failure.causeCode = code; };
   const command = Array.isArray(argv) ? argv[0] : null;
   const subcommand = ['task','feature','work','delivery','models','integrations','protocols','repositories','goals','orchestrate','worktrees'].includes(command) ? argv[1] : null;
   const json = Array.isArray(argv) && argv.includes('--json');

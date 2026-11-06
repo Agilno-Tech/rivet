@@ -59,7 +59,7 @@ test('rejects symlinked, nonregular, and oversized package manifests', async t =
   await t.test('oversized', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agilno-project-'));
     await writeFile(join(root, 'package.json'), `{"padding":"${'x'.repeat(300_000)}"}`);
-    await assert.rejects(() => discoverProject(root), /regular bounded file/);
+    await assert.rejects(() => discoverProject(root), /discovery limit/);
   });
 });
 

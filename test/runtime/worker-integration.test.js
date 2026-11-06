@@ -40,7 +40,7 @@ async function fixture(t, conflict = false) {
   const options = {gitClient,validateOwner:async () => {}};
   const verify = manifest => runQualityGates({projectRoot:manifest.path,commitSha:manifest.commitSha,
     authority:createAuthorityEnvelope({actorId:'quality',principal:'agent',actions:['command.unit'],ownedPaths:[],providers:[],commands:['unit']}),
-    gates:[{id:'unit',executable:'/usr/bin/true',args:[],cwd:'.',required:true,artifactPaths:[],tests:[]}]}, {gitClient});
+    gates:[{id:'unit',executable:process.execPath,execution:'argv',args:['-e','process.exit(0)'],cwd:'.',required:true,artifactPaths:[],tests:[]}]}, {gitClient});
   return {root,primary,target,request,options,gitClient,verify};
 }
 
@@ -69,7 +69,7 @@ test('failed candidate verification and source drift preserve the accepted ledge
       if(mode==='source'){const proof=await f.verify(manifest);await commit(f.request.participants[0].sourcePath,'one','changed');return proof;}
       return runQualityGates({projectRoot:manifest.path,commitSha:manifest.commitSha,
         authority:createAuthorityEnvelope({actorId:'quality',principal:'agent',actions:['command.unit'],ownedPaths:[],providers:[],commands:['unit']}),
-        gates:[{id:'unit',executable:'/usr/bin/false',args:[],cwd:'.',required:true,artifactPaths:[],tests:[]}]},{gitClient:f.gitClient});
+        gates:[{id:'unit',executable:process.execPath,execution:'argv',args:['-e','process.exit(1)'],cwd:'.',required:true,artifactPaths:[],tests:[]}]},{gitClient:f.gitClient});
     }}));
     assert.equal(await git(f.target,'rev-parse','HEAD'),f.request.baseSha);assert.equal(r.ledger(),null);
   }

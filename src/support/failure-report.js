@@ -14,6 +14,7 @@ const ARCHITECTURES = new Set(['arm','arm64','ia32','loong64','mips','mipsel','p
 // Deliberately closed: arbitrary provider/OS codes can contain private input.
 // These values correspond to fixed error constructors/reasons in Rivet source.
 const CAUSE_CODES = new Set([
+  'ERR_DISCOVERY_FILE_TOO_LARGE',
   'ERR_HOST_RUN_BUSY', 'ERR_HOST_RUN_STALE_LOCK', 'ERR_HOST_RUN_RECOVERY_STATE',
   'ERR_FEATURE_RUN_VERSION_CONFLICT', 'ERR_INVALID_FEATURE_RUN', 'ERR_INVALID_FEATURE_PLAN',
   'ERR_INVALID_FEATURE_DECOMPOSITION', 'ERR_FEATURE_RUNTIME_BRIDGE', 'ERR_VERIFICATION_REPORT_VERSION_CONFLICT',
