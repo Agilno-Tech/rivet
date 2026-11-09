@@ -45,3 +45,10 @@ test('failure cause codes use a closed production allowlist and never retain arb
   assert.equal(saved.report.failure.causeCode,expected);assert.ok(!(await readFile(saved.path,'utf8')).includes(secret));
  }
 });
+
+test('review provider failures retain public command and cause categories',async t=>{
+ const root=await fixture(t);
+ const saved=await reports.saveFailureReport({command:'review',code:'PROVIDER_UNAVAILABLE',causeCode:'ERR_PROVIDER_REMOTE'},{temporaryDirectory:root});
+ assert.equal(saved.report.command.name,'review');
+ assert.equal(saved.report.failure.causeCode,'ERR_PROVIDER_REMOTE');
+});

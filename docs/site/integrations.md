@@ -7,7 +7,33 @@ rivet integrations list
 rivet integrations check
 ```
 
-Both commands report readiness and remedies. They do not call providers or prove authentication. Direct API entries report credential presence; MCP entries require an explicit host inventory; local CLI entries are descriptors only and cannot execute yet. An unavailable optional MCP integration does not block an unrelated local task.
+Both commands report readiness and remedies. Without `--live`, they do not call providers or prove authentication. Direct API entries report credential presence; MCP entries require an explicit host inventory; local CLI entries are descriptors only and cannot execute yet. An unavailable optional MCP integration does not block an unrelated local task.
+
+## Optional live check
+
+```sh
+rivet integrations check --live
+rivet doctor --live --json
+```
+
+`--live` opts into one bounded, read-only GET per applicable direct API repository provider: GitHub.com, Bitbucket Cloud or GitLab.com. It reads the first page of the repository's pull/merge-request list, with a page size of one, a three-second timeout and no retries or pagination. No writes occur. `integrations list` does not accept `--live`.
+
+The probe uses the saved `repository.remote.url` when it matches the provider and its resource scope, or a single configured `resourceIds` repository when no remote is saved. Disabled, out-of-project, missing-credential, unsupported and ambiguous entries are `not_checked`, with a remedy. MCP and local CLI entries are not probed. Custom API hosts and non-repository integrations are not supported by this live check.
+
+Each provider has a `live` result in JSON, including `status`, `networkChecked`, `remedy` and `httpStatus` when available:
+
+| Status | Meaning |
+| --- | --- |
+| `ok` | The GET succeeded; only access to that endpoint is confirmed. |
+| `rejected` | HTTP 401: invalid, expired, incomplete or unsupported token. |
+| `insufficient_scope` | HTTP 403: missing read permissions or another account/organization access restriction. |
+| `unavailable` | Other HTTP or transport failure. A 404 can hide a private repository; a 429 is a rate limit. |
+| `timeout` | The bounded request timed out. |
+| `not_checked` | No network request was attempted; follow the stated remedy. |
+
+A successful check does not prove every required scope, token identity on a public endpoint, write permission, or delivery readiness. Follow the provider's documented minimum scopes even if this GET succeeds. Credential values, raw responses and raw transport errors are excluded from results. The top-level `networkChecked` reports whether any probe was attempted.
+
+`integrations check` retains exit 0 when diagnostics complete, including rejected optional integrations; inspect per-provider results. `doctor --live` returns provider-unavailable (exit 5) when a probe fails and names the provider in text output. Without `--live`, both commands remain offline.
 
 ## Guided configuration
 

@@ -19,7 +19,13 @@ If no saved publishing choice resolves multiple repositories, or several configu
 rivet repositories inspect --remote=upstream --provider=team-github --review=14 --json
 ```
 
-Rivet does not assume that `origin` is the publishing target. An explicit `--project=/absolute/project` is available when running elsewhere. These commands perform network reads; `rivet integrations check` only reports configuration readiness.
+Rivet does not assume that `origin` is the publishing target. An explicit `--project=/absolute/project` is available when running elsewhere. These commands perform network reads; `rivet integrations check` reports configuration readiness unless you explicitly add `--live`.
+
+## Bitbucket SSH hostname
+
+Use `git@ssh.bitbucket.org:<workspace>/<repo>.git` for new Bitbucket Cloud SSH remotes. Rivet recognizes this hostname (including `ssh://git@ssh.bitbucket.org/...`) and the legacy `git@bitbucket.org:...` form as the same repository identity. The canonical web/PR identity remains `https://bitbucket.org/<workspace>/<repo>` and the REST endpoint remains `https://api.bitbucket.org/2.0`. Rivet does not rewrite your Git remote or SSH trust configuration.
+
+Atlassian's [SSH migration notice](https://support.atlassian.com/bamboo/kb/prepare-bamboo-data-center-repositories-for-bitbucket-cloud-ssh-hostname-change/) schedules brownouts of SSH access through `bitbucket.org` from November 12, 2026, with refusal of all SSH connections to that hostname after December 10, 2026. HTTPS connections are unaffected. Follow the notice to migrate SSH remotes, known hosts and CI/network configuration; reverting to the old SSH hostname is not a lasting workaround.
 
 ## Choose a publishing remote during setup
 
@@ -55,7 +61,14 @@ Add an entry to the existing `providers` list in `.rivet/providers.yaml`:
     tokenEnv: RIVET_REPOSITORY_TOKEN
 ```
 
-Use the project's actual ID and repository path. Set the referenced environment variable outside tracked configuration. The inspection CLI accepts a bearer token; it does not copy credentials from another application. Use a provider-issued token with read access to the selected resources. Tokens and credential values are excluded from output. For Bitbucket Cloud, use an OAuth or repository access token supported as a bearer credential; Atlassian user API tokens require Basic authentication and are not accepted by this CLI. See [Bitbucket authentication](https://developer.atlassian.com/cloud/bitbucket/rest/intro/).
+Use the project's actual ID and repository path. Set the referenced environment variable outside tracked configuration. The inspection CLI accepts a bearer token; it does not copy credentials from another application. Use a provider-issued token with read access to the selected resources. Tokens and credential values are excluded from output. For Bitbucket Cloud REST reads and standalone review:
+
+- Store the complete token in the environment variable named by `credentials.tokenEnv` (or `accessTokenEnv` / `apiTokenEnv`); Rivet sends it as `Authorization: Bearer <token>`.
+- Set `endpoint` to exactly `https://api.bitbucket.org/2.0`.
+- Grant read access to repositories and pull requests. For scoped API tokens, the minimum scopes are `read:repository:bitbucket` and `read:pullrequest:bitbucket`.
+- Scoped Atlassian API tokens supported as Bearer credentials can be used; OAuth and repository access tokens with the required access are also supported. See [Atlassian's API-token authentication reference](https://support.atlassian.com/bitbucket-cloud/docs/using-api-tokens/).
+
+Check access with `rivet integrations check --live` or `rivet doctor --live` (add `--json` for structured output). Check that copying/pasting preserved the whole token; Rivet cannot infer validity from token length. A 401 means the provider rejected the credential; check expiry, truncation and token compatibility. A 403 means insufficient scope or another access restriction. No token values or provider response bodies appear in diagnostics. See [live-check limits](./integrations.md#optional-live-check).
 
 | Provider | API endpoint | Repository scope example |
 | --- | --- | --- |

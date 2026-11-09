@@ -30,7 +30,7 @@ test('literal fixture requires approval and only sanitized context crosses captu
  assert.equal(preview.length,1);assert.equal(preview[0].path,'tests/test_review.py');assert.equal(preview[0].line,1);
  assert.ok(!JSON.stringify(preview).includes('testpassword123'));
  assert.ok(!JSON.stringify(snapshot).includes('testpassword123'));
- assert.deepEqual(snapshot.omittedFiles,['tests/test_review.py']);assert.equal(snapshot.diffDigest,digest(snapshot.diff));
+ assert.equal(snapshot.omittedFiles,undefined);assert.deepEqual(snapshot.omittedLines,[{path:'tests/test_review.py',line:1,side:'new'}]);assert.equal(snapshot.diffDigest,digest(snapshot.diff));
  assert.ok(snapshot.limitations.some(x=>/omitted/i.test(x)));
  const payload=serializeReviewPayload({worktree,snapshot});assert.ok(!payload.includes('testpassword123'));validateReviewPayload(payload);
  const tampered={...snapshot,diff:f.diff,diffDigest:digest(f.diff)};
@@ -151,16 +151,16 @@ test('credential-shaped function context in hunk headers can be omitted safely',
  const diff="diff --git a/tests/test_review.py b/tests/test_review.py\n--- a/tests/test_review.py\n+++ b/tests/test_review.py\n@@ -0,0 +1 @@ def authenticate(password='fixture')\n+return user\n";
  const f=fixture([],{diffOverride:diff});await assert.rejects(f.source.capture());
  const snapshot=await f.source.capture({confirmRedactions:async()=>true});
- assert.deepEqual(snapshot.omittedFiles,['tests/test_review.py']);assert.ok(!snapshot.diff.includes('fixture'));assert.ok(!snapshot.diff.includes('return user'));
+ assert.equal(snapshot.omittedFiles,undefined);assert.ok(!snapshot.diff.includes('fixture'));assert.ok(snapshot.diff.includes('return user'));assert.equal(snapshot.omittedHeaders.length,1);
  validateReviewPayload(serializeReviewPayload({worktree,snapshot}));
 });
 
-test('whole-file omission never expands a small diff beyond the harness payload limit',async()=>{
+test('bounded line omission never expands a small diff beyond the harness payload limit',async()=>{
  const f=fixture(["password='testpassword123'",...Array(400).fill('x')]);
  const snapshot=await f.source.capture({confirmRedactions:async()=>true});
  assert.ok(snapshot.diff.length<=f.diff.length);
  const payload=serializeReviewPayload({worktree,snapshot});
- assert.deepEqual(validateReviewPayload(payload).snapshot.omittedFiles,['tests/test_review.py']);
+ assert.equal(validateReviewPayload(payload).snapshot.omittedLines.length,1);assert.ok(snapshot.diff.includes('+x'));
  assert.ok(!payload.includes('testpassword123'));
 });
 
@@ -199,11 +199,101 @@ test('dynamic Bearer keyword argument with trailing comma remains reviewable',as
  validateReviewPayload(serializeReviewPayload({worktree,snapshot}));
 });
 
-test('line omissions track multiple files, hunks, removed and context lines',async()=>{
- const diff="diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -3,2 +3,2 @@\n-password='old-test-value',\n+password='new-test-value',\n assert active\n@@ -10 +10 @@\n password='context-test-value',\ndiff --git a/b.py b/b.py\n--- a/b.py\n+++ b/b.py\n@@ -0,0 +1,2 @@\n+password='other-test-value',\n+assert seen\n";
+test('line omissions track multiple files, adjacent hunks, removed and context lines',async()=>{
+ const diff="diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1,2 +1,2 @@\n-password='old-test-value',\n+password='new-test-value',\n assert active\n@@ -3 +3 @@\n password='context-test-value',\ndiff --git a/b.py b/b.py\n--- a/b.py\n+++ b/b.py\n@@ -0,0 +1,2 @@\n+password='other-test-value',\n+assert seen\n";
  const f=fixture([],{diffOverride:diff});f.metadata.changed_files=2;
  const snapshot=await f.source.capture({confirmRedactions:async()=>true});
- assert.deepEqual(snapshot.omittedLines,[{path:'a.py',line:3,side:'old'},{path:'a.py',line:3,side:'new'},{path:'a.py',line:10,side:'new'},{path:'b.py',line:1,side:'new'}]);
+ assert.deepEqual(snapshot.omittedLines,[{path:'a.py',line:1,side:'old'},{path:'a.py',line:1,side:'new'},{path:'a.py',line:3,side:'new'},{path:'b.py',line:1,side:'new'}]);
  assert.match(snapshot.diff,/assert active/);assert.match(snapshot.diff,/assert seen/);
  assert.ok(!snapshot.diff.includes('test-value'));validateReviewPayload(serializeReviewPayload({worktree,snapshot}));
+});
+
+for(const code of [
+ 'stripe.api_key = self.stripe_key',
+ "stripe.api_key = os.environ.get('STRIPE_SECRET_KEY')",
+ "ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')",
+ "token = draft.pop('price_token')",
+ 'token = build_review_token(\n    review.id,\n    user,\n)',
+])test('Ana alpha.10: safe Python expressions survive unrelated docstrings: '+code,async()=>{
+ const f=fixture(['"""Payment service documentation."""',...code.split('\n'),'assert amount > 0'],{path:'payments/service.py'});
+ const snapshot=await f.source.capture();assert.equal(snapshot.diff,f.diff);assert.equal(snapshot.omittedFiles,undefined);
+ validateReviewPayload(serializeReviewPayload({worktree,snapshot}));
+});
+test('Ana alpha.10: multiline create_user fixture omits only the password line with a docstring',async()=>{
+ const diff='diff --git a/app/tests.py b/app/tests.py\n--- a/app/tests.py\n+++ b/app/tests.py\n@@ -1,2 +1,7 @@\n """Tests for the app."""\n from django.test import TestCase\n+\n+def make_user():\n+    return User.objects.create_user(\n+        email=\'a@example.com\', password=\'testpass123\',\n+    )\n';
+ const f=fixture([],{diffOverride:diff});let omissions;
+ const snapshot=await f.source.capture({confirmRedactions:async rows=>{omissions=rows;return true;}});
+ assert.equal(snapshot.omittedFiles,undefined);assert.equal(omissions.length,1);assert.equal(omissions[0].scope,'line');
+ assert.deepEqual(snapshot.omittedLines,[{path:'app/tests.py',line:6,side:'new'}]);
+ assert.ok(snapshot.diff.includes('User.objects.create_user('));assert.ok(!snapshot.diff.includes('testpass123'));validateReviewPayload(serializeReviewPayload({worktree,snapshot}));
+});
+test('context expressions remain visible without dropping changed payment code',async()=>{
+ const diff='diff --git a/service.py b/service.py\n--- a/service.py\n+++ b/service.py\n@@ -1,3 +1,3 @@\n """Payments."""\n stripe.api_key = self.stripe_key\n-return old_amount\n+return new_amount\n';
+ const f=fixture([],{diffOverride:diff});const snapshot=await f.source.capture();assert.equal(snapshot.diff,diff);validateReviewPayload(serializeReviewPayload({worktree,snapshot}));
+});
+test('a docstring on only one diff side does not hide secrets on the other side',async()=>{
+ const diff='diff --git a/service.py b/service.py\n--- a/service.py\n+++ b/service.py\n@@ -1,3 +1,3 @@\n-data = """\n+data = build()\n password=myPasswordFunction()\n-"""\n+return data\n';
+ const f=fixture([],{diffOverride:diff});await assert.rejects(f.source.capture());
+});
+test('literal multiline call arguments are still unsafe beside a harmless docstring',async()=>{
+ await assertSafeFileOmission(fixture(['"""Docs."""','token = builder(','    "real-secret",',')']));
+});
+test('known credentials in unchanged context are never approved away',async()=>{
+ const diff='diff --git a/service.py b/service.py\n--- a/service.py\n+++ b/service.py\n@@ -1,2 +1,2 @@\n ghp_abcdefgh12345678\n-old\n+new\n';let called=false;
+ await assert.rejects(fixture([],{diffOverride:diff}).source.capture({confirmRedactions:async()=>{called=true;return true;}}));assert.equal(called,false);
+});
+
+for(const ending of ["'secret-suffix'",'+ "secret-suffix"'])test('literal continuation after a hunk gap still requires full omission: '+ending,async()=>{
+ const diff=`diff --git a/test.py b/test.py\n--- a/test.py\n+++ b/test.py\n@@ -0,0 +1 @@\n+password='prefix'\n@@ -10,0 +12 @@\n+${ending}\n`;
+ await assertSafeFileOmission(fixture([],{diffOverride:diff}));
+});
+
+test('unrelated multiline documentation and escaped strings do not disable bounded fixture omission',async()=>{
+ const f=fixture(['"""Module docs','Examples with `ticks` and /* comment syntax */','"""','label = "escaped\\ntext"',"password='testpassword123',",'assert result']);
+ const snapshot=await f.source.capture({confirmRedactions:async()=>true});assert.equal(snapshot.omittedFiles,undefined);assert.equal(snapshot.omittedLines.length,1);assert.ok(snapshot.diff.includes('assert result'));validateReviewPayload(serializeReviewPayload({worktree,snapshot}));
+});
+
+for(const prefix of ['r','R','u','U','f','F','rf','rF','Fr','RF'])for(const quote of ["'",'"',"'''",'"""'])test(`prefixed adjacent Python literal ${prefix}${quote} never reaches the review payload`,async()=>{
+ const suffix=`${prefix}${quote}private-suffix${quote}`;
+ const f=fixture(['user = create_user(',"    password='prefix'",'    # adjacent strings may have intervening comments','',`    ${suffix}`,')']);
+ await assert.rejects(f.source.capture());
+ const snapshot=await f.source.capture({confirmRedactions:async rows=>{assert.equal(rows[0].scope,'file');return true;}});
+ assert.deepEqual(snapshot.omittedFiles,['tests/test_review.py']);
+ assert.ok(!snapshot.diff.includes('private-suffix'));
+ const payload=serializeReviewPayload({worktree,snapshot});assert.ok(!payload.includes('private-suffix'));validateReviewPayload(payload);
+});
+for(const side of ['+','-',' '])test(`prefixed continuation after a hunk gap stays omitted on diff side ${side}`,async()=>{
+ const first=side==='+'?'@@ -0,0 +1 @@':side==='-'?'@@ -1 +0,0 @@':'@@ -1 +1 @@';
+ const second=side==='+'?'@@ -10,0 +12 @@':side==='-'?'@@ -12 +10,0 @@':'@@ -12 +12 @@';
+ const header=side==='-'?'--- a/test.py\n+++ /dev/null':'--- a/test.py\n+++ b/test.py';
+ const diff=`diff --git a/test.py b/test.py\n${header}\n${first}\n${side}password='prefix'\n${second}\n${side}rf'private-suffix'\n`;
+ const f=fixture([],{diffOverride:diff});
+ await assert.rejects(f.source.capture());
+ const snapshot=await f.source.capture({confirmRedactions:async rows=>{assert.equal(rows[0].scope,'file');return true;}});
+ assert.deepEqual(snapshot.omittedFiles,['test.py']);assert.ok(!snapshot.diff.includes('private-suffix'));
+ const payload=serializeReviewPayload({worktree,snapshot});assert.ok(!payload.includes('private-suffix'));validateReviewPayload(payload);
+});
+
+for(const preceding of [true,false])test(`missing Python source leaves string state unknown (${preceding?'hunk gap':'first hunk'})`,async()=>{
+ const start='diff --git a/test.py b/test.py\n--- a/test.py\n+++ b/test.py\n';
+ const earlier='@@ -1,4 +1,4 @@\n """Public module docs."""\n-old = 1\n+old = 2\n \n \n';
+ const later='@@ -15,3 +15,3 @@\n Some credential examples follow:\n-password=oldprivatevalue\n+password=ultraprivatevalue\n End of credential examples.\n';
+ const f=fixture([],{diffOverride:start+(preceding?earlier:'')+later});
+ await assert.rejects(f.source.capture());
+ const snapshot=await f.source.capture({confirmRedactions:async rows=>{assert.equal(rows[0].scope,'file');return true;}});
+ assert.deepEqual(snapshot.omittedFiles,['test.py']);
+ const payload=serializeReviewPayload({worktree,snapshot});assert.ok(!payload.includes('ultraprivatevalue'));assert.ok(!payload.includes('oldprivatevalue'));validateReviewPayload(payload);
+ assert.throws(()=>serializeReviewPayload({worktree,snapshot:{...snapshot,diff:f.diff,diffDigest:digest(f.diff)}}));
+});
+test('adjacent hunks preserve known Python code state without disabling safe expressions',async()=>{
+ const diff='diff --git a/test.py b/test.py\n--- a/test.py\n+++ b/test.py\n@@ -1 +1 @@\n """Public module docs."""\n@@ -2 +2 @@\n-api_key = old_key\n+api_key = new_key\n';
+ const f=fixture([],{diffOverride:diff});const snapshot=await f.source.capture();assert.equal(snapshot.diff,diff);validateReviewPayload(serializeReviewPayload({worktree,snapshot}));
+});
+
+for(const prefix of ['f','F','rf','Fr','t','T','rt','Tr'])for(const quote of ["'''",'"""'])test(`nested same-quote ${prefix}-string content is never classified as code`,async()=>{
+ const f=fixture([`data = ${prefix}${quote}{${quote}`,'password=ultraprivatevalue',`${quote}}${quote}`]);
+ await assert.rejects(f.source.capture());
+ const snapshot=await f.source.capture({confirmRedactions:async rows=>{assert.equal(rows[0].scope,'file');return true;}});
+ const payload=serializeReviewPayload({worktree,snapshot});assert.ok(!payload.includes('ultraprivatevalue'));validateReviewPayload(payload);
+ assert.throws(()=>serializeReviewPayload({worktree,snapshot:{...snapshot,diff:f.diff,diffDigest:digest(f.diff)}}));
 });

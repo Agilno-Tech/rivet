@@ -101,3 +101,9 @@ for(const options of [{closed:true},{hash:'../bad'},{sourceRepo:'../evil'}])test
  const f=shortBitbucket(options);await assert.rejects(f.source.capture());
  assert.ok(!f.requests.some(p=>p.includes('/commit/')));
 });
+
+test('UUID and invalid repository PR paths receive actionable canonical URL errors',()=>{
+ for(const path of ['%7B00000000-0000-0000-0000-000000000000%7D/%7B11111111-1111-1111-1111-111111111111%7D','{00000000-0000-0000-0000-000000000000}/{11111111-1111-1111-1111-111111111111}']){
+  assert.throws(()=>parseReviewUrl(`https://bitbucket.org/${path}/pull-requests/1`),error=>error.name==='CliError'&&error.code==='INVALID_INPUT'&&/canonical.*https:\/\/bitbucket.org\/.*pull-requests/i.test(error.message));
+ }
+});

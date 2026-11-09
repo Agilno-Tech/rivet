@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import { boundedString, captureRecord, failProvider } from '../adapters/contract.js';
+import { boundedString, captureRecord, failProvider, ProviderAdapterError } from '../adapters/contract.js';
 import { runArgv } from '../discovery/tools.js';
 
 const HOSTS = Object.freeze({ 'github.com': 'github', 'bitbucket.org': 'bitbucket', 'gitlab.com': 'gitlab' });
@@ -10,14 +10,25 @@ export function parseRepositoryRemote(input) {
   // Parse before URL normalization, which would otherwise silently remove traversal.
   const match = /^(?:https:\/\/|ssh:\/\/git@)([^/:?#]+)\/([^?#]+)$/.exec(value)
     ?? /^git@([^/:?#]+):([^?#]+)$/.exec(value);
-  if (!match || !Object.hasOwn(HOSTS, match[1])) failProvider('invalid-request');
-  const host = match[1];
+  const host = match?.[1] === 'ssh.bitbucket.org' && /^(?:git@|ssh:\/\/git@)/.test(value) ? 'bitbucket.org' : match?.[1];
+  if (!match || !Object.hasOwn(HOSTS, host)) failProvider('invalid-request');
   const fullName = match[2].replace(/\.git$/, '');
   const segments = fullName.split('/');
   if (segments.length < 2 || segments.length > 20 || fullName.length > 255
     || (host !== 'gitlab.com' && segments.length !== 2)
     || segments.some(part => !SEGMENT.test(part) || part === '.' || part === '..' || part.endsWith('.'))) failProvider('invalid-request');
   return Object.freeze({ provider: HOSTS[host], host, namespace: segments.slice(0, -1).join('/'), name: segments.at(-1), fullName, url: `https://${host}/${fullName}` });
+}
+
+export class RepositoryRemoteError extends ProviderAdapterError {
+  constructor(name, value) {
+    super('invalid-request');
+    this.remoteName = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(name) ? name : 'selected';
+    // Only a hostname is displayed, never URL userinfo, path, query or fragment.
+    let host;
+    try { host = new URL(value).hostname; } catch { host = /^git@([^/:?#]+):/.exec(value)?.[1]; }
+    this.remoteHost = typeof host === 'string' && host.length <= 253 && /^[A-Za-z0-9.-]+$/.test(host) ? host : 'unrecognized';
+  }
 }
 
 export function selectRepositoryRemote(input, options = {}) {
@@ -30,7 +41,10 @@ export function selectRepositoryRemote(input, options = {}) {
     return remote;
   }).filter(remote => remoteName === undefined || remote.name === remoteName);
   if (candidates.length === 0) failProvider('invalid-request');
-  const parsed = candidates.map(remote => ({ ...parseRepositoryRemote(remote.url), remoteName: remote.name }));
+  const parsed = candidates.map(remote => {
+    try { return { ...parseRepositoryRemote(remote.url), remoteName: remote.name }; }
+    catch { throw new RepositoryRemoteError(remote.name, remote.url); }
+  });
   if (new Set(parsed.map(remote => remote.url)).size !== 1) failProvider('invalid-request');
   return Object.freeze(parsed[0]);
 }

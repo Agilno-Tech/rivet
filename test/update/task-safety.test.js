@@ -71,3 +71,20 @@ for(const mode of ['complete','context','pending','corrupt']) test(`saved PR rev
  await record(root,`pr-review-${digest(url).slice(0,32)}`,{snapshot:mode==='corrupt'?{...snapshot,diffDigest:'bad'}:snapshot,report:mode==='context'?null:report,publication:mode==='pending'?{status:'pending'}:null});
  if(mode==='complete')await assertUpdateTasksIdle(root,options);else await assert.rejects(assertUpdateTasksIdle(root,options),mode==='corrupt'?/cannot safely inspect/:/unfinished Rivet tasks/);
 });
+
+for(const approval of [null,'receipt','invalid'])test(`current review state supports redaction approval: ${approval}`,async t=>{
+ const {root,options}=await fixture(t),url='https://github.com/example/project/pull/1';const digest=value=>createHash('sha256').update(value).digest('hex');
+ const diff='diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n';
+ const snapshot={url,headSha:'a'.repeat(40),baseSha:'b'.repeat(40),diffDigest:digest(diff),diff};
+ const report={url,headSha:snapshot.headSha,baseSha:snapshot.baseSha,diffDigest:snapshot.diffDigest,summary:'No findings.',findings:[],limitations:['No tests run.']};
+ const redactionApproval=approval===null?null:approval==='receipt'?{version:1,rawDigest:'a'.repeat(64),sanitizedDigest:digest(diff),omissionsDigest:'b'.repeat(64),configDigest:'c'.repeat(64)}:{untrusted:'private-value'};
+ const name=`pr-review-${digest(url).slice(0,32)}`;
+ const dir=await record(root,name,{snapshot,report,publication:null,redactionApproval});const before=await readFile(join(dir,'snapshot.json'));
+ if(approval==='invalid')await assert.rejects(assertUpdateTasksIdle(root,options),error=>error.code==='REPOSITORY_CONFLICT'&&error.message.includes(name)&&/review/.test(error.message)&&!error.message.includes('private-value'));
+ else await assertUpdateTasksIdle(root,options);
+ assert.deepEqual(await readFile(join(dir,'snapshot.json')),before);
+});
+test('empty review directory reports its name and missing snapshot without deleting it',async t=>{
+ const {root,options}=await fixture(t);const name='pr-review-'+ 'a'.repeat(32);const dir=join(root,'.git','rivet',name);await mkdir(dir,{recursive:true,mode:0o700});
+ await assert.rejects(assertUpdateTasksIdle(root,options),error=>error.code==='REPOSITORY_CONFLICT'&&error.message.includes(name)&&/snapshot/i.test(error.message));assert.deepEqual(await readdir(dir),[]);
+});

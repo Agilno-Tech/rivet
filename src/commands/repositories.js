@@ -1,3 +1,4 @@
+import { providerCliError } from '../cli/provider-error.js';
 import { gitExecutable, resolveConfiguredProject } from '../cli/project-discovery.js';
 import { runArgv } from '../discovery/tools.js';
 import { CliError, EXIT_CODES } from '../cli/output.js';
@@ -64,6 +65,8 @@ export async function repositoriesCommand(parsed, dependencies) {
     data = flags.review === undefined ? await adapter.read({kind:'repository'}) : await adapter.inspect({number:Number(flags.review)});
   } catch(error) {
     if(error?.code === 'ERR_PROVIDER_STATE_CONFLICT') fail('The review head changed during inspection. Retry to capture a consistent snapshot.','REPOSITORY_CONFLICT');
+    const mapped = providerCliError(error);
+    if (mapped !== error) throw mapped;
     fail('Repository inspection failed. Check token access, repository or review existence, rate limits and provider availability.','PROVIDER_UNAVAILABLE');
   }
   const result = {repository,providerId:provider.id,networkChecked:true,observation:data};

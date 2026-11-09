@@ -274,3 +274,25 @@ test('out-of-scope direct integrations do not block doctor or trigger probes', a
   });
   assert.equal(exitCode,EXIT_CODES.SUCCESS);assert.equal(probes,0);
 });
+
+import {loadProjectConfig} from '../../src/config/load.js';
+import {createTrustedProviderTransport} from '../../src/adapters/http.js';
+
+for(const status of [200,401,403])test(`doctor live reports provider HTTP ${status} in JSON and text`,async()=>{
+ const root=await configuredProject();const config=await loadProjectConfig(root);
+ const provider={id:'bitbucket-main',kind:'git-ci',mode:'read-only',transport:'direct-api',capabilities:['repository-read'],endpoint:'https://api.bitbucket.org/2.0',resourceIds:['team/demo'],credentials:{tokenEnv:'REPO_TOKEN'}};
+ const liveConfig={...config,providers:{...config.providers,providers:[provider]}};
+ for(const json of [true,false]){
+  const result=capture();let calls=0;
+  const exitCode=await doctor({flags:{project:root,json,live:true}},{output:result.output,configLoader:async()=>liveConfig,env:{REPO_TOKEN:'sensitive-provider-token'},toolDiscovery:async()=>({node:{present:true,version:'22.1.0',supported:true},npm:{present:true,version:'10.1.0',supported:true},git:{present:true,version:'2.45.0',supported:true}}),repositories:{transport:createTrustedProviderTransport({resolve:async()=>['93.184.216.34'],fetchPinned:async()=>{calls++;return new Response(JSON.stringify({message:'sensitive-provider-token'}),{status});}})}});
+  assert.equal(calls,1);assert.equal(exitCode,status===200?0:5);
+  const text=result.writes.map(row=>row[1]).join('');assert.doesNotMatch(text,/sensitive-provider-token/);
+  if(json){const payload=JSON.parse(text);assert.equal(payload.checks.integrations[0].live.httpStatus,status);assert.equal(payload.checks.integrations[0].live.status,status===200?'ok':status===401?'rejected':'insufficient_scope');}
+  else {assert.match(text,/bitbucket-main/);assert.match(text,new RegExp(`HTTP ${status}`));}
+ }
+});
+test('doctor names missing credential providers in text without a live request',async()=>{
+ const root=await configuredProject();const result=capture();
+ assert.equal(await doctor({flags:{project:root}},{output:result.output,env:{},toolDiscovery:async()=>({})}),5);
+ assert.match(result.writes.map(row=>row[1]).join(''),/jira-main/);
+});
