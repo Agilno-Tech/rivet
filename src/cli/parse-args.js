@@ -48,7 +48,7 @@ const STRICT_OPTIONS = {
   review: { boolean: new Set(['json', 'context', 'publish']), valued: new Set(['project', 'remote', 'provider', 'harness', 'input', 'approve-redactions']) },
   delivery: { boolean: new Set(['json']), valued: new Set(['project', 'run', 'remote', 'provider', 'method', 'title', 'body']) },
   repositories: { boolean: new Set(['json']), valued: new Set(['project', 'remote', 'provider', 'review']) },
-  integrations: { boolean: new Set(['json']), valued: new Set(['project', 'host-inventory-json']) },
+  integrations: { boolean: new Set(['json', 'live']), valued: new Set(['project', 'host-inventory-json']) },
   protocols: {
     boolean: new Set(['json', 'include-drafts', 'include-retired', 'publish']),
     valued: new Set(['expected-revision', 'expected-digest', 'from', 'project']),
@@ -81,7 +81,7 @@ const STRICT_OPTIONS = {
     valued: new Set(['project']),
   },
   doctor: {
-    boolean: new Set(['json']),
+    boolean: new Set(['json', 'live']),
     valued: new Set(['project']),
   },
   feature: {

@@ -113,6 +113,7 @@ Usage:
   rivet delivery merge [--run=<id>] [--provider=<id>] [--method=merge|squash|rebase] [--project=<path>]
   rivet review <PR-URL> [--harness=claude|codex] [--context] [--approve-redactions=<id>] [--input=<report.json>] [--publish] [--project=<path>] [--json]
   rivet repositories inspect [--review=<number>] [--remote=<name>] [--provider=<id>] [--project=<path>] [--json]
+  rivet integrations check --live [--project=<path>] [--json]  Test repository read access
   rivet integrations setup [--project=<path>]  Guide local read-only provider configuration
   rivet integrations list|check [--project=<path>] [--host-inventory-json=<json>] [--json]
   rivet models configure ["policy"] [--harness=claude|codex] [--project=<path>]
@@ -181,7 +182,7 @@ Usage:
   rivet init                       Copy governance rule templates to .claude/ in current project
   rivet init --project <path> [--checks-json='<json>'] [--dependencies-json='<json>']  Preview detected project configuration
   rivet init --project <path> --write [--overwrite] [--remote=<name>] [--checks-json='<json>'] [--dependencies-json='<json>']
-  rivet doctor [--project <path>] [--json]
+  rivet doctor [--project <path>] [--live] [--json]
   rivet support [--project=<path>] [--probe-harnesses] [--save] [--json]
   rivet orchestrate status [--json]
   rivet orchestrate limits --limits-json=<json> [--json]
@@ -340,6 +341,7 @@ function resolveDependencies(overrides = {}) {
     runGit: overrides.runGit,
     setup: overrides.setup,
     integrationHost: overrides.integrationHost,
+    integrationProbeTimeoutMs: overrides.integrationProbeTimeoutMs,
     integrationSetupPrompt: overrides.integrationSetupPrompt ?? defaultIntegrationSetupPrompt,
     repositories: overrides.repositories,
     review: overrides.review,

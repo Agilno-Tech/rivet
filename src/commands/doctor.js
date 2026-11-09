@@ -1,3 +1,4 @@
+import { checkLiveIntegrations } from '../integrations/live-check.js';
 import { createIntegrationRegistry } from '../integrations/registry.js';
 import { resolve } from 'node:path';
 
@@ -17,6 +18,18 @@ function emit(output, json, payload, exitCode) {
     output.error(`Doctor: ${payload.status}. ${payload.summary}`);
     for(const step of payload.checks?.commands?.steps??[]) {
       if(!step.available) output.error(`  ${step.id}: ${step.status}; command ${JSON.stringify(step.argv)} in ${JSON.stringify(step.cwd)}. Check the executable on PATH and the configured project command.`);
+    }
+  }
+  if (!json) {
+    const write = exitCode === EXIT_CODES.SUCCESS ? output.log.bind(output) : output.error.bind(output);
+    for (const credential of payload.checks?.credentials ?? []) {
+      if (credential.required && !credential.present) write(`  ${credential.provider}: missing credential environment variable ${credential.name}. Next: set its complete value and retry.`);
+    }
+    for (const provider of payload.checks?.providers ?? []) {
+      if (['unavailable','timeout','error'].includes(provider.connectivity)) write(`  ${provider.id}: ${provider.connectivity}. Next: check provider connectivity and credentials.`);
+    }
+    for (const integration of payload.checks?.integrations ?? []) {
+      if (integration.live) write(`  ${integration.id}: ${integration.live.status}${integration.live.httpStatus ? ` (HTTP ${integration.live.httpStatus})` : ''}. ${integration.live.remedy}`);
     }
   }
   return exitCode;
@@ -137,24 +150,33 @@ export async function diagnoseDoctor(projectRoot, dependencies = {}) {
     dependencies.providerProbe,
     dependencies.providerProbeTimeoutMs,
   );
+  let integrations = createIntegrationRegistry({config,projectId:config.project.id,environment,host:dependencies.integrationHost}).check();
+  let networkChecked = false;
+  if (dependencies.live === true) {
+    const live = await checkLiveIntegrations(integrations, config, dependencies);
+    integrations = live.integrations;
+    networkChecked = live.networkChecked;
+  }
+  const liveFailures = integrations.filter(item => item.live && !['ok','not_checked'].includes(item.live.status));
   const commands = inspectCommandReadiness(projectRoot, config, { fs: dependencies.fs, tools });
   const missingCredentials = credentials.filter(item => item.required && !item.present);
   const unavailableProviders = providers.filter(item => ['unavailable', 'timeout', 'error'].includes(item.connectivity));
   const toolsReady = requiredToolReady(tools.node)
     && (direct || managers.every(manager => requiredToolReady(tools[manager]) && tools[manager].runtimeResolved !== false))
     && requiredToolReady(tools.git);
-  const otherFailure = missingCredentials.length > 0 || unavailableProviders.length > 0 || !toolsReady;
+  const otherFailure = missingCredentials.length > 0 || unavailableProviders.length > 0 || liveFailures.length > 0 || !toolsReady;
   const preparationReady = !otherFailure && commands.preparationReady === true;
   const preparationRequired = preparationReady && !commands.ready;
   const failed = otherFailure || (!commands.ready && !preparationReady)
     || commands.dependencies?.preparationReady === false;
-  const exitCode = missingCredentials.length > 0 || unavailableProviders.length > 0
+  const exitCode = missingCredentials.length > 0 || unavailableProviders.length > 0 || liveFailures.length > 0
     ? EXIT_CODES.PROVIDER_UNAVAILABLE
     : failed ? EXIT_CODES.FAILED_GATE : EXIT_CODES.SUCCESS;
   return {
     ok: !failed,
     preparationReady,
-    status: failed ? 'fail' : preparationRequired ? 'preparation-required' : providers.some(item => item.connectivity === 'not_checked') ? 'warn' : 'pass',
+    ...(dependencies.live === true ? {networkChecked} : {}),
+    status: failed ? 'fail' : preparationRequired ? 'preparation-required' : providers.some(item => item.connectivity === 'not_checked' && !integrations.some(row => row.id === item.id && row.live?.status === 'ok')) ? 'warn' : 'pass',
     exitCode,
     checks: {
       configuration: { status: 'pass' },
@@ -162,7 +184,7 @@ export async function diagnoseDoctor(projectRoot, dependencies = {}) {
       credentials,
       providers,
       commands,
-      integrations: createIntegrationRegistry({config,projectId:config.project.id,environment,host:dependencies.integrationHost}).check(),
+      integrations,
     },
     summary: failed ? 'One or more readiness checks failed.' : preparationRequired
       ? 'Configured dependencies require installation in the isolated checkout after approval. Quality commands have not run; use rivet task deps once the checkout exists.'
@@ -174,7 +196,7 @@ export async function doctor(parsed, dependencies = {}) {
   const json = parsed.flags.json === true;
   const projectRoot = resolve(parsed.flags.project ?? dependencies.cwd?.() ?? process.cwd());
   try {
-    const result = await diagnoseDoctor(projectRoot, dependencies);
+    const result = await diagnoseDoctor(projectRoot, {...dependencies, live: parsed.flags.live === true});
     return emit(dependencies.output, json, result, result.exitCode);
   } catch {
     return emit(dependencies.output, json, {

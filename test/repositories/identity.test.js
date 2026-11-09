@@ -40,3 +40,10 @@ test('explicit remote selection ignores unrelated unsupported remote without ech
 test('partial or timed-out remote discovery cannot select from incomplete output',async()=>{
   for(const extra of [{timedOut:true},{truncated:{stdout:true}}]) await assert.rejects(api.discoverRepositoryRemotes('/tmp/project',{runner:async()=>({code:0,stdout:'origin\thttps://github.com/team/repo (fetch)\n',...extra})}));
 });
+
+test('Bitbucket SSH alias has the canonical repository identity',()=>{
+ const expected=api.parseRepositoryRemote('git@bitbucket.org:team/repo.git');
+ for(const remote of ['git@ssh.bitbucket.org:team/repo.git','ssh://git@ssh.bitbucket.org/team/repo.git'])assert.deepEqual(api.parseRepositoryRemote(remote),expected);
+ assert.equal(api.selectRepositoryRemote([{name:'origin',url:'git@ssh.bitbucket.org:team/repo.git'},{name:'upstream',url:'https://bitbucket.org/team/repo'}]).url,expected.url);
+ assert.throws(()=>api.parseRepositoryRemote('https://ssh.bitbucket.org/team/repo'));
+});

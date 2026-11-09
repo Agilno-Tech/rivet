@@ -7,7 +7,7 @@ import metadata from '../../package.json' with { type: 'json' };
 import { EXIT_CODES } from '../cli/output.js';
 import { collectSupportBundle } from './bundle.js';
 
-const COMMANDS = new Set(['doctor','support','delivery','evidence','feature','goals','init','install','models','integrations','repositories','orchestrate','preflight','protocols','run','status','setup','uninstall','verify','work','task','worktrees']);
+const COMMANDS = new Set(['review','doctor','support','delivery','evidence','feature','goals','init','install','models','integrations','repositories','orchestrate','preflight','protocols','run','status','setup','uninstall','verify','work','task','worktrees']);
 const SUBCOMMANDS = new Set(['status','start','approve','resume','deps','recover','propose','watch','prepare','publish','review','merge','deploy','inspect','list','check','discover','configure','intake','add','remove','show','validate','plan','activate','cancel','stop','next','complete','submit','verify','record','sync','doctor','create','clean']);
 const PLATFORMS = new Set(['aix','darwin','freebsd','linux','openbsd','sunos','win32']);
 const ARCHITECTURES = new Set(['arm','arm64','ia32','loong64','mips','mipsel','ppc','ppc64','riscv64','s390','s390x','x64']);
@@ -15,6 +15,7 @@ const ARCHITECTURES = new Set(['arm','arm64','ia32','loong64','mips','mipsel','p
 // These values correspond to fixed error constructors/reasons in Rivet source.
 const CAUSE_CODES = new Set([
   'ERR_DISCOVERY_FILE_TOO_LARGE',
+  'ERR_PROVIDER_REMOTE', 'ERR_PROVIDER_TRANSPORT', 'ERR_PROVIDER_TIMEOUT', 'ERR_PROVIDER_ABORTED', 'ERR_PROVIDER_DNS_UNSAFE',
   'ERR_HOST_RUN_BUSY', 'ERR_HOST_RUN_STALE_LOCK', 'ERR_HOST_RUN_RECOVERY_STATE',
   'ERR_FEATURE_RUN_VERSION_CONFLICT', 'ERR_INVALID_FEATURE_RUN', 'ERR_INVALID_FEATURE_PLAN',
   'ERR_INVALID_FEATURE_DECOMPOSITION', 'ERR_FEATURE_RUNTIME_BRIDGE', 'ERR_VERIFICATION_REPORT_VERSION_CONFLICT',

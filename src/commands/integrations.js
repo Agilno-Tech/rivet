@@ -1,3 +1,4 @@
+import { checkLiveIntegrations } from '../integrations/live-check.js';
 import { resolve } from 'node:path';
 import { loadProjectConfig } from '../config/load.js';
 import { createIntegrationRegistry } from '../integrations/registry.js';
@@ -22,9 +23,9 @@ function readHostInventory(flags, dependencies) {
 export async function integrationsCommand(parsed, dependencies) {
   const { subcommand, operands, flags } = parsed;
   if (subcommand === 'setup') return (await import('./integration-setup.js')).integrationSetup(parsed, dependencies);
-  if (!['list', 'check'].includes(subcommand) || operands.length
-    || Object.keys(flags).some(key => !['project', 'json', 'host-inventory-json'].includes(key))) {
-    throw new CliError('Use rivet integrations list or check [--project=<path>] [--host-inventory-json=<json>] [--json].', 'INVALID_INPUT');
+  if (!['list', 'check'].includes(subcommand) || operands.length || (flags.live && subcommand !== 'check')
+    || Object.keys(flags).some(key => !['project', 'json', 'host-inventory-json', 'live'].includes(key))) {
+    throw new CliError('Use rivet integrations list or check [--live] [--project=<path>] [--host-inventory-json=<json>] [--json].', 'INVALID_INPUT');
   }
   const host = readHostInventory(flags, dependencies);
   const projectRoot = resolve(flags.project ?? dependencies.cwd?.() ?? process.cwd());
@@ -46,9 +47,10 @@ export async function integrationsCommand(parsed, dependencies) {
   } catch {
     throw new CliError('Integration configuration or supplied host inventory is invalid.', 'INVALID_INPUT');
   }
+  if (flags.live) result = await checkLiveIntegrations(result.integrations, config, dependencies);
   if (flags.json) dependencies.output.json({ ok: true, result });
   else dependencies.output.log(result.integrations.map(item =>
-    `${item.id} (${item.transport}): ${item.readiness}. ${item.remedy}`).join('\n'));
+    `${item.id} (${item.transport}): ${item.readiness}. ${item.live?.networkChecked ? '' : item.remedy}${item.live ? ` Live: ${item.live.status}${item.live.httpStatus ? ` (HTTP ${item.live.httpStatus})` : ''}. ${item.live.remedy}` : ''}`).join('\n'));
   // Diagnostic completion is success even when an optional integration is unavailable.
   return EXIT_CODES.SUCCESS;
 }

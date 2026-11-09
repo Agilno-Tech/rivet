@@ -19,6 +19,8 @@ rivet review https://github.com/your-team/your-project/pull/42 --harness=claude
 
 GitLab.com merge requests and Bitbucket Cloud pull requests use their normal URLs too. The URL must belong to your configured repository remote. Use `--remote=upstream` or `--provider=team-github` when needed; use `--project=/path/to/project` from elsewhere.
 
+For Bitbucket, pass `https://bitbucket.org/<workspace>/<repo>/pull-requests/<number>`. UUID-form links (`%7B...%7D`) require the canonical workspace/repository slug link; Rivet reports this before any API request. SSH remotes using the new `ssh.bitbucket.org` hostname resolve to that same web identity; see [SSH migration](./repositories.md#bitbucket-ssh-hostname).
+
 Configure a scoped `git-ci` provider with `repository-read`, its normal provider API endpoint and a token environment reference. See [repository inspection](./repositories.md) and [integration setup](./integrations.md). Your coding CLI must also be installed and authenticated. Rivet checks required command capabilities, without requiring a specific CLI version.
 
 Bitbucket may return abbreviated commit hashes. Rivet resolves these through the appropriate source or destination repository’s commit API, including fork sources, and checks the full hashes again before accepting or publishing a review. If a commit cannot be resolved or changes during capture, review stops.
@@ -27,9 +29,9 @@ Findings are saved privately in the Git directory and printed with paths and lin
 
 ## When Rivet flags a possible secret
 
-Rivet checks PR content before saving or sending it for review. In Python diffs, narrowly recognized environment lookups, token-building calls, variable assignments such as `user, token = user_and_token`, builtin function parameter annotations, and dynamic authorization values such as `HTTP_AUTHORIZATION=f'Bearer {access}'` can pass without a prompt. Literal arguments, config files and ambiguous quoted content retain strict checks. This is a conservative diff check, not a complete source parser; it cannot infer string context outside the captured hunks. Reports should describe issues without repeating credential-shaped assignments.
+Rivet checks PR content before saving or sending it for review. In Python diffs, narrowly recognized environment lookups, token-building calls, variable assignments such as `user, token = user_and_token`, builtin function parameter annotations, and dynamic authorization values such as `HTTP_AUTHORIZATION=f'Bearer {access}'` can pass without a prompt. Attribute references such as `stripe.api_key = self.stripe_key`, environment lookups with an empty default, identifier-shaped mapping-key lookups such as `draft.pop('price_token')`, and fully visible multiline calls with nonliteral arguments are recognized too. Old and new Python source are scanned independently; an unrelated docstring no longer disables expression recognition for the whole file. Literal call arguments, config files and ambiguous quoted content retain strict checks. This is a conservative diff check, not a complete source parser; it cannot infer string context outside the captured hunks. Python expression exemptions and line-level omission require continuous visible source from the start of that side of the file. A missing source prefix, gap between hunks, or formatted/template string whose boundaries the small lexer cannot prove makes string state uncertain, so suspicious content there retains the whole-file fallback. Prefixed adjacent string literals (such as `r'value'` or `rf'value'`) also retain the whole-file fallback rather than exposing a continuation. Reports should describe issues without repeating credential-shaped assignments.
 
-For other credential-shaped content, including test passwords, Rivet shows a value-free omission preview. A visibly bounded Python literal can be omitted at the line level, preserving surrounding logic and tests. Ambiguous content falls back to omitting the entire file diff, including every hunk and context line. The preview identifies the scope, path, line and side without printing the suspicious value.
+For other credential-shaped content, including test passwords, Rivet shows a value-free omission preview. A visibly bounded Python literal can be omitted at the line level, including fixture password arguments inside multiline calls, preserving surrounding logic and tests. Credential-shaped hunk labels lose only their optional header text after approval; they do not cause the changed code to be omitted. Context lines still undergo secret checks, but safe Python expressions in them do not remove the file. Ambiguous content falls back to omitting the entire file diff, including every hunk and context line. The preview identifies the scope, path, line and side without printing the suspicious value.
 
 If you approve, only sanitized context is saved and sent. Omitted lines and files are marked unreviewed in the output and published summary, and findings cannot cite them. Known credential formats and actual configured secret values remain blocked and cannot be approved away. Declining stops the review.
 
@@ -72,6 +74,8 @@ rivet review https://github.com/your-team/your-project/pull/42 --input=review-re
 ```
 
 Rivet rejects reports for another snapshot or a PR that changed. Capture and review the new diff when that happens. The author’s `rivet task review` evidence is separate from this independent PR review.
+
+Completed saved reviews do not block `rivet update` or `rivet update --check`, including records with an optional null or valid `redactionApproval` receipt. Context-only reviews and unresolved publications still block updates. Invalid or empty private state reports the state folder and failed check; Rivet does not delete or repair that state automatically.
 
 ## Publish a summary when ready
 

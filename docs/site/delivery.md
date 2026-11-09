@@ -87,7 +87,7 @@ After a timeout or uncertain response, use `rivet delivery reconcile`. Reconcili
     accessTokenEnv: RIVET_BITBUCKET_ACCESS_TOKEN
 ```
 
-Use a repository/project/workspace access token or OAuth access token that permits repository reads and pull-request creation. Add `branch-publish` and repository-write permission only when using Rivet to publish the branch. REST requests use Bearer authentication; Git publication uses the corresponding access-token Git convention. Atlassian user API tokens use a different authentication scheme and are not accepted by this path. See [Bitbucket access tokens](https://support.atlassian.com/bitbucket-cloud/docs/using-access-tokens/).
+Use a repository/project/workspace access token or OAuth access token that permits repository reads and pull-request creation. Add `branch-publish` and repository-write permission only when using Rivet to publish the branch. REST requests use Bearer authentication; Git publication uses the corresponding access-token Git convention. These delivery commands require `credentials.accessTokenEnv` and the access-token convention above. This restriction is separate from repository inspection and standalone `rivet review`, which accept scoped Atlassian API tokens supported as Bearer credentials; see [repository authentication](./repositories.md#configure-read-access). See [Bitbucket access tokens](https://support.atlassian.com/bitbucket-cloud/docs/using-access-tokens/).
 
 The executor binds repository and workspace UUIDs, repository path/URL, exact source/destination refs and commits. Creation is same-repository with source-branch deletion disabled. Readback checks the exact title, description, operation marker and identities before recording success.
 

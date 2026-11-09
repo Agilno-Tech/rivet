@@ -1,3 +1,5 @@
+import {RepositoryRemoteError} from '../repositories/identity.js';
+import {providerCliError} from '../cli/provider-error.js';
 import {withOperationAdmission} from '../runtime/task-orchestration.js';
 import {admitted,admissionKey} from '../runtime/machine-admission.js';
 import { resolveExecutionSelection } from '../models/execution-policy.js';
@@ -44,7 +46,8 @@ export async function reviewCommand(parsed,dependencies) {
     dependencies.output.json({ok:false,error:{code:error.code,exitCode:error.exitCode,message:error.safeMessage,...(error.approval?{approval:error.approval}:{})}},'stderr');
     return error.exitCode;
    }
-   throw error;
+   if(error instanceof RepositoryRemoteError)throw new CliError(`Remote "${error.remoteName}" has an unsupported or invalid repository URL (host "${error.remoteHost}"). Next: use a supported GitHub.com, Bitbucket Cloud or GitLab.com remote, or select one with --remote=<name>.`,'REPOSITORY_CONFLICT',{cause:error});
+   throw providerCliError(error);
   }
  });
 }
@@ -57,7 +60,12 @@ async function executeReview(parsed,dependencies,signal) {
  const executable=await gitExecutable(dependencies.env);
  const runner=(_command,args,options)=>(dependencies.runGit??runArgv)(executable,args,options);
  const remotes=await (dependencies.repositories?.discoverRemotes??discoverRepositoryRemotes)(project.root,{runner});
- const repository=selectConfiguredRepositoryRemote(remotes,project.config.project.repository.remote,flags.remote);
+ let repository;
+ try {repository=selectConfiguredRepositoryRemote(remotes,project.config.project.repository.remote,flags.remote);}
+ catch(error){
+  if(error instanceof RepositoryRemoteError)throw error;
+  throw new CliError('Repository remote is missing, ambiguous or changed. Next: review setup --remote=<name> or select a configured remote with --remote=<name>.','REPOSITORY_CONFLICT',{cause:error});
+ }
  if(repository.url!==target.repository.url)fail('The PR belongs to another repository. Run review inside its configured checkout or select its configured remote.','REPOSITORY_CONFLICT');
  const provider=selectRepositoryProvider(project.config,repository,{provider:flags.provider});
  if(flags.publish&&(provider.mode!=='read-write-with-approval'||!provider.capabilities.includes('review-comment')))fail('Publishing requires a scoped git-ci provider in read-write-with-approval mode with review-comment capability.','MISSING_CONFIGURATION');

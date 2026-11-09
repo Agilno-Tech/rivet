@@ -24,6 +24,7 @@ function unfinished() { blocked('This project has unfinished Rivet tasks. Run ri
 
 /** Inspect existing private state only: never create directories, snapshots, or locks. */
 export async function assertUpdateTasksIdle(projectRoot, {runner = runArgv, env = process.env} = {}) {
+  let folder='rivet', check='Git state directory';
   try {
     const executable=await gitExecutable(env);
     const gitRunner=(_command,args,options)=>runner(executable,args,{...options,env});
@@ -38,37 +39,52 @@ export async function assertUpdateTasksIdle(projectRoot, {runner = runArgv, env 
     if(entries.length>256||entries.some(name=>name.length>64||!ID.test(name))) throw new Error('Invalid state entries');
     const featurePaths=await listExistingFeatureRunPaths(projectRoot,{runner:gitRunner});
     for(const paths of featurePaths) {
+      folder=`rivet/feature-runs/${paths.runId}`;check='feature snapshot';
       await assertNoLocks(paths.runDir);
       const run=await createFeatureRunStore(paths).readOnly();
       if(!run) throw new Error('Missing feature state');
       if(!TERMINAL.has(run.status)) unfinished();
     }
     for(const name of entries.filter(name=>name!=='feature-runs')) {
+      folder=`rivet/${name}`;check='runtime directory';
       const paths=await resolveExistingStatePaths(projectRoot,name,{runner:gitRunner});
       if(!paths) throw new Error('Missing runtime directory');
       await assertNoLocks(paths.instanceDir);
+      check='snapshot presence and integrity';
       const saved=await readSnapshotWithoutLock(paths);
       if(!saved) throw new Error('Missing runtime state');
       if(/^pr-review-[a-f0-9]{32}$/.test(name)) {
+        check='review record shape and identity';
         const record=saved.data;
-        if(!record||Object.keys(record).sort().join(',')!=='publication,report,snapshot'||typeof record.snapshot?.diff!=='string'
+        if(!record||!['publication,report,snapshot','publication,redactionApproval,report,snapshot'].includes(Object.keys(record).sort().join(','))||typeof record.snapshot?.diff!=='string'
           ||createHash('sha256').update(record.snapshot.diff).digest('hex')!==record.snapshot.diffDigest
           ||typeof record.snapshot.url!=='string'||name!==`pr-review-${createHash('sha256').update(record.snapshot.url).digest('hex').slice(0,32)}`) throw new Error('Invalid review');
+        check='review redaction approval receipt';
+        const receipt=record.redactionApproval;
+        if(receipt!==undefined&&receipt!==null&&(!receipt||typeof receipt!=='object'||Array.isArray(receipt)
+          ||Object.keys(receipt).sort().join(',')!=='configDigest,omissionsDigest,rawDigest,sanitizedDigest,version'
+          ||receipt.version!==1||!['configDigest','omissionsDigest','rawDigest','sanitizedDigest'].every(key=>typeof receipt[key]==='string'&&/^[a-f0-9]{64}$/.test(receipt[key]))
+          ||receipt.sanitizedDigest!==record.snapshot.diffDigest))throw new Error('Invalid receipt');
+        check='review completion';
         if(record.report===null||record.publication?.status==='pending') blocked('This project has unfinished Rivet tasks in its saved PR reviews. Finish the review report or inspect its unresolved publication before updating.');
+        check='review report validation';
         validateReport(record.report,record.snapshot);
+        check='review publication status';
         if(record.publication!==null&&record.publication?.status!=='published') throw new Error('Invalid publication');
       } else {
+        check='runtime snapshot validation';
         const state=validateRuntimeSnapshot(saved.data,name);
         if(!TERMINAL.has(state.terminal)) unfinished();
         if(state.graph.status!==state.terminal || state.graph.nodes.some(node=>['running','reserved'].includes(node.status))) throw new Error('Inconsistent terminal state');
       }
     }
+    folder='rivet';check='state stability';
     const afterFeatures=await listExistingFeatureRunPaths(projectRoot,{runner:gitRunner});
     if(JSON.stringify(afterFeatures.map(paths=>paths.runId))!==JSON.stringify(featurePaths.map(paths=>paths.runId))) throw new Error('Feature state changed');
     const after=await lstat(root);
     if(after.ino!==stat.ino||after.dev!==stat.dev||JSON.stringify(await readdir(root))!==JSON.stringify(entries)) throw new Error('State changed');
   } catch(error) {
-    if(error instanceof CliError && error.code==='REPOSITORY_CONFLICT') throw error;
-    blocked('Rivet cannot safely inspect this project’s task state. Inspect or recover its private state before updating; no update was started.');
+    if(error instanceof CliError && error.code==='REPOSITORY_CONFLICT') blocked(`${error.safeMessage} State folder: ${folder}. Check: ${check}.`);
+    blocked(`Rivet cannot safely inspect this project’s task state. State folder: ${folder}. Check: ${check}. Inspect or recover this state before updating; no update was started.`);
   }
 }

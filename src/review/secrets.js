@@ -7,9 +7,10 @@ export function hasReviewCredential(text) {
 const assignments=/\b([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*/g;
 const boundary=text=>/^[ \t]*[)\]}]*[ \t]*(?:$|[\r\n;]|#)/.test(text);
 function identifier(text,start) {return /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*/.exec(text.slice(start))?.[0];}
-function skip(text,start) {while(text[start]===' '||text[start]==='\t')start++;return start;}
+function skip(text,start) {while(/[ \t\r\n]/.test(text[start]??'!'))start++;return start;}
 // Deliberately a small expression grammar, not a language parser: no evaluation,
-// strings (except a sole environment-name argument), operators or keyword args.
+// arbitrary strings, operators or keyword args. Environment names (with an
+// optional empty default) and identifier-shaped mapping keys are recognized.
 function expression(text,start,depth=0) {
  if(depth>16)return null;
  start=skip(text,start);
@@ -17,11 +18,15 @@ function expression(text,start,depth=0) {
  if(scalar)return {end:start+scalar[0].length,call:false};
  const name=identifier(text,start);if(!name)return null;
  let at=skip(text,start+name.length);
- if(text[at]!=='(')return {end:at,call:false};
+ if(text[at]!=='(')return {end:start+name.length,call:false};
  at=skip(text,at+1);
  if(['os.environ.get','os.getenv'].includes(name)) {
-  const env=/^(['"])[A-Z_][A-Z0-9_]{0,127}\1[ \t]*\)/.exec(text.slice(at));
+  const env=/^(['"])[A-Z_][A-Z0-9_]{0,127}\1[ \t]*(?:,[ \t]*(['"])\2[ \t]*)?\)/.exec(text.slice(at));
   return env?{end:at+env[0].length,call:true}:null;
+ }
+ if(/\.(?:pop|get)$/.test(name)) {
+  const key=/^(['"])[A-Za-z_][A-Za-z0-9_]{0,127}\1[ \t]*\)/.exec(text.slice(at));
+  if(key)return {end:at+key[0].length,call:true};
  }
  if(text[at]===')')return {end:at+1,call:true};
  for(let args=0;args<128;args++) {
@@ -45,11 +50,12 @@ function maskAssignments(text,accept) {
  for(const [start,end] of ranges.reverse())text=text.slice(0,start)+'rivet_value'+text.slice(end);
  return text;
 }
-export function maskReviewExpressions(text, python=false) {
- if(/"{3}|'{3}|`|\/\*/.test(text))return text;
+export function maskReviewExpressions(text, python=false, codeOffsets=null) {
+ if(!codeOffsets&&/"{3}|'{3}|`|\/\*/.test(text))return text;
  return maskAssignments(text,(line,start,index)=>{
   // Only classify assignments outside visible quoted strings and comments.
-  const prefix=line.slice(line.lastIndexOf('\n',index-1)+1,index);
+  if(codeOffsets&&!codeOffsets[index])return false;
+  const prefix=codeOffsets?'':line.slice(line.lastIndexOf('\n',index-1)+1,index);
   let quote=null;
   for(let i=0;i<prefix.length;i++){
    const ch=prefix[i];
@@ -75,20 +81,82 @@ export function reviewReportForScan(report) {
 }
 
 
-// Derive eligibility from diff headers, never caller-provided files metadata.
-// Python is the only source grammar currently recognized. A visible multiline
-// string delimiter makes the entire file ambiguous, so retain strict scanning.
+// Scan old and new Python source independently: a quote added on one side must
+// not reclassify a context line on the other. Keep quote state only across
+// adjacent hunks; missing source can contain an unseen string delimiter. This is a bounded lexical
+// check, not a Python evaluator; literal call arguments remain strict.
+function pythonCodeOffsets(text,state) {
+ const code=new Uint8Array(text.length);
+ if(state.unknown)return code;
+ let comment=false;
+ for(let i=0;i<text.length;i++) {
+  const ch=text[i];
+  if(comment){if(ch==='\n')comment=false;continue;}
+  if(state.quote){
+   if(ch==='\\'){i++;continue;}
+   if(text.startsWith(state.quote,i)){i+=state.quote.length-1;state.quote=null;}
+   continue;
+  }
+  if(ch==='#'){comment=true;continue;}
+  if(ch==='"'||ch==="'"){
+   // Formatted/template strings can nest same-quote literals inside replacement
+   // expressions. This lexer does not parse that grammar; never guess where
+   // the outer string closes or classify its later contents as source code.
+   let prefixStart=i;while(prefixStart>0&&/[A-Za-z]/.test(text[prefixStart-1]))prefixStart--;
+   const prefix=text.slice(prefixStart,i);
+   if(/[ft]/i.test(prefix)){state.unknown=true;return code;}
+   state.quote=text.startsWith(ch.repeat(3),i)?ch.repeat(3):ch;
+   i+=state.quote.length-1;continue;
+  }
+  code[i]=1;
+ }
+ return code;
+}
+function pythonSections(diff,visit) {
+ const lines=diff.split('\n');let start=0;
+ while(start<lines.length) {
+  let end=start+1;while(end<lines.length&&!lines[end].startsWith('diff --git '))end++;
+  const section=lines.slice(start,end).join('\n');
+  const header=/^--- (?:a\/(.+)|\/dev\/null)\n\+\+\+ (?:b\/(.+)|\/dev\/null)$/m.exec(section);
+  if(header&&(header[1]??header[2]).endsWith('.py')&&(header[2]??header[1]).endsWith('.py')) {
+   const states={old:{quote:null,nextLine:1,unknown:false},new:{quote:null,nextLine:1,unknown:false}};
+   for(let h=start;h<end;h++) {
+    const range=/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(lines[h]);
+    if(!range)continue;
+    let stop=h+1;while(stop<end&&!lines[stop].startsWith('@@ '))stop++;
+    for(const side of ['old','new']) {
+     const group=side==='old'?1:3,count=Number(range[group+1]??1);
+     const first=Number(range[group])+(count===0?1:0),state=states[side];
+     if(first!==state.nextLine)state.unknown=true;
+     state.nextLine=first+count;
+     const indexes=[];
+     for(let i=h+1;i<stop;i++)if(lines[i][0]===' '||lines[i][0]===(side==='old'?'-':'+'))indexes.push(i);
+     const source=indexes.map(i=>lines[i].slice(1)).join('\n')+'\n';
+     visit({source,indexes,code:pythonCodeOffsets(source,states[side]),header:h,side,section:start});
+    }
+    h=stop-1;
+   }
+  }
+  start=end;
+ }
+ return lines;
+}
 export function maskReviewDiff(diff) {
- return diff.split(/(?=^diff --git )/m).map(section=>{
-  const header=/^--- a\/(.+)\n\+\+\+ b\/(.+)$/m.exec(section);
-  if(!header||!header[1].endsWith('.py')||!header[2].endsWith('.py')
-    ||/"{3}|'{3}|`|\/\*/.test(section))return section;
-  let inHunk=false;
-  return section.split('\n').map(line=>{
-   if(/^@@ /.test(line)){inHunk=true;return maskPythonSignature(line);}
-   return inHunk&&/^[+ -]/.test(line)?line[0]+maskPythonSignature(maskReviewExpressions(line.slice(1),true)):line;
-  }).join('\n');
- }).join('');
+ const candidates=new Map(),headers=new Set();
+ const lines=pythonSections(diff,({source,indexes,code,header})=>{
+  headers.add(header);
+  const original=source.split('\n');
+  const masked=maskReviewExpressions(source,true,code).split('\n');
+  let offset=0;
+  indexes.forEach((index,i)=>{
+   const value=code[offset+(/\S/.exec(original[i])?.index??0)]?maskPythonSignature(masked[i]):masked[i];
+   candidates.set(index,candidates.has(index)&&candidates.get(index)!==value?null:value);
+   offset+=original[i].length+1;
+  });
+ });
+ for(const [index,value] of candidates)if(value!==null)lines[index]=lines[index][0]+value;
+ // Hunk labels are optional display context, still scanned independently.
+ return lines.map((line,index)=>headers.has(index)?maskPythonSignature(line):line).join('\n');
 }
 
 // Only builtin parameter annotations in visible Python function signatures.
@@ -101,33 +169,37 @@ function maskPythonSignature(line) {
 }
 
 // A literal must visibly end on this physical Python line. Commas/semicolons
-// terminate a value; a closing call requires a visible opening parenthesis.
-// Ambiguous strings/continuations retain the whole-file fallback.
+// terminate a value even in multiline calls. A complete standalone literal is
+// eligible too; ambiguous strings/continuations retain the whole-file fallback.
 export function reviewLineOmissionIndexes(diff) {
- const eligible=new Set();let offset=0;
- for(const section of diff.split(/(?=^diff --git )/m)) {
-  const lines=section.split('\n');
-  const header=/^--- a\/(.+)\n\+\+\+ b\/(.+)$/m.exec(section);
-  if(header&&header[1].endsWith('.py')&&header[2].endsWith('.py')&&!/"{3}|'{3}|`|\/\*|\\/.test(section)) {
-   let inHunk=false;
-   for(let i=0;i<lines.length;i++) {
-    if(/^@@ /.test(lines[i])){inHunk=true;continue;}
-    if(!inHunk||! /^[+ -]/.test(lines[i]))continue;
-    const code=lines[i].slice(1);let found=false;
-    const masked=maskAssignments(code,(text,start,index)=>{
-     const prefix=text.slice(0,index);
-     // Restrict prefixes to code punctuation and complete simple strings.
-     const withoutStrings=prefix.replace(/(['"])[^'"\n]*?\1/g,'');
-     if(/['"#]/.test(withoutStrings))return false;
-     const literal=/^(['"])[^'"\n]*\1/.exec(text.slice(start));if(!literal)return false;
-     const rest=text.slice(start+literal[0].length).trimStart();
-     if(!/^[,;]/.test(rest)&&!(rest.startsWith(')')&&withoutStrings.includes('(')))return false;
-     found=true;return true;
-    });
-    if(found&&!containsSecretMaterial(maskReviewExpressions(masked)))eligible.add(offset+i);
-   }
-  }
-  offset+=lines.length-1;
+ const eligible=new Set(),ineligible=new Set(),chunks=[],following=new Map();
+ pythonSections(diff,chunk=>chunks.push(chunk));
+ for(const {source,indexes,code,side,section} of chunks.reverse()){
+  const key=`${section}:${side}`;
+  const lines=source.split('\n'),nextCode=[];let offset=0,next=following.get(key)??'';
+  for(let i=lines.length-1;i>=0;i--){nextCode[i]=next;if(lines[i].trim()&&!lines[i].trimStart().startsWith('#'))next=lines[i].trimStart();}
+  following.set(key,next);
+  indexes.forEach((index,i)=>{
+   const text=lines[i];let found=false;
+   const masked=maskAssignments(text,(line,start,at)=>{
+    if(!code[offset+at])return false;
+    const literal=/^(['"])(?:\\[^\n]|(?!\1)[^\\\n])*?\1/.exec(line.slice(start));
+    if(!literal||literal[0].startsWith("'".repeat(3))||literal[0].startsWith('"'.repeat(3)))return false;
+    const rest=line.slice(start+literal[0].length).trimStart();
+    // A comma/semicolon ends this value, even inside a multiline call. Without
+    // punctuation, require visible termination and exclude continued strings.
+    // Python adjacent literals may have case-insensitive prefixes (r, f, u,
+    // rf, etc.). Treat any letter prefix before a quote conservatively, so
+    // new or unrecognized prefixes cannot expose a credential continuation.
+    const next=nextCode[i];
+    if(!/^[,;]/.test(rest)&&(!/^[)\]}]*[ \t]*(?:#.*)?$/.test(rest)||/^(?:[+'"\\]|[A-Za-z]+['"])/.test(next)))return false;
+    found=true;return true;
+   });
+   if(found&&!containsSecretMaterial(maskReviewExpressions(masked,true)))eligible.add(index);
+   else ineligible.add(index);
+   offset+=text.length+1;
+  });
  }
+ for(const index of ineligible)eligible.delete(index);
  return eligible;
 }

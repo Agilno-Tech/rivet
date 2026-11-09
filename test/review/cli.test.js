@@ -119,7 +119,7 @@ test('interactive review omits approved literal before saving or launching and r
  const f=await fixture(t);f.setDiff(literalDiff);f.deps.terminalIsInteractive=()=>true;let prompts=0;
  f.deps.review.confirmRedactions=async()=>{prompts++;assert.match(f.text(),/tests\/test_user.py:1/);assert.ok(!f.text().includes('testpassword123'));return true;};
  assert.equal(await main(['review',url],f.deps),0);assert.equal(prompts,1);assert.equal(f.launches(),1);
- assert.ok(!JSON.stringify(f.snapshot()).includes('testpassword123'));assert.deepEqual(f.snapshot().omittedFiles,['tests/test_user.py']);
+ assert.ok(!JSON.stringify(f.snapshot()).includes('testpassword123'));assert.deepEqual(f.snapshot().omittedLines,[{path:'tests/test_user.py',line:1,side:'new'}]);
  const path=/Saved privately: ([^\n]+)/.exec(f.text())[1];const saved=await readFile(path,'utf8');assert.ok(!saved.includes('testpassword123'));assert.match(saved,/omitted/);
  const comment=reviewComment(f.snapshot(),{summary:'No findings',findings:[],limitations:[]});assert.match(comment,/omitted with approval/);assert.ok(!comment.includes('testpassword123'));
 });
@@ -211,4 +211,44 @@ for(const drift of ['raw-value','head','config','environment','clean','wrong-id'
 
 for(const args of [['--approve-redactions=bad','--context'],['--approve-redactions='+ 'a'.repeat(64)],['--approve-redactions='+ 'a'.repeat(64),'--context','--publish']])test('approval flag rejects invalid usage '+args.join(' '),async t=>{
  const f=await fixture(t);assert.notEqual(await main(['review',url,...args,'--json'],f.deps),0);assert.equal(f.launches(),0);
+});
+
+for (const status of [401,403]) test(`Bitbucket HTTP ${status} identifies provider and recovery without leaking credentials`, async t => {
+ const f=await fixture(t,{bitbucket:true});let requests=0;
+ f.deps.repositories.transport=createTrustedProviderTransport({resolve:async()=>['93.184.216.34'],fetchPinned:async()=>{requests++;return new Response(JSON.stringify({error:{message:'sample-token private upstream details'}}),{status});}});
+ assert.equal(await main(['review','https://bitbucket.org/team/demo/pull-requests/7','--context','--json'],f.deps),5);
+ assert.equal(f.result().error.code,'PROVIDER_UNAVAILABLE');
+ assert.match(f.result().error.message,new RegExp(`Bitbucket Cloud.*HTTP ${status}`));
+ assert.match(f.result().error.message,/Next:/);
+ assert.doesNotMatch(f.text(),/sample-token|private upstream|INTERNAL_ERROR/);
+ assert.equal(requests,1);assert.equal(f.launches(),0);
+ f.clear();let diagnostic;
+ f.deps.reportFailure=async value=>{diagnostic=value;return null;};
+ assert.equal(await main(['review','https://bitbucket.org/team/demo/pull-requests/7','--context'],f.deps),5);
+ assert.equal(diagnostic.command,'review');assert.equal(diagnostic.causeCode,'ERR_PROVIDER_REMOTE');
+ assert.doesNotMatch(f.text(),/sample-token|private upstream/);
+});
+
+test('real CLI routes opt-in integration and doctor probes through the trusted transport',async t=>{
+ const f=await fixture(t,{bitbucket:true});let calls=0;
+ f.deps.repositories.transport=createTrustedProviderTransport({resolve:async()=>['93.184.216.34'],fetchPinned:async()=>{calls++;return new Response('{"error":"sample-token"}',{status:401});}});
+ assert.equal(await main(['integrations','check','--json'],f.deps),0);assert.equal(calls,0);f.clear();
+ assert.equal(await main(['integrations','check','--live','--json'],f.deps),0);assert.equal(calls,1);
+ assert.equal(f.result().result.integrations.find(row=>row.id==='github-main').live.status,'rejected');assert.doesNotMatch(f.text(),/sample-token/);f.clear();
+ assert.equal(await main(['doctor','--live','--json'],f.deps),5);assert.equal(calls,2);
+ assert.equal(f.result().checks.integrations.find(row=>row.id==='github-main').live.status,'rejected');assert.doesNotMatch(f.text(),/sample-token/);
+});
+
+test('Bitbucket SSH alias reaches the provider and unsupported remotes identify name and host',async t=>{
+ const f=await fixture(t,{bitbucket:true});
+ f.deps.repositories.discoverRemotes=async()=>[{name:'origin',url:'git@ssh.bitbucket.org:team/demo.git'}];
+ assert.equal(await main(['review','https://bitbucket.org/team/demo/pull-requests/7','--context','--json'],f.deps),0);assert.ok(f.calls()>0);f.clear();
+ f.deps.repositories.discoverRemotes=async()=>[{name:'origin',url:'https://user:private-token@unsupported.example/team/demo'}];
+ const before=f.calls();assert.equal(await main(['review','https://bitbucket.org/team/demo/pull-requests/7','--context','--json'],f.deps),6);
+ assert.match(f.result().error.message,/origin.*unsupported.example/);assert.doesNotMatch(f.text(),/private-token|https:\/\/user/);assert.equal(f.calls(),before);
+});
+
+test('review remote selection failures are actionable repository errors before HTTP',async t=>{
+ const f=await fixture(t);f.deps.repositories.discoverRemotes=async()=>[];
+ assert.equal(await main(['review',url,'--context','--json'],f.deps),6);assert.match(f.result().error.message,/remote/i);assert.equal(f.calls(),0);
 });

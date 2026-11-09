@@ -18,7 +18,9 @@ export function parseReviewUrl(value) {
  const index=suffix?url.pathname.lastIndexOf(suffix):-1;
  const number=index<0?'':url.pathname.slice(index+suffix.length);
  if(!/^[1-9][0-9]{0,8}$/.test(number))fail('Provide a GitHub, GitLab or Bitbucket pull request URL.');
- const repository=parseRepositoryRemote(`${url.origin}${url.pathname.slice(0,index)}`);
+ let repository;
+ try {repository=parseRepositoryRemote(`${url.origin}${url.pathname.slice(0,index)}`);}
+ catch {throw new CliError(`Review URL must use the canonical repository URL: ${url.hostname==='bitbucket.org'?'https://bitbucket.org/<workspace>/<repo>/pull-requests/<number>':'the repository slug and pull/merge-request number'}. Copy the canonical PR link instead of a UUID link.`,'INVALID_INPUT');}
  if(value!==`${repository.url}${suffix}${number}`)fail('Review URL must use the canonical repository URL.');
  return Object.freeze({repository,number:Number(number),url:value});
 }
@@ -85,7 +87,14 @@ export function createReviewSource({target,transport,headers,signal,environment=
    const line=lines[index];
    if(line.startsWith('diff --git ')){file++;inHunk=false;}
    const hunk=/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
-   if(hunk){hunkHeaders.push({index,path:files[file].path,header:hunk[0]});oldLine=Number(hunk[1]);newLine=Number(hunk[2]);inHunk=true;if(containsSecretMaterial(scannedLines[index]))omitFile(files[file].side==='old'?oldLine:newLine,files[file].side);continue;}
+   if(hunk){
+    hunkHeaders.push({index,path:files[file].path,header:hunk[0]});oldLine=Number(hunk[1]);newLine=Number(hunk[2]);inHunk=true;
+    if(containsSecretMaterial(scannedLines[index])) {
+     lines[index]=hunk[0];
+     omissions.push({scope:'header',path:files[file].path,line:files[file].side==='old'?oldLine:newLine,side:files[file].side,reason:'Credential-shaped hunk label; only the optional header text will be omitted.'});
+    }
+    continue;
+   }
    const body=inHunk&&['+','-',' '].includes(line[0]);
    if(containsSecretMaterial(scannedLines[index])||body&&containsSecretMaterial(scannedLines[index]+' rivet_unresolved')) {
     if(!body)fail('Review contains credential-shaped metadata that cannot be omitted. Remove secrets before delegating it.');
@@ -98,6 +107,7 @@ export function createReviewSource({target,transport,headers,signal,environment=
    if(body){bodyLines.push({index,path:files[file].path});if(line[0]!=='+')oldLine++;if(line[0]!=='-')newLine++;}
   }
   omissions=omissions.filter(item=>item.scope==='file'||!omittedFiles.has(item.path));
+  const omittedHeaders=omissions.filter(item=>item.scope==='header').map(({path,line,side})=>({path,line,side}));
   const omittedLines=[...omittedIndexes.values()].filter(item=>!omittedFiles.has(item.path));
   // Preserve diff line counts without expanding content; omittedFiles and limitations explain the omission.
   for(const {index,path} of bodyLines)if(omittedFiles.has(path)||omittedIndexes.has(index))lines[index]=lines[index][0];
@@ -109,7 +119,7 @@ export function createReviewSource({target,transport,headers,signal,environment=
   }
   if(containsSecretMaterial(JSON.stringify(reviewSnapshotForScan({...before,diff}))))fail('Review contains credential-shaped text. Remove secrets before delegating it.');
   await assertCurrent(before);
-  return {schemaVersion:1,url:target.url,repository,number,...before,diff,files,diffDigest:digest(diff),capturedAt:new Date().toISOString(),...(omittedFiles.size?{omittedFiles:[...omittedFiles]}:{}),...(omittedLines.length?{omittedLines}:{}),limitations:[...(omissions.length?[`${omittedFiles.size} file diff(s) and ${omittedLines.length} line(s) omitted with approval; omitted code was not reviewed.`]:[]),...(omittedFiles.size?[`Entire file diff omitted with approval: ${[...omittedFiles].join(', ')}. No code from these files was reviewed.`]:[]),...(omittedLines.length?[`Lines omitted with approval: ${omittedLines.map(item=>`${item.path}:${item.line} (${item.side})`).join(', ')}. These lines were not reviewed.`]:[]),...(omittedFiles.size===files.length?['All file diffs were omitted; no source code was reviewed. Manual review is required.']:[]),'Diff-only review; surrounding files and configured checks were not executed.','Provider diff size/truncation limits may apply. Inspect large and binary changes manually.']};
+  return {schemaVersion:1,url:target.url,repository,number,...before,diff,files,diffDigest:digest(diff),capturedAt:new Date().toISOString(),...(omittedFiles.size?{omittedFiles:[...omittedFiles]}:{}),...(omittedLines.length?{omittedLines}:{}),...(omittedHeaders.length?{omittedHeaders}:{}),limitations:[...(omissions.length?[`${omittedFiles.size} file diff(s) and ${omittedLines.length} line(s) and ${omittedHeaders.length} hunk label(s) omitted with approval; omitted content was not reviewed.`]:[]),...(omittedFiles.size?[`Entire file diff omitted with approval: ${[...omittedFiles].join(', ')}. No code from these files was reviewed.`]:[]),...(omittedLines.length?[`Lines omitted with approval: ${omittedLines.map(item=>`${item.path}:${item.line} (${item.side})`).join(', ')}. These lines were not reviewed.`]:[]),...(omittedFiles.size===files.length?['All file diffs were omitted; no source code was reviewed. Manual review is required.']:[]),'Diff-only review; surrounding files and configured checks were not executed.','Provider diff size/truncation limits may apply. Inspect large and binary changes manually.']};
  }
  async function publishComment(snapshot,body) {
   await assertCurrent(snapshot);
