@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.0-alpha.12](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.11...v0.1.0-alpha.12) (2026-11-09)
+
+
+Bitbucket setup now reports actionable authentication errors and offers opt-in live token checks. This release supports `ssh.bitbucket.org` remotes, clarifies token requirements, improves review/update diagnostics, and fixes Python secret-redaction edge cases, including prefixed string continuations. No configuration migration is required.
+
+### Bug Fixes
+
+* harden Bitbucket review setup and secret handling ([#81](https://github.com/Agilno-Tech/rivet/issues/81)) ([4db9f98](https://github.com/Agilno-Tech/rivet/commit/4db9f9864d14287128537d1db5d5aa9298abf189))
+
 ## [0.1.0-alpha.11](https://github.com/Agilno-Tech/rivet/compare/v0.1.0-alpha.10...v0.1.0-alpha.11) (2026-11-06)
 
 
